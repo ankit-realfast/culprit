@@ -4593,3 +4593,721 @@ Proven on <ID>: cause <cause> — <evidence>; \$<spend> over <wall time>.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 git status --short   # must print nothing
 ```
+
+---
+
+## Stage 5 — Judge calibration and selftest
+
+**Goal:** culprit measures how far its own verdicts can be trusted. `culprit review` / `label` / `calibration` compare the judge with the human on real replays (Cohen's kappa); `culprit selftest` plants one known fault per layer into a control episode and reports how often `diagnose` names it. Both figures are printed beside every verdict.
+
+**Architecture:** `calibration` owns human labels (one `human_label.json` beside each `judgement.json`) and the agreement statistic. `selftest` owns the planted faults, the cause each one should produce, the control-episode rule, and the accuracy over stored selftest verdicts; it calls Stage 4's `diagnose` with an `out_dir` under `runs/selftest/`, so planted runs never mix with real ones.
+
+**Spec:** §4 guards 2, 4 and 5.
+
+### Global Constraints
+
+- Calibrated means: at least 20 human-labelled replays **and** Cohen's kappa ≥ 0.6. Until then every verdict prints `uncalibrated`.
+- A control episode is one whose saved baseline passed at least 4 of 5.
+- Planted faults and their expected causes, exactly: `truncated-prompt` → task (prompt cut to its first 6 words); `misleading-instruction` → agent-setup (appended: "Do not modify any files. Reply with a one-line summary of what you would do, then stop."); `edit-tools-removed` → harness (`tools="Read,Grep,Glob"`); `weak-model` → model (`claude-haiku-5-5`); `impossible-criterion` → unexplained (a check that always fails).
+- Selftest verdicts live in `runs/selftest/<episode folder>/<fault>/verdict.json`; real calibration counts only runs under `runs/<episode folder>/replays/`.
+
+### Review Focus
+
+1. **Kappa is undefined when every label agrees on one value** (all pass, say): report "not computable yet", never divide by zero or print a fake 1.0. Pinned in Task 5.1 (`test_kappa_is_undefined_when_one_value_is_certain`).
+2. **Labelling a run id that does not exist** must refuse and write nothing. Pinned in Task 5.1 (`test_labelling_an_unknown_run_is_refused`).
+3. **Selftest on an episode that is not a control** must refuse before spending anything. Pinned in Task 5.3 (`test_selftest_refuses_an_episode_that_is_not_a_control`).
+4. **An expected-versus-got mismatch must be visible per fault**, not only as one accuracy number. Pinned in Task 5.2 (`test_selftest_reports_each_fault_and_the_accuracy`).
+
+### File Structure
+
+```
+src/culprit/
+├── calibration.py   # record_label, cohens_kappa, Agreement, agreement, next_unlabelled, run_summary
+├── selftest.py      # PlantedFault, EXPECTED, plant, is_control, run_selftest, selftest_accuracy
+└── cli.py           # MODIFY: add review, label, calibration, selftest; diagnose prints trust figures
+tests/
+├── test_calibration.py
+├── test_selftest.py
+└── test_cli_stage5.py
+```
+
+---
+
+#### Task 5.1: Human labels and the judge's agreement with them
+
+**Files:**
+- Create: `src/culprit/calibration.py`
+- Test: `tests/test_calibration.py`
+
+**Interfaces:**
+- Consumes: `JUDGEMENT_FILE`, `REPLAYS_DIR` (experiment).
+- Produces:
+  - `HUMAN_LABEL_FILE = "human_label.json"`, `MIN_LABELS = 20`, `MIN_KAPPA = 0.6`
+  - `class UnknownRun(LookupError)`
+  - `judged_runs(runs_dir: Path) -> list[Path]` — every `runs/<episode>/replays/<variant>/<i>/` holding a `judgement.json`, sorted.
+  - `run_id(runs_dir: Path, run_dir: Path) -> str` — the run's path relative to `runs_dir`.
+  - `record_label(runs_dir: Path, run: str, passed: bool) -> Path`
+  - `cohens_kappa(pairs: list[tuple[bool, bool]]) -> float | None` — pairs are (judge, human).
+  - `@dataclass(frozen=True) class Agreement` with `labelled: int`, `agreed: int`, `kappa: float | None`, and property `calibrated -> bool`.
+  - `agreement(runs_dir: Path) -> Agreement`
+  - `next_unlabelled(runs_dir: Path) -> Path | None`
+  - `run_summary(run_dir: Path) -> str`
+
+- [ ] **Step 1: Write the failing tests**
+
+`tests/test_calibration.py`:
+
+```python
+import json
+
+import pytest
+
+from culprit.calibration import (Agreement, UnknownRun, agreement, cohens_kappa, judged_runs, next_unlabelled,
+                                 record_label, run_id, run_summary)
+
+
+def judged(runs, episode, variant, i, passed, reason="r"):
+    run_dir = runs / episode / "replays" / variant / str(i)
+    run_dir.mkdir(parents=True)
+    (run_dir / "judgement.json").write_text(json.dumps({"passed": passed, "reason": reason, "by": "model"}))
+    (run_dir / "result.json").write_text(json.dumps({"result_text": "I fixed it", "cost_usd": 0.2}))
+    (run_dir / "diff.patch").write_text("--- a/x.py\n+++ b/x.py\n@@\n-old\n+new\n")
+    return run_dir
+
+
+def test_kappa_matches_the_textbook_formula():
+    pairs = [(True, True), (True, True), (False, False), (True, False)]
+    assert cohens_kappa(pairs) == pytest.approx(0.5)
+
+
+def test_kappa_is_undefined_when_one_value_is_certain():
+    assert cohens_kappa([(True, True), (True, True)]) is None
+    assert cohens_kappa([]) is None
+
+
+def test_only_real_episode_runs_count_and_selftest_runs_do_not(tmp_path):
+    runs = tmp_path / "runs"
+    real = judged(runs, "s1__p1", "baseline", 0, True)
+    judged(runs / "selftest" / "s1__p1", "weak-model", "baseline", 0, True)
+    assert judged_runs(runs) == [real]
+    assert run_id(runs, real) == "s1__p1/replays/baseline/0"
+
+
+def test_labels_drive_agreement_and_the_calibration_gate(tmp_path):
+    runs = tmp_path / "runs"
+    for i in range(10):
+        judged(runs, "s1__p1", "baseline", i, passed=i < 5)
+        judged(runs, "s2__p1", "task", i, passed=i < 5)
+    for run_dir in judged_runs(runs):
+        judge_passed = json.loads((run_dir / "judgement.json").read_text())["passed"]
+        record_label(runs, run_id(runs, run_dir), judge_passed)
+    result = agreement(runs)
+    assert result == Agreement(labelled=20, agreed=20, kappa=1.0)
+    assert result.calibrated is True
+    assert Agreement(labelled=19, agreed=19, kappa=1.0).calibrated is False
+    assert Agreement(labelled=30, agreed=20, kappa=0.4).calibrated is False
+    assert Agreement(labelled=30, agreed=30, kappa=None).calibrated is False
+
+
+def test_labelling_an_unknown_run_is_refused(tmp_path):
+    with pytest.raises(UnknownRun, match="s9__p9/replays/baseline/0"):
+        record_label(tmp_path, "s9__p9/replays/baseline/0", True)
+    assert not (tmp_path / "s9__p9").exists()
+
+
+def test_next_unlabelled_walks_the_runs_in_order(tmp_path):
+    runs = tmp_path / "runs"
+    first = judged(runs, "s1__p1", "baseline", 0, True)
+    second = judged(runs, "s1__p1", "baseline", 1, False)
+    assert next_unlabelled(runs) == first
+    record_label(runs, run_id(runs, first), True)
+    assert next_unlabelled(runs) == second
+    record_label(runs, run_id(runs, second), False)
+    assert next_unlabelled(runs) is None
+
+
+def test_the_summary_shows_answer_judgement_and_diff(tmp_path):
+    summary = run_summary(judged(tmp_path, "s1__p1", "baseline", 0, False, reason="tests still fail"))
+    for expected in ["I fixed it", "judge: fail — tests still fail", "+new", "1 file changed"]:
+        assert expected in summary
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `uv run pytest tests/test_calibration.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'culprit.calibration'`
+
+- [ ] **Step 3: Write the implementation**
+
+`src/culprit/calibration.py`:
+
+```python
+"""How far the judge can be trusted: the human labels real replays and Cohen's kappa measures agreement.
+
+Verdicts are marked uncalibrated until at least MIN_LABELS replays are labelled and kappa reaches MIN_KAPPA.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
+from culprit.experiment import JUDGEMENT_FILE, REPLAYS_DIR
+
+HUMAN_LABEL_FILE = "human_label.json"
+MIN_LABELS = 20
+MIN_KAPPA = 0.6
+DIFF_PREVIEW_LINES = 40
+
+
+class UnknownRun(LookupError):
+    pass
+
+
+@dataclass(frozen=True)
+class Agreement:
+    labelled: int
+    agreed: int
+    kappa: float | None
+
+    @property
+    def calibrated(self) -> bool:
+        return self.labelled >= MIN_LABELS and self.kappa is not None and self.kappa >= MIN_KAPPA
+
+
+def judged_runs(runs_dir: Path) -> list[Path]:
+    return sorted(path.parent for path in runs_dir.glob(f"*/{REPLAYS_DIR}/*/*/{JUDGEMENT_FILE}"))
+
+
+def run_id(runs_dir: Path, run_dir: Path) -> str:
+    return str(run_dir.relative_to(runs_dir))
+
+
+def record_label(runs_dir: Path, run: str, passed: bool) -> Path:
+    run_dir = runs_dir / run
+    if not (run_dir / JUDGEMENT_FILE).is_file():
+        raise UnknownRun(f"no judged replay at {run} under {runs_dir}")
+    path = run_dir / HUMAN_LABEL_FILE
+    path.write_text(json.dumps({"passed": passed}))
+    return path
+
+
+def cohens_kappa(pairs: list[tuple[bool, bool]]) -> float | None:
+    if not pairs:
+        return None
+    n = len(pairs)
+    observed = sum(judge == human for judge, human in pairs) / n
+    judge_yes = sum(judge for judge, _ in pairs) / n
+    human_yes = sum(human for _, human in pairs) / n
+    expected = judge_yes * human_yes + (1 - judge_yes) * (1 - human_yes)
+    if expected == 1:
+        return None  # both raters gave one value every time: agreement beyond chance is not measurable
+    return (observed - expected) / (1 - expected)
+
+
+def agreement(runs_dir: Path) -> Agreement:
+    pairs = []
+    for run_dir in judged_runs(runs_dir):
+        label = run_dir / HUMAN_LABEL_FILE
+        if label.is_file():
+            judge = json.loads((run_dir / JUDGEMENT_FILE).read_text())["passed"]
+            pairs.append((bool(judge), bool(json.loads(label.read_text())["passed"])))
+    return Agreement(len(pairs), sum(j == h for j, h in pairs), cohens_kappa(pairs))
+
+
+def next_unlabelled(runs_dir: Path) -> Path | None:
+    return next((run_dir for run_dir in judged_runs(runs_dir) if not (run_dir / HUMAN_LABEL_FILE).exists()), None)
+
+
+def run_summary(run_dir: Path) -> str:
+    judgement = json.loads((run_dir / JUDGEMENT_FILE).read_text())
+    result = json.loads((run_dir / "result.json").read_text())
+    diff_lines = (run_dir / "diff.patch").read_text(errors="replace").splitlines()
+    files_changed = sum(1 for line in diff_lines if line.startswith("+++ "))
+    verdict = "pass" if judgement["passed"] else "fail"
+    preview = "\n".join(diff_lines[:DIFF_PREVIEW_LINES])
+    more = f"\n… {len(diff_lines) - DIFF_PREVIEW_LINES} more diff lines" if len(diff_lines) > DIFF_PREVIEW_LINES else ""
+    return (f"final answer: {result.get('result_text', '')}\n"
+            f"judge: {verdict} — {judgement['reason']}\n"
+            f"{files_changed} file{'s' if files_changed != 1 else ''} changed\n{preview}{more}")
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `uv run pytest -v`
+Expected: 115 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/culprit/calibration.py tests/test_calibration.py
+git commit -m "Measure the judge against human labels with Cohen's kappa and a calibration gate
+
+Calibrated needs at least 20 labelled real replays and kappa >= 0.6; kappa
+is reported as not computable when every label has one value.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git status --short   # must print nothing
+```
+
+---
+
+#### Task 5.2: Plant known faults and measure culprit's accuracy
+
+**Files:**
+- Create: `src/culprit/selftest.py`
+- Test: `tests/test_selftest.py`
+
+**Interfaces:**
+- Consumes: `Criterion` (criterion); `ReplaySettings` (replay); `EpisodeBudget`, `load_outcome` (experiment); `diagnose` (diagnose); `Verdict`, `load_verdict` (verdict); `Cause`, `Symptom` (taxonomy); `episode_dir` (store).
+- Produces:
+  - `class PlantedFault(StrEnum)`: `TRUNCATED_PROMPT = "truncated-prompt"`, `MISLEADING_INSTRUCTION = "misleading-instruction"`, `EDIT_TOOLS_REMOVED = "edit-tools-removed"`, `WEAK_MODEL = "weak-model"`, `IMPOSSIBLE_CRITERION = "impossible-criterion"`.
+  - `EXPECTED: dict[PlantedFault, Cause]`, `SELFTEST_DIR = "selftest"`, `CONTROL_MIN_PASSES = 4`, `WEAK_MODEL_ID = "claude-haiku-5-5"`, `TRUNCATED_WORDS = 6`, `MISLEADING_INSTRUCTION_TEXT: str`, `READ_ONLY_TOOLS = "Read,Grep,Glob"`, `IMPOSSIBLE: Criterion`.
+  - `plant(fault: PlantedFault, base: ReplaySettings, criterion: Criterion) -> tuple[ReplaySettings, Criterion]`
+  - `is_control(runs_dir: Path, episode_id: str) -> bool`
+  - `selftest_dir(runs_dir: Path, episode_id: str, fault: PlantedFault) -> Path`
+  - `@dataclass(frozen=True) class SelftestResult` with `fault: str`, `expected: str`, `got: str`, and property `correct -> bool`.
+  - `run_selftest(episode, criterion, base, *, runs_dir, follow_ups, n, budget_per_fault, faults=tuple(PlantedFault), diagnose_fn=diagnose) -> list[SelftestResult]`
+  - `selftest_results(runs_dir: Path) -> list[SelftestResult]` and `selftest_accuracy(runs_dir: Path) -> tuple[int, int]` — (correct, total) over every stored selftest verdict.
+
+- [ ] **Step 1: Write the failing tests**
+
+`tests/test_selftest.py`:
+
+```python
+import json
+from dataclasses import replace
+
+from culprit.criterion import Criterion
+from culprit.episodes import episodes_from_session
+from culprit.replay import ReplaySettings
+from culprit.selftest import (EXPECTED, IMPOSSIBLE, MISLEADING_INSTRUCTION_TEXT, PlantedFault, SelftestResult,
+                              is_control, plant, run_selftest, selftest_accuracy, selftest_dir)
+from culprit.store import episode_dir
+from culprit.taxonomy import Cause
+from culprit.verdict import Verdict, save_verdict
+from records import human
+
+CRITERION = Criterion("works", ("pytest -q",), (), approved=True)
+BASE = ReplaySettings(prompt="fix the failing login test in the auth module please", model="claude-opus-5",
+                      permission_mode="auto")
+
+
+def test_each_fault_breaks_exactly_one_layer():
+    assert plant(PlantedFault.TRUNCATED_PROMPT, BASE, CRITERION) == (
+        replace(BASE, prompt="fix the failing login test in"), CRITERION)
+    assert plant(PlantedFault.MISLEADING_INSTRUCTION, BASE, CRITERION) == (
+        replace(BASE, append_system_prompt=MISLEADING_INSTRUCTION_TEXT), CRITERION)
+    assert plant(PlantedFault.EDIT_TOOLS_REMOVED, BASE, CRITERION) == (replace(BASE, tools="Read,Grep,Glob"), CRITERION)
+    assert plant(PlantedFault.WEAK_MODEL, BASE, CRITERION) == (replace(BASE, model="claude-haiku-5-5"), CRITERION)
+    assert plant(PlantedFault.IMPOSSIBLE_CRITERION, BASE, CRITERION) == (BASE, IMPOSSIBLE)
+
+
+def test_every_fault_has_its_expected_cause():
+    assert {f.value: c.value for f, c in EXPECTED.items()} == {
+        "truncated-prompt": "task", "misleading-instruction": "agent-setup", "edit-tools-removed": "harness",
+        "weak-model": "model", "impossible-criterion": "unexplained"}
+    assert IMPOSSIBLE.checks and all("false" in check for check in IMPOSSIBLE.checks)
+
+
+def test_a_control_needs_four_of_five_baseline_passes(tmp_path):
+    folder = episode_dir(tmp_path, "s1:p1") / "replays" / "baseline"
+    folder.mkdir(parents=True)
+    (folder / "outcome.json").write_text(json.dumps({"variant": "baseline", "passes": 3, "runs": 5, "cost_usd": 1}))
+    assert is_control(tmp_path, "s1:p1") is False
+    (folder / "outcome.json").write_text(json.dumps({"variant": "baseline", "passes": 4, "runs": 5, "cost_usd": 1}))
+    assert is_control(tmp_path, "s1:p1") is True
+    assert is_control(tmp_path, "s9:p9") is False
+
+
+def test_selftest_reports_each_fault_and_the_accuracy(write_session, tmp_path):
+    (episode,) = episodes_from_session(write_session([human("fix", "p1", session_id="s1", cwd=str(tmp_path))]))
+    runs = tmp_path / "runs"
+    calls = []
+    answers = {"truncated-prompt": "task", "misleading-instruction": "agent-setup", "edit-tools-removed": "harness",
+               "weak-model": "task", "impossible-criterion": "unexplained"}
+
+    def fake_diagnose(episode, criterion, symptom, base, **kwargs):
+        fault = kwargs["out_dir"].name
+        calls.append((fault, base, criterion, kwargs["budget"].cap_usd))
+        verdict = Verdict(episode.episode_id, symptom.value, answers[fault], "e", {}, {})
+        save_verdict(kwargs["out_dir"], verdict)
+        return verdict
+
+    results = run_selftest(episode, CRITERION, BASE, runs_dir=runs, follow_ups=[], n=5, budget_per_fault=30.0,
+                           diagnose_fn=fake_diagnose)
+    assert [r.fault for r in results] == [f.value for f in PlantedFault]
+    assert [r.correct for r in results] == [True, True, True, False, True]
+    assert SelftestResult("weak-model", "model", "task").correct is False
+    assert all(cap == 30.0 for *_, cap in calls)
+    assert calls[3][1].model == "claude-haiku-5-5"
+    assert selftest_dir(runs, "s1:p1", PlantedFault.WEAK_MODEL) == runs / "selftest" / "s1__p1" / "weak-model"
+    assert selftest_accuracy(runs) == (4, 5)
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `uv run pytest tests/test_selftest.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'culprit.selftest'`
+
+- [ ] **Step 3: Write the implementation**
+
+`src/culprit/selftest.py`:
+
+```python
+"""culprit tested on itself: break one layer of a control episode on purpose and check diagnose names it.
+
+A control episode is one whose unchanged replay passes at least 4 of 5, so any new failure comes from
+the planted fault. The share of faults named correctly is culprit's accuracy.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from enum import StrEnum
+from pathlib import Path
+
+from culprit.criterion import Criterion
+from culprit.diagnose import diagnose
+from culprit.episodes import Episode
+from culprit.experiment import EpisodeBudget, load_outcome
+from culprit.replay import ReplaySettings
+from culprit.store import episode_dir
+from culprit.taxonomy import Cause, Symptom
+from culprit.verdict import load_verdict
+
+SELFTEST_DIR = "selftest"
+CONTROL_MIN_PASSES = 4
+WEAK_MODEL_ID = "claude-haiku-5-5"
+TRUNCATED_WORDS = 6
+READ_ONLY_TOOLS = "Read,Grep,Glob"
+MISLEADING_INSTRUCTION_TEXT = "Do not modify any files. Reply with a one-line summary of what you would do, then stop."
+IMPOSSIBLE = Criterion(
+    success_means="a file named CULPRIT_IMPOSSIBLE_MARKER exists and the check below passes",
+    checks=("test -f CULPRIT_IMPOSSIBLE_MARKER && false",),  # can never exit 0: every run fails
+    must_not=(),
+    approved=True,
+)
+
+
+class PlantedFault(StrEnum):
+    TRUNCATED_PROMPT = "truncated-prompt"
+    MISLEADING_INSTRUCTION = "misleading-instruction"
+    EDIT_TOOLS_REMOVED = "edit-tools-removed"
+    WEAK_MODEL = "weak-model"
+    IMPOSSIBLE_CRITERION = "impossible-criterion"
+
+
+EXPECTED: dict[PlantedFault, Cause] = {
+    PlantedFault.TRUNCATED_PROMPT: Cause.TASK,
+    PlantedFault.MISLEADING_INSTRUCTION: Cause.AGENT_SETUP,
+    PlantedFault.EDIT_TOOLS_REMOVED: Cause.HARNESS,
+    PlantedFault.WEAK_MODEL: Cause.MODEL,
+    PlantedFault.IMPOSSIBLE_CRITERION: Cause.UNEXPLAINED,
+}
+
+
+@dataclass(frozen=True)
+class SelftestResult:
+    fault: str
+    expected: str
+    got: str
+
+    @property
+    def correct(self) -> bool:
+        return self.expected == self.got
+
+
+def plant(fault: PlantedFault, base: ReplaySettings, criterion: Criterion) -> tuple[ReplaySettings, Criterion]:
+    if fault is PlantedFault.TRUNCATED_PROMPT:
+        return replace(base, prompt=" ".join(base.prompt.split()[:TRUNCATED_WORDS])), criterion
+    if fault is PlantedFault.MISLEADING_INSTRUCTION:
+        return replace(base, append_system_prompt=MISLEADING_INSTRUCTION_TEXT), criterion
+    if fault is PlantedFault.EDIT_TOOLS_REMOVED:
+        return replace(base, tools=READ_ONLY_TOOLS), criterion
+    if fault is PlantedFault.WEAK_MODEL:
+        return replace(base, model=WEAK_MODEL_ID), criterion
+    return base, IMPOSSIBLE
+
+
+def is_control(runs_dir: Path, episode_id: str) -> bool:
+    baseline = load_outcome(episode_dir(runs_dir, episode_id), "baseline")
+    return baseline is not None and baseline.passes >= CONTROL_MIN_PASSES
+
+
+def selftest_dir(runs_dir: Path, episode_id: str, fault: PlantedFault) -> Path:
+    return runs_dir / SELFTEST_DIR / episode_dir(runs_dir, episode_id).name / fault.value
+
+
+def run_selftest(episode: Episode, criterion: Criterion, base: ReplaySettings, *, runs_dir: Path,
+                 follow_ups: list[str], n: int, budget_per_fault: float,
+                 faults: tuple[PlantedFault, ...] = tuple(PlantedFault), diagnose_fn=diagnose) -> list[SelftestResult]:
+    results = []
+    for fault in faults:
+        planted_base, planted_criterion = plant(fault, base, criterion)
+        verdict = diagnose_fn(episode, planted_criterion, Symptom.WRONG_RESULT, planted_base, runs_dir=runs_dir,
+                              follow_ups=follow_ups, env_script=None, n=n,
+                              budget=EpisodeBudget(budget_per_fault),
+                              out_dir=selftest_dir(runs_dir, episode.episode_id, fault))
+        results.append(SelftestResult(fault.value, EXPECTED[fault].value, verdict.cause))
+    return results
+
+
+def selftest_results(runs_dir: Path) -> list[SelftestResult]:
+    results = []
+    for fault_dir in sorted((runs_dir / SELFTEST_DIR).glob("*/*")):
+        verdict = load_verdict(fault_dir)
+        if verdict is not None and fault_dir.name in {f.value for f in PlantedFault}:
+            results.append(SelftestResult(fault_dir.name, EXPECTED[PlantedFault(fault_dir.name)].value, verdict.cause))
+    return results
+
+
+def selftest_accuracy(runs_dir: Path) -> tuple[int, int]:
+    results = selftest_results(runs_dir)
+    return sum(r.correct for r in results), len(results)
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `uv run pytest -v`
+Expected: 119 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/culprit/selftest.py tests/test_selftest.py
+git commit -m "Plant one known fault per layer into a control episode and measure culprit's accuracy
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git status --short   # must print nothing
+```
+
+---
+
+#### Task 5.3: `culprit review`, `label`, `calibration`, `selftest`; trust figures beside every verdict
+
+**Files:**
+- Modify: `src/culprit/cli.py`
+- Test: `tests/test_cli_stage5.py`
+
+**Interfaces:**
+- Consumes: Stage 4's CLI; `calibration` and `selftest` modules.
+- Produces: subcommands `review`, `label <run-id> pass|fail`, `calibration`, `selftest <episode_id> [--n 5] [--budget-per-fault 40] [--replay-budget 2.0]`; `trust_lines(runs_dir: Path) -> list[str]`, printed after every `diagnose` verdict.
+
+- [ ] **Step 1: Write the failing tests**
+
+`tests/test_cli_stage5.py`:
+
+```python
+import json
+
+import culprit.cli as cli
+from culprit.criterion import Criterion, save_criterion
+from culprit.selftest import SelftestResult
+from culprit.store import episode_dir
+from records import human, snapshot
+
+
+def judged(runs, i, passed):
+    run_dir = runs / "s1__p1" / "replays" / "baseline" / str(i)
+    run_dir.mkdir(parents=True)
+    (run_dir / "judgement.json").write_text(json.dumps({"passed": passed, "reason": "r", "by": "model"}))
+    (run_dir / "result.json").write_text(json.dumps({"result_text": "done"}))
+    (run_dir / "diff.patch").write_text("")
+    return run_dir
+
+
+def test_review_then_label_then_calibration(tmp_path, capsys):
+    runs = tmp_path / "runs"
+    judged(runs, 0, True)
+    assert cli.main(["review", "--runs", str(runs)]) == 0
+    out = capsys.readouterr().out
+    assert "s1__p1/replays/baseline/0" in out and "judge: pass" in out
+    assert cli.main(["label", "s1__p1/replays/baseline/0", "pass", "--runs", str(runs)]) == 0
+    assert cli.main(["review", "--runs", str(runs)]) == 0
+    assert "every judged replay is labelled" in capsys.readouterr().out
+    assert cli.main(["calibration", "--runs", str(runs)]) == 0
+    out = capsys.readouterr().out
+    assert "1 labelled" in out and "uncalibrated" in out
+
+
+def test_trust_lines_report_calibration_and_selftest(tmp_path):
+    lines = cli.trust_lines(tmp_path / "runs")
+    assert any("uncalibrated" in line for line in lines)
+    assert any("selftest: not run" in line for line in lines)
+
+
+def test_selftest_refuses_an_episode_that_is_not_a_control(write_session, tmp_path, capsys, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_session([snapshot("u-p1", {}), human("fix", "p1", session_id="s1", cwd=str(repo))], name="s1.jsonl")
+    runs = tmp_path / "runs"
+    save_criterion(runs, "s1:p1", Criterion("works", (), (), approved=True))
+    (episode_dir(runs, "s1:p1") / "pristine").mkdir(parents=True)
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("selftest spent money on an episode that is not a control")
+
+    monkeypatch.setattr(cli, "run_selftest", must_not_run)
+    assert cli.main(["selftest", "s1:p1", "--projects", str(tmp_path / "projects"), "--runs", str(runs)]) == 1
+    assert "control" in capsys.readouterr().err
+
+
+def test_selftest_prints_each_fault_and_the_accuracy(write_session, tmp_path, capsys, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_session([snapshot("u-p1", {}), human("fix", "p1", session_id="s1", cwd=str(repo))], name="s1.jsonl")
+    runs = tmp_path / "runs"
+    save_criterion(runs, "s1:p1", Criterion("works", (), (), approved=True))
+    (episode_dir(runs, "s1:p1") / "pristine").mkdir(parents=True)
+    baseline = episode_dir(runs, "s1:p1") / "replays" / "baseline"
+    baseline.mkdir(parents=True)
+    (baseline / "outcome.json").write_text(json.dumps({"variant": "baseline", "passes": 5, "runs": 5, "cost_usd": 1}))
+    monkeypatch.setattr(cli, "run_selftest", lambda *a, **k: [SelftestResult("weak-model", "model", "model"),
+                                                              SelftestResult("truncated-prompt", "task", "harness")])
+    assert cli.main(["selftest", "s1:p1", "--projects", str(tmp_path / "projects"), "--runs", str(runs)]) == 0
+    out = capsys.readouterr().out
+    assert "weak-model: expected model, got model ✓" in out
+    assert "truncated-prompt: expected task, got harness ✗" in out
+    assert "1 of 2 planted faults named correctly" in out
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `uv run pytest tests/test_cli_stage5.py -v`
+Expected: FAIL — `invalid choice: 'review'` (SystemExit 2).
+
+- [ ] **Step 3: Add the subcommands**
+
+In `src/culprit/cli.py`, add to the imports:
+
+```python
+from culprit.calibration import (MIN_KAPPA, MIN_LABELS, UnknownRun, agreement, next_unlabelled, record_label,
+                                 run_id, run_summary)
+from culprit.selftest import CONTROL_MIN_PASSES, is_control, run_selftest, selftest_accuracy
+```
+
+Add `UnknownRun` to the `except` tuple in `main`.
+
+Add before `return parser` in `build_parser`:
+
+```python
+    review = commands.add_parser("review", help="show the next judged replay you have not labelled")
+    review.add_argument("--runs", type=Path, default=DEFAULT_RUNS)
+    review.set_defaults(handler=review_command)
+
+    label = commands.add_parser("label", help="record your own pass/fail for one judged replay")
+    label.add_argument("run")
+    label.add_argument("verdict", choices=["pass", "fail"])
+    label.add_argument("--runs", type=Path, default=DEFAULT_RUNS)
+    label.set_defaults(handler=label_command)
+
+    calibration = commands.add_parser("calibration", help="how often the judge agrees with your labels")
+    calibration.add_argument("--runs", type=Path, default=DEFAULT_RUNS)
+    calibration.set_defaults(handler=calibration_command)
+
+    selftest = commands.add_parser("selftest", help="plant known faults into a control episode and score culprit")
+    selftest.add_argument("episode_id")
+    _projects_and_runs(selftest)
+    selftest.add_argument("--n", type=int, default=5)
+    selftest.add_argument("--budget-per-fault", type=float, default=40.0)
+    selftest.add_argument("--replay-budget", type=float, default=DEFAULT_REPLAY_BUDGET_USD)
+    selftest.set_defaults(handler=selftest_command)
+```
+
+Add at the end of the file:
+
+```python
+def trust_lines(runs_dir: Path) -> list[str]:
+    result = agreement(runs_dir)
+    kappa = "not computable yet" if result.kappa is None else f"{result.kappa:.2f}"
+    state = "calibrated" if result.calibrated else f"uncalibrated (needs {MIN_LABELS} labels and kappa ≥ {MIN_KAPPA})"
+    correct, total = selftest_accuracy(runs_dir)
+    planted = f"selftest: {correct} of {total} planted faults named correctly" if total else "selftest: not run"
+    return [f"judge: {result.agreed} of {result.labelled} labels agree, kappa {kappa} — {state}", planted]
+
+
+def review_command(args: argparse.Namespace) -> int:
+    run_dir = next_unlabelled(args.runs)
+    if run_dir is None:
+        print("every judged replay is labelled")
+        return 0
+    print(f"{run_id(args.runs, run_dir)}\n{run_summary(run_dir)}")
+    print(f"\nlabel it: culprit label {run_id(args.runs, run_dir)} pass|fail")
+    return 0
+
+
+def label_command(args: argparse.Namespace) -> int:
+    record_label(args.runs, args.run, args.verdict == "pass")
+    print(f"labelled {args.run} {args.verdict}")
+    return 0
+
+
+def calibration_command(args: argparse.Namespace) -> int:
+    result = agreement(args.runs)
+    kappa = "not computable yet" if result.kappa is None else f"{result.kappa:.2f}"
+    print(f"{result.labelled} labelled, {result.agreed} agree with the judge, kappa {kappa}")
+    print("calibrated" if result.calibrated else f"uncalibrated: needs {MIN_LABELS} labels and kappa ≥ {MIN_KAPPA}")
+    return 0
+
+
+def selftest_command(args: argparse.Namespace) -> int:
+    episode, criterion = ready_to_replay(args)
+    if not is_control(args.runs, args.episode_id):
+        print(f"culprit: {args.episode_id} is not a control — its baseline must pass at least "
+              f"{CONTROL_MIN_PASSES} of 5 (run `culprit baseline {args.episode_id}`)", file=sys.stderr)
+        return 1
+    results = run_selftest(episode, criterion, baseline_settings(episode, args.replay_budget), runs_dir=args.runs,
+                           follow_ups=follow_up_prompts(args.projects, args.episode_id), n=args.n,
+                           budget_per_fault=args.budget_per_fault)
+    for result in results:
+        print(f"{result.fault}: expected {result.expected}, got {result.got} {'✓' if result.correct else '✗'}")
+    print(f"{sum(r.correct for r in results)} of {len(results)} planted faults named correctly")
+    return 0
+```
+
+In `diagnose_command`, after the `for cause, reason in verdict.untested.items():` loop and before `return 0`, add:
+
+```python
+    for line in trust_lines(args.runs):
+        print(line)
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `uv run pytest -v`
+Expected: 123 passed (Stage 4's `test_diagnose_passes_everything_through_and_prints_the_verdict` still passes: it checks substrings, and the trust lines only add output).
+
+- [ ] **Step 5: Prove it on real runs**
+
+Label the real replays Stages 3–4 produced, reading each summary yourself:
+
+```bash
+uv run culprit review          # read it, then:
+uv run culprit label <run-id> pass   # or fail; repeat until "every judged replay is labelled"
+uv run culprit calibration
+```
+
+Expected: the label count equals the number of judged replays so far; kappa prints as a number or "not computable yet". Any disagreement: open that run's `judgement.json` reason and decide whether the judge or your reading was wrong; if the judge, note the pattern for `judging_prompt`.
+
+Then a selftest. From Stage 1's queue pick an episode the human marked `no-failure` that is replayable, or any replayable episode, and run its baseline; it qualifies as a control once the baseline passes at least 4 of 5:
+
+```bash
+uv run culprit criterion draft <CONTROL> && uv run culprit criterion approve <CONTROL>
+uv run culprit restore <CONTROL> && uv run culprit baseline <CONTROL>
+uv run culprit selftest <CONTROL> --n 3 --budget-per-fault 25
+```
+
+Expected: five lines `fault: expected X, got Y ✓|✗` and an accuracy line. A ✗ on `weak-model` with got `task` or `agent-setup` is a legitimate finding (a cheaper fix rescued the weak model), not a bug: record it. A ✗ on `impossible-criterion` is a bug: the check must fail every run. Record the per-fault lines in the commit message.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/culprit/cli.py tests/test_cli_stage5.py
+git commit -m "Add culprit review, label, calibration and selftest; print trust figures with each verdict
+
+Proven: <L> replays labelled, kappa <k>; selftest on <CONTROL>: <per-fault results>.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git status --short   # must print nothing
+```
