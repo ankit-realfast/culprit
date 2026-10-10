@@ -21,10 +21,20 @@ def episode_dir(runs_dir: Path, episode_id: str) -> Path:
     return runs_dir / episode_id.replace(":", "__")
 
 
+def candidate_rows(runs_dir: Path) -> list[dict]:
+    """The stored triage queue, highest score first; empty before the first triage."""
+    path = runs_dir / CANDIDATES_FILE
+    return json.loads(path.read_text()) if path.exists() else []
+
+
 def save_candidates(runs_dir: Path, candidates: list[Candidate]) -> Path:
+    """Merge a new ranking into the stored queue by episode id (the new score wins), so a later triage
+    never drops an episode already queued or confirmed."""
+    rows = {row["summary"]["episode_id"]: row for row in candidate_rows(runs_dir)}
+    rows.update({c.summary.episode_id: asdict(c) for c in candidates})
     runs_dir.mkdir(parents=True, exist_ok=True)
     path = runs_dir / CANDIDATES_FILE
-    path.write_text(json.dumps([asdict(c) for c in candidates], indent=2))
+    path.write_text(json.dumps(sorted(rows.values(), key=lambda row: row["score"], reverse=True), indent=2))
     return path
 
 

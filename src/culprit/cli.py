@@ -25,7 +25,7 @@ from culprit.sandbox import (DEFAULT_FILE_HISTORY, apply_episode_originals, chec
 from culprit.selftest import CONTROL_MIN_PASSES, is_control, run_selftest, selftest_accuracy
 from culprit.signals import FailureSignals
 from culprit.snapshot import load_snapshot, session_root
-from culprit.store import UnknownEpisode, episode_dir, read_symptom, record_symptom, save_candidates
+from culprit.store import UnknownEpisode, candidate_rows, episode_dir, read_symptom, record_symptom, save_candidates
 from culprit.taxonomy import Symptom
 from culprit.triage import EpisodeSummary, rank_candidates
 
@@ -148,7 +148,8 @@ def triage_command(args: argparse.Namespace) -> int:
         blockers = _blockers_for(args.projects, s.episode_id)
         if blockers:
             print(f"       not replayable: {'; '.join(blockers)}")
-    print(f"{len(summaries)} episodes scanned; top {len(candidates)} saved to {path}")
+    print(f"{len(summaries)} episodes scanned; top {len(candidates)} merged into {path} "
+          f"({len(candidate_rows(args.runs))} queued)")
     return 0
 
 

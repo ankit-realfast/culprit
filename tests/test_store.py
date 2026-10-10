@@ -56,3 +56,12 @@ def test_recording_before_triage_names_the_missing_step(tmp_path):
 
 def test_an_unlabelled_episode_reads_as_none(tmp_path):
     assert read_symptom(tmp_path, "abc:p1") is None
+
+
+def test_a_new_triage_keeps_queued_episodes_and_takes_the_new_score(tmp_path):
+    saved(tmp_path, "abc:p1", "abc:p2")
+    path = save_candidates(tmp_path, [
+        Candidate(EpisodeSummary("abc:p2", "/s.jsonl", "prompt", FailureSignals(True, 3, 0, 0, 1.0)), 8),
+        Candidate(EpisodeSummary("abc:p3", "/s.jsonl", "prompt", FailureSignals(True, 0, 0, 0, 1.0)), 1)])
+    rows = json.loads(path.read_text())
+    assert [(r["summary"]["episode_id"], r["score"]) for r in rows] == [("abc:p2", 8), ("abc:p1", 5), ("abc:p3", 1)]
