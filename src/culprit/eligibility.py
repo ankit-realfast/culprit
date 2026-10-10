@@ -19,6 +19,9 @@ def replay_blockers(episode: Episode, tracked: Tracked | None) -> list[str]:
         blockers.append("no working directory was recorded")
     elif not Path(episode.cwd).is_dir():
         blockers.append(f"working directory {episode.cwd} no longer exists")
+    elif (Path(episode.cwd) / ".git").is_file():
+        blockers.append("working directory is a git worktree or submodule: its .git file points at another "
+                        "repository, so a copy would still write into that repository")
     if tracked is None:
         blockers.append("no file-history snapshot exists for this prompt")
     names = {use.get("name", "") for use in tool_uses(episode)}

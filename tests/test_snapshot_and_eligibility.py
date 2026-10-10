@@ -57,3 +57,16 @@ def test_project_hooks_lists_every_hook_command_the_project_defines(tmp_path):
 def test_the_session_root_is_the_first_working_directory_in_the_log(write_session):
     path = write_session([snapshot("u-p0", {}), human("a", "p0", cwd="/root"), human("b", "p1", cwd="/root/sub")])
     assert session_root(path) == Path("/root")
+
+
+def test_a_git_worktree_or_submodule_working_directory_is_not_replayable(write_session, tmp_path):
+    import subprocess
+    main_repo = tmp_path / "main"
+    subprocess.run(["git", "init", "-q", str(main_repo)], check=True)
+    subprocess.run(["git", "-C", str(main_repo), "commit", "-q", "--allow-empty", "-m", "init"], check=True,
+                   env={"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+                        "GIT_COMMITTER_EMAIL": "t@t", "PATH": "/usr/bin:/bin"})
+    worktree = tmp_path / "wt"
+    subprocess.run(["git", "-C", str(main_repo), "worktree", "add", "-q", str(worktree)], check=True)
+    episode = only_episode(write_session, [human("x", "p1", cwd=str(worktree))])
+    assert any("worktree or submodule" in b for b in replay_blockers(episode, {}))
