@@ -2,7 +2,8 @@ import json
 import subprocess
 import sys
 
-from culprit.answer_host import decide, recorded_answers
+from culprit.answer_host import decide
+from culprit.eligibility import recorded_answers
 from culprit.episodes import episodes_from_session
 from records import human
 

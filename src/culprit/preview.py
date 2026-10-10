@@ -18,7 +18,6 @@ from culprit.diagnose import criterion_changed, variant_file
 from culprit.experiment import MAX_VOID_RETRIES, load_outcome, stored_spend
 from culprit.oracles import DRAFTED_CAUSES, HARNESS_BUDGET_MULTIPLIER, MAX_DRAFT_ATTEMPTS, cannot_build
 from culprit.replay import ReplaySettings
-from culprit.selftest import PlantedFault, plant, selftest_dir
 from culprit.store import episode_dir, queued_ids, read_json
 from culprit.taxonomy import ORACLE_ORDER, Cause
 from culprit.verdict import BASELINE, COMBINED, load_verdict, pair_variant
@@ -95,18 +94,6 @@ def diagnose_cost_for(folder: Path, criterion: Criterion, base_cap: float, *, mo
              *(pair_variant(a.value, b.value) for a, b in combinations(oracles, 2))]
     done = frozenset() if stale else frozenset(name for name in names if load_outcome(folder, name) is not None)
     return diagnose_cost(base_cap, oracles, n=n, spent_usd=spent_usd, cap_usd=cap_usd, done=done, drafts=drafts)
-
-
-def selftest_cost(runs_dir: Path, episode_id: str, criterion: Criterion, base: ReplaySettings, *, n: int,
-                  budget_per_fault: float) -> CostPlan:
-    """One diagnose per planted fault, each in its own folder under its own cap."""
-    total = EMPTY
-    for fault in PlantedFault:
-        planted_base, planted_criterion = plant(fault, base, criterion)
-        folder = selftest_dir(runs_dir, episode_id, fault)
-        total += diagnose_cost_for(folder, planted_criterion, planted_base.max_budget_usd, model=planted_base.model,
-                                   env_fix=False, n=n, spent_usd=stored_spend(folder), cap_usd=budget_per_fault)
-    return total
 
 
 def batch_cost(runs_dir: Path, *, n: int, per_episode_usd: float, total_usd: float,

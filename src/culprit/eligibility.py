@@ -6,11 +6,11 @@ import json
 import os
 from pathlib import Path
 
-from culprit.answer_host import ASK_USER_TOOL, recorded_answers
 from culprit.episodes import Episode, prompt_images, tool_uses
 from culprit.snapshot import Tracked
 
 PROJECT_SETTINGS = (".claude/settings.json", ".claude/settings.local.json")
+ASK_USER_TOOL = "AskUserQuestion"
 
 
 def replay_blockers(episode: Episode, tracked: Tracked | None) -> list[str]:
@@ -55,3 +55,12 @@ def project_hooks(cwd: Path) -> list[str]:
                 for hook in (matcher or {}).get("hooks") or []:
                     commands.append(f"{event}: {hook.get('command', '')}")
     return commands
+
+
+def recorded_answers(episode: Episode) -> dict[str, str]:
+    answers: dict[str, str] = {}
+    for record in episode.records:
+        result = record.get("toolUseResult")
+        if isinstance(result, dict) and isinstance(result.get("answers"), dict):
+            answers.update({str(q): str(a) for q, a in result["answers"].items()})
+    return answers

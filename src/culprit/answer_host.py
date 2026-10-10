@@ -14,24 +14,14 @@ import json
 import sys
 from difflib import SequenceMatcher
 
-from culprit.episodes import Episode
+from culprit.eligibility import ASK_USER_TOOL
 from culprit.mcp_stub import serve_message, serve_stdio, text_result, tool_spec
 
 SERVER = "culprit_answers"
 TOOL = "answer"
 PERMISSION_PROMPT_TOOL = f"mcp__{SERVER}__{TOOL}"
-ASK_USER_TOOL = "AskUserQuestion"
 SAME_QUESTION_RATIO = 0.6  # how close a replay's wording must be to a question you answered
 NO_HUMAN = "no human is present during a replay, so this permission prompt is refused"
-
-
-def recorded_answers(episode: Episode) -> dict[str, str]:
-    answers: dict[str, str] = {}
-    for record in episode.records:
-        result = record.get("toolUseResult")
-        if isinstance(result, dict) and isinstance(result.get("answers"), dict):
-            answers.update({str(q): str(a) for q, a in result["answers"].items()})
-    return answers
 
 
 def decide(request: dict, answers: dict[str, str]) -> dict:

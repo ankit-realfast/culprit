@@ -12,6 +12,7 @@ from culprit.triage import Candidate
 CANDIDATES_FILE = "candidates.json"
 SYMPTOM_FILE = "symptom.json"
 RESTORE_FILE = "restore.json"  # how far the restored starting files can be trusted
+SELFTEST_DIR = "selftest"
 ROW_DIGITS = 4  # a bare number this long or shorter names a queue row; ids are hex, so longer digit runs are prefixes
 
 

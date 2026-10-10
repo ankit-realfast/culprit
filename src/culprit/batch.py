@@ -15,8 +15,7 @@ from culprit.diagnose import diagnose
 from culprit.experiment import BudgetExhausted, EpisodeBudget, Progress, pristine_dir, scoped, stored_spend
 from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
 from culprit.replay import SetupScriptFailed, baseline_settings
-from culprit.selftest import SELFTEST_DIR
-from culprit.store import confirm_step, display_id, episode_dir, queued_ids, read_symptom, require_queue, short_id
+from culprit.store import SELFTEST_DIR, confirm_step, display_id, episode_dir, queued_ids, read_symptom, require_queue, short_id
 from culprit.verdict import load_verdict
 
 ENV_FIX_FILE = "env-fix.sh"

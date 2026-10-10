@@ -24,13 +24,13 @@ from culprit.experiment import (BudgetExhausted, EpisodeBudget, VariantOutcome, 
                                 stored_spend)
 from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
 from culprit.oracles import DRAFTED_CAUSES
-from culprit.preview import CostPlan, batch_cost, diagnose_cost, diagnose_cost_for, plan_cost, selftest_cost
+from culprit.preview import CostPlan, batch_cost, diagnose_cost, diagnose_cost_for, plan_cost
 from culprit.progress import ProgressPrinter
 from culprit.replay import DEFAULT_REPLAY_BUDGET_USD, OriginalModified, SetupScriptFailed, baseline_settings
 from culprit.report import REPORT_FILE, collect, render_report
 from culprit import sandbox
 from culprit.sandbox import apply_episode_originals, check_restore, episode_originals, restore, restore_from_git
-from culprit.selftest import control_min_passes, is_control, run_selftest, selftest_accuracy
+from culprit.selftest import control_min_passes, is_control, run_selftest, selftest_accuracy, selftest_cost
 from culprit.signals import FailureSignals
 from culprit.snapshot import load_snapshot, session_root
 from culprit.status import STAGES, EpisodeStatus, episode_status, next_step, queue_status

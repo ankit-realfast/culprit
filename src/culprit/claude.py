@@ -10,7 +10,8 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
-NO_MCP_SERVERS = '{"mcpServers":{}}'
+from culprit.replay import NO_MCP_SERVERS
+
 DRAFTING_MODEL = "claude-sonnet-5-5"
 CALL_TIMEOUT_S = 600
 CALL_CAP_USD = 0.50  # the most one call may spend, and what culprit charges for it (the CLI reports no cost)

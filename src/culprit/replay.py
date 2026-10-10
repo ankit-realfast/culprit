@@ -17,14 +17,15 @@ import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from culprit.claude import NO_MCP_SERVERS
-from culprit.answer_host import PERMISSION_PROMPT_TOOL, recorded_answers
+from culprit.answer_host import PERMISSION_PROMPT_TOOL
 from culprit.answer_host import SERVER as ANSWER_SERVER
 from culprit import episodes
+from culprit.eligibility import recorded_answers
 from culprit.episodes import Episode, prompt_images
 from culprit.mcp_stub import MCP_PREFIX, recordings_from_episode
 from culprit.sandbox import clone_tree
 
+NO_MCP_SERVERS = '{"mcpServers":{}}'
 SAFETY_DENIED_TOOLS = ("Bash(git push *)", "Bash(gh *)")
 REPLAY_PERMISSION_MODES = ("auto", "acceptEdits")
 REPLAY_TIMEOUT_S = 1800

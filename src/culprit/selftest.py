@@ -14,12 +14,12 @@ from culprit.criterion import Criterion
 from culprit.diagnose import diagnose
 from culprit.episodes import Episode
 from culprit.experiment import EpisodeBudget, Progress, load_outcome, scoped, stored_spend
+from culprit.preview import EMPTY, CostPlan, diagnose_cost_for
 from culprit.replay import ReplaySettings
-from culprit.store import episode_dir
+from culprit.store import SELFTEST_DIR, episode_dir
 from culprit.taxonomy import Cause, Symptom
 from culprit.verdict import BASELINE, load_verdict
 
-SELFTEST_DIR = "selftest"
 CONTROL_MIN_SHARE = (4, 5)  # a control's baseline passes at least 4 in 5 of the N runs
 WEAK_MODEL_ID = "claude-haiku-5-5"
 TRUNCATED_WORDS = 6
@@ -116,3 +116,15 @@ def selftest_results(runs_dir: Path) -> list[SelftestResult]:
 def selftest_accuracy(runs_dir: Path) -> tuple[int, int]:
     results = selftest_results(runs_dir)
     return sum(r.correct for r in results), len(results)
+
+
+def selftest_cost(runs_dir: Path, episode_id: str, criterion: Criterion, base: ReplaySettings, *, n: int,
+                  budget_per_fault: float) -> CostPlan:
+    """One diagnose per planted fault, each in its own folder under its own cap."""
+    total = EMPTY
+    for fault in PlantedFault:
+        planted_base, planted_criterion = plant(fault, base, criterion)
+        folder = selftest_dir(runs_dir, episode_id, fault)
+        total += diagnose_cost_for(folder, planted_criterion, planted_base.max_budget_usd, model=planted_base.model,
+                                   env_fix=False, n=n, spent_usd=stored_spend(folder), cap_usd=budget_per_fault)
+    return total
