@@ -98,7 +98,15 @@ def test_a_directory_whose_parent_is_not_writable_is_not_replayable(write_sessio
         parent.chmod(0o755)
 
 
-def test_a_prompt_with_an_image_is_not_replayable(write_session, tmp_path):
-    episode = only_episode(write_session, [human([{"type": "image", "source": {}}, {"type": "text", "text": "fix this"}],
+IMAGE = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}
+
+
+def test_a_prompt_whose_image_was_kept_in_the_log_is_replayable(write_session, tmp_path):
+    episode = only_episode(write_session, [human([IMAGE, {"type": "text", "text": "fix this"}], "p1", cwd=str(tmp_path))])
+    assert not any("image" in b for b in replay_blockers(episode, {}))
+
+
+def test_a_prompt_whose_image_data_is_missing_is_not_replayable(write_session, tmp_path):
+    episode = only_episode(write_session, [human([{"type": "image", "source": {}}, {"type": "text", "text": "fix"}],
                                                  "p1", cwd=str(tmp_path))])
     assert any("image" in b for b in replay_blockers(episode, {}))

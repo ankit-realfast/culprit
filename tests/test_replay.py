@@ -281,3 +281,28 @@ def test_the_replay_reads_a_copy_of_the_original_projects_memory(tmp_path):
     assert copy == (tmp_path / "run0" / "memory").resolve()
     assert (copy / "MEMORY.md").read_text() == "- tests live in spec/\n"
     assert (memory / "MEMORY.md").read_text() == "- tests live in spec/\n"
+
+
+IMAGE_BLOCK = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}
+
+
+def test_baseline_settings_carry_the_prompts_images(write_session):
+    (episode,) = episodes_from_session(write_session([human([IMAGE_BLOCK, {"type": "text", "text": "fix this"}], "p1")]))
+    assert baseline_settings(episode).prompt_images == (IMAGE_BLOCK,)
+
+
+def test_a_prompt_with_images_is_sent_as_one_stream_json_message(tmp_path):
+    run = FakeRun(claude_stdout=RESULT)
+    run_replay(settings(prompt_images=(IMAGE_BLOCK,)), pristine_tree(tmp_path), tmp_path / "run0",
+               tmp_path / ".culprit-replay-img", (), run=run, projects_dir=tmp_path / "p")
+    command, kwargs = next((c, k) for c, k in run.calls if c[0] == "claude")
+    assert command[command.index("--input-format") + 1] == "stream-json"
+    message = json.loads(kwargs["input"])
+    assert message["type"] == "user"
+    assert message["message"]["content"] == [IMAGE_BLOCK, {"type": "text", "text": "fix the bug"}]
+
+
+def test_settings_with_images_round_trip_through_json():
+    from culprit.replay import settings_from_json, settings_to_json
+    with_images = settings(prompt_images=(IMAGE_BLOCK,))
+    assert settings_from_json(json.loads(json.dumps(settings_to_json(with_images)))) == with_images

@@ -14,6 +14,7 @@ class FakeEpisode:
         self.model = "claude-opus-5"
         self.permission_mode = "auto"
         self.cwd = "/repo"
+        self.records = ()
 
 
 def queue(runs, *episode_ids):

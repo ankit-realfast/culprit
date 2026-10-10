@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from culprit.claude import NO_MCP_SERVERS
-from culprit.episodes import Episode
+from culprit.episodes import Episode, content_blocks
 from culprit.sandbox import clone_tree
 
 SAFETY_DENIED_TOOLS = ("Bash(git push *)", "Bash(gh *)")
@@ -51,6 +51,7 @@ class ReplaySettings:
     context_preamble: str | None = None
     setup_script: Path | None = None
     max_budget_usd: float = DEFAULT_REPLAY_BUDGET_USD
+    prompt_images: tuple[dict, ...] = ()  # image blocks the human attached, resent with the prompt
 
 
 @dataclass(frozen=True)
@@ -88,9 +89,11 @@ def replay_permission_mode(original: str | None) -> str:
 
 
 def baseline_settings(episode: Episode, max_budget_usd: float = DEFAULT_REPLAY_BUDGET_USD) -> ReplaySettings:
+    prompt_blocks = content_blocks(episode.records[0]) if episode.records else []
+    images = tuple(block for block in prompt_blocks if block.get("type") == "image")
     return ReplaySettings(prompt=episode.prompt_text, model=episode.model,
                           permission_mode=replay_permission_mode(episode.permission_mode),
-                          max_budget_usd=max_budget_usd)
+                          max_budget_usd=max_budget_usd, prompt_images=images)
 
 
 def full_prompt(settings: ReplaySettings) -> str:
@@ -123,6 +126,8 @@ def replay_command(settings: ReplaySettings, original_cwd: Path | None = None,
         "--max-budget-usd", f"{settings.max_budget_usd:.2f}",
         "--settings", json.dumps(_applied_settings(memory_dir)),
     ]
+    if settings.prompt_images:
+        command += ["--input-format", "stream-json"]  # the only way to send images headless (verified live)
     if settings.model:
         command += ["--model", settings.model]
     if settings.tools is not None:
@@ -218,7 +223,7 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
         try:
             completed = run(replay_command(settings, original_cwd, workdir, memory_dir), cwd=workdir, capture_output=True,
                             text=True, timeout=REPLAY_TIMEOUT_S, env=env,
-                            input=replay_prompt(settings, original_cwd, workdir))
+                            input=_stdin_for(settings, replay_prompt(settings, original_cwd, workdir)))
             stdout, stderr, exit_code = completed.stdout, completed.stderr, completed.returncode
         except subprocess.TimeoutExpired:
             stdout, stderr, exit_code = "", f"timed out after {REPLAY_TIMEOUT_S}s", -1
@@ -248,6 +253,13 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
         _remove_if_only_empty_memory(project_folder)
+
+
+def _stdin_for(settings: ReplaySettings, prompt: str) -> str:
+    if not settings.prompt_images:
+        return prompt
+    content = [*settings.prompt_images, {"type": "text", "text": prompt}]
+    return json.dumps({"type": "user", "message": {"role": "user", "content": content}}) + "\n"
 
 
 def _bounded_diff(pristine: Path, workdir: Path, run) -> str:
@@ -305,6 +317,7 @@ def settings_to_json(settings: ReplaySettings) -> dict:
     data = asdict(settings)
     data["setup_script"] = str(settings.setup_script) if settings.setup_script else None
     data["disallowed_tools"] = list(settings.disallowed_tools)
+    data["prompt_images"] = list(settings.prompt_images)
     return data
 
 
@@ -312,4 +325,5 @@ def settings_from_json(data: dict) -> ReplaySettings:
     fields = dict(data)
     fields["setup_script"] = Path(fields["setup_script"]) if fields.get("setup_script") else None
     fields["disallowed_tools"] = tuple(fields.get("disallowed_tools") or ())
+    fields["prompt_images"] = tuple(fields.get("prompt_images") or ())
     return ReplaySettings(**fields)
