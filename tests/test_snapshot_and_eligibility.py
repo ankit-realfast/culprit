@@ -1,8 +1,9 @@
 import json
+from pathlib import Path
 
 from culprit.eligibility import project_hooks, replay_blockers
 from culprit.episodes import episodes_from_session
-from culprit.snapshot import load_snapshot
+from culprit.snapshot import load_snapshot, session_root
 from records import human, snapshot, tool_use
 
 
@@ -51,3 +52,8 @@ def test_project_hooks_lists_every_hook_command_the_project_defines(tmp_path):
     (tmp_path / ".claude" / "settings.local.json").write_text("{not json")
     assert project_hooks(tmp_path) == ["Stop: ./notify.sh", ".claude/settings.local.json is not valid JSON"]
     assert project_hooks(tmp_path / "elsewhere") == []
+
+
+def test_the_session_root_is_the_first_working_directory_in_the_log(write_session):
+    path = write_session([snapshot("u-p0", {}), human("a", "p0", cwd="/root"), human("b", "p1", cwd="/root/sub")])
+    assert session_root(path) == Path("/root")

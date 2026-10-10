@@ -7,6 +7,8 @@ restore check verifies on real episodes).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from culprit.episodes import Episode, read_records
 
 Tracked = dict[str, str | None]
@@ -25,3 +27,12 @@ def load_snapshot(episode: Episode) -> Tracked | None:
             tracked = {path: (entry or {}).get("backupFileName")
                        for path, entry in (snap.get("trackedFileBackups") or {}).items()}
     return tracked
+
+
+def session_root(session_file: Path) -> Path | None:
+    """The directory the session started in: file-history stores its relative paths against it,
+    not against the working directory of a later episode that changed directory."""
+    for record in read_records(session_file):
+        if record.get("cwd"):
+            return Path(record["cwd"])
+    return None

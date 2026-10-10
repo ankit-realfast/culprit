@@ -1,4 +1,4 @@
-"""The culprit command line: `triage` builds the review queue, `confirm` records the human's label."""
+"""The culprit command line. Each subcommand is one handler: handler(args) -> exit code."""
 
 from __future__ import annotations
 
@@ -6,50 +6,88 @@ import argparse
 import sys
 from pathlib import Path
 
+from culprit.claude import ClaudeCallFailed, ask_claude
+from culprit.criterion import approve_criterion, draft_criterion, load_criterion, save_criterion
+from culprit.eligibility import project_hooks, replay_blockers
 from culprit.episodes import episodes_from_session, session_files
+from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
+from culprit.sandbox import DEFAULT_FILE_HISTORY, apply_episode_originals, check_restore, restore
 from culprit.signals import FailureSignals
-from culprit.store import UnknownEpisode, record_symptom, save_candidates
+from culprit.snapshot import load_snapshot, session_root
+from culprit.store import UnknownEpisode, episode_dir, record_symptom, save_candidates
 from culprit.taxonomy import Symptom
 from culprit.triage import EpisodeSummary, rank_candidates
 
 DEFAULT_PROJECTS = Path.home() / ".claude" / "projects"
 DEFAULT_RUNS = Path("runs")
+PRISTINE_DIR = "pristine"
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
-    if args.command == "triage":
-        return _triage(args.projects, args.runs, args.top)
-    return _confirm(args.runs, args.episode_id, Symptom(args.symptom))
+    args = build_parser().parse_args(argv)
+    try:
+        return args.handler(args)
+    except (UnknownEpisode, EpisodeNotFound, FileNotFoundError, ClaudeCallFailed) as refusal:
+        print(f"culprit: {refusal}", file=sys.stderr)
+        return 1
 
 
-def _parser() -> argparse.ArgumentParser:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="culprit", description="Find what to change when a Claude Code episode fails.")
     commands = parser.add_subparsers(dest="command", required=True)
+
     triage = commands.add_parser("triage", help="rank episodes most likely to have failed")
-    triage.add_argument("--projects", type=Path, default=DEFAULT_PROJECTS)
-    triage.add_argument("--runs", type=Path, default=DEFAULT_RUNS)
+    _projects_and_runs(triage)
     triage.add_argument("--top", type=int, default=20)
+    triage.set_defaults(handler=triage_command)
+
     confirm = commands.add_parser("confirm", help="record what went wrong in a queued episode")
     confirm.add_argument("episode_id")
     confirm.add_argument("symptom", choices=[s.value for s in Symptom])
     confirm.add_argument("--runs", type=Path, default=DEFAULT_RUNS)
+    confirm.set_defaults(handler=confirm_command)
+
+    criterion = commands.add_parser("criterion", help="draft, show or approve what success means for an episode")
+    criterion.add_argument("action", choices=["draft", "show", "approve"])
+    criterion.add_argument("episode_id")
+    _projects_and_runs(criterion)
+    criterion.set_defaults(handler=criterion_command)
+
+    restore_parser = commands.add_parser("restore", help="rebuild an episode's starting files and check them")
+    restore_parser.add_argument("episode_id")
+    _projects_and_runs(restore_parser)
+    restore_parser.add_argument("--file-history", type=Path, default=DEFAULT_FILE_HISTORY)
+    restore_parser.add_argument("--dest", type=Path, default=None)
+    restore_parser.set_defaults(handler=restore_command)
     return parser
 
 
-def _triage(projects: Path, runs: Path, top: int) -> int:
+def _projects_and_runs(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--projects", type=Path, default=DEFAULT_PROJECTS)
+    parser.add_argument("--runs", type=Path, default=DEFAULT_RUNS)
+
+
+def triage_command(args: argparse.Namespace) -> int:
     summaries = [
         EpisodeSummary.from_episode(episode)
-        for session_file in session_files(projects)
+        for session_file in session_files(args.projects)
         for episode in episodes_from_session(session_file)
     ]
-    candidates = rank_candidates(summaries, top)
-    path = save_candidates(runs, candidates)
+    candidates = rank_candidates(summaries, args.top)
+    path = save_candidates(args.runs, candidates)
     for candidate in candidates:
         s = candidate.summary
         print(f"{candidate.score:>3}  {s.episode_id}  [{_evidence(s.signals)}]  {s.prompt_excerpt}")
+        blockers = _blockers_for(args.projects, s.episode_id)
+        if blockers:
+            print(f"       not replayable: {'; '.join(blockers)}")
     print(f"{len(summaries)} episodes scanned; top {len(candidates)} saved to {path}")
     return 0
+
+
+def _blockers_for(projects: Path, episode_id: str) -> list[str]:
+    episode = find_episode(projects, episode_id)
+    return replay_blockers(episode, load_snapshot(episode))
 
 
 def _evidence(signals: FailureSignals) -> str:
@@ -66,11 +104,57 @@ def _evidence(signals: FailureSignals) -> str:
     return ", ".join(parts)
 
 
-def _confirm(runs: Path, episode_id: str, symptom: Symptom) -> int:
-    try:
-        path = record_symptom(runs, episode_id, symptom)
-    except (UnknownEpisode, FileNotFoundError) as refusal:
-        print(f"culprit: {refusal}", file=sys.stderr)
+def confirm_command(args: argparse.Namespace) -> int:
+    path = record_symptom(args.runs, args.episode_id, Symptom(args.symptom))
+    print(f"recorded {args.symptom} for {args.episode_id} in {path}")
+    return 0
+
+
+def criterion_command(args: argparse.Namespace) -> int:
+    if args.action == "draft":
+        episode = find_episode(args.projects, args.episode_id)
+        follow_ups = follow_up_prompts(args.projects, args.episode_id)
+        path = save_criterion(args.runs, args.episode_id, draft_criterion(episode, follow_ups, ask=ask_claude))
+        print(f"drafted {path} — edit it if needed, then run `culprit criterion approve {args.episode_id}`")
+        return 0
+    if args.action == "approve":
+        approve_criterion(args.runs, args.episode_id)
+        print(f"approved the criterion for {args.episode_id}")
+        return 0
+    criterion = load_criterion(args.runs, args.episode_id)
+    if criterion is None:
+        raise FileNotFoundError(f"no criterion for {args.episode_id} — run `culprit criterion draft {args.episode_id}` first")
+    state = "approved" if criterion.approved else "draft, not approved"
+    print(f"[{state}]\nsuccess means: {criterion.success_means}")
+    for check in criterion.checks:
+        print(f"check: {check}")
+    for rule in criterion.must_not:
+        print(f"must not: {rule}")
+    return 0
+
+
+def restore_command(args: argparse.Namespace) -> int:
+    episode = find_episode(args.projects, args.episode_id)
+    tracked = load_snapshot(episode)
+    blockers = replay_blockers(episode, tracked)
+    if blockers:
+        print(f"culprit: {args.episode_id} cannot be replayed: " + "; ".join(blockers), file=sys.stderr)
         return 1
-    print(f"recorded {symptom.value} for {episode_id} in {path}")
+    destination = args.dest or episode_dir(args.runs, args.episode_id) / PRISTINE_DIR
+    if destination.exists():
+        print(f"culprit: {destination} already exists — delete it to restore again", file=sys.stderr)
+        return 1
+    report = restore(episode, tracked, destination, file_history_root=args.file_history,
+                     session_root=session_root(episode.session_file))
+    checked, mismatches = check_restore(episode, destination)  # the snapshot, before the episode's record overrides it
+    written, removed = apply_episode_originals(episode, destination)
+    print(f"{report.restored} restored from snapshots, {len(report.unknown)} unknown (snapshot kept no backup), "
+          f"{len(report.missing_backups)} missing backups, {len(report.outside_cwd)} outside the working directory "
+          f"→ {destination}")
+    print(f"snapshot agrees with the episode's own record for {checked - len(mismatches)} of {checked} files")
+    for mismatch in mismatches:
+        print(f"  mismatch: {mismatch.path} ({mismatch.reason})")
+    print(f"{written} file(s) set from the episode's own record, {removed} removed (created during the episode)")
+    hooks = project_hooks(Path(episode.cwd))
+    print("project hooks that will run in every replay: " + "; ".join(hooks) if hooks else "no project hooks")
     return 0

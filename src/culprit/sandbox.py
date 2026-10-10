@@ -1,8 +1,10 @@
 """Rebuild the files an episode started from, in a throwaway folder, and check the rebuild.
 
-The folder is a clone of the working directory as it is today with every git remote removed; each
-file Claude Code backed up is then put back as it was when the episode's prompt arrived. Files it
-never edited are as they are today, which every verdict reports.
+The folder is a clone of the working directory as it is today with every git remote removed. Each file
+with a snapshot backup is put back as the snapshot recorded it; then every file the episode itself
+recorded before touching it (an Edit's or Write's originalFile, or a Write that created the file) is
+set from that record, which is exact. A snapshot entry with no backup proves nothing about the file
+(measured 2026-10-11), so it is reported as unknown and left as it is today, like every untracked file.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ DEFAULT_FILE_HISTORY = Path.home() / ".claude" / "file-history"
 class RestoreReport:
     workdir: Path
     restored: int
-    deleted: int
+    unknown: tuple[str, ...]  # tracked with no backup: the starting content is not known
     missing_backups: tuple[str, ...]
     outside_cwd: tuple[str, ...]
 
@@ -50,23 +52,22 @@ def strip_git_remotes(workdir: Path) -> None:
 
 
 def restore(episode: Episode, tracked: Tracked, destination: Path,
-            file_history_root: Path = DEFAULT_FILE_HISTORY) -> RestoreReport:
+            file_history_root: Path = DEFAULT_FILE_HISTORY, session_root: Path | None = None) -> RestoreReport:
     cwd = Path(episode.cwd)
     clone_tree(cwd, destination)
     strip_git_remotes(destination)
     backups = file_history_root / episode.session_id
-    restored = deleted = 0
+    restored = 0
+    unknown: list[str] = []
     missing: list[str] = []
     outside: list[str] = []
     for tracked_path, backup_name in tracked.items():
-        target = _target_inside(cwd, destination, tracked_path)
+        target = _target_inside(cwd, destination, tracked_path, relative_base=session_root)
         if target is None:
             outside.append(tracked_path)
             continue
         if backup_name is None:
-            if target.is_file() or target.is_symlink():
-                target.unlink()
-                deleted += 1
+            unknown.append(tracked_path)
             continue
         backup = backups / backup_name
         if not backup.is_file():
@@ -75,41 +76,83 @@ def restore(episode: Episode, tracked: Tracked, destination: Path,
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(backup, target)
         restored += 1
-    return RestoreReport(destination, restored, deleted, tuple(missing), tuple(outside))
+    return RestoreReport(destination, restored, tuple(unknown), tuple(missing), tuple(outside))
+
+
+def episode_originals(episode: Episode) -> dict[str, str | None]:
+    """Each file's state before the episode first touched it, where the episode recorded it:
+    the content an Edit or Write saw, or None for a file a Write created."""
+    originals: dict[str, str | None] = {}
+    seen: set[str] = set()
+    for record in episode.records:
+        result = record.get("toolUseResult")
+        if not isinstance(result, dict) or not result.get("filePath"):
+            continue
+        path = result["filePath"]
+        if path in seen:
+            continue
+        seen.add(path)
+        if result.get("type") == "create":
+            originals[path] = None
+        elif isinstance(result.get("originalFile"), str):
+            originals[path] = result["originalFile"]
+    return originals
+
+
+def apply_episode_originals(episode: Episode, workdir: Path) -> tuple[int, int]:
+    """Set every file the episode recorded to that recorded starting state: (written, removed)."""
+    cwd = Path(episode.cwd)
+    written = removed = 0
+    for path, original in episode_originals(episode).items():
+        target = _target_inside(cwd, workdir, path)
+        if target is None:
+            continue
+        if original is None:
+            if target.is_file() or target.is_symlink():
+                target.unlink()
+                removed += 1
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(original)
+        written += 1
+    return written, removed
 
 
 def check_restore(episode: Episode, workdir: Path) -> tuple[int, list[RestoreMismatch]]:
-    """Compare each restored file with the episode's first Edit of it, whose result holds the whole file."""
+    """Compare the restored copy with each file's state at the episode's first touch, where recorded.
+
+    Run it before apply_episode_originals: it measures how far the snapshot alone can be trusted."""
     cwd = Path(episode.cwd)
-    seen: set[str] = set()
     checked = 0
     mismatches: list[RestoreMismatch] = []
-    for record in episode.records:
-        result = record.get("toolUseResult")
-        if not isinstance(result, dict) or not isinstance(result.get("originalFile"), str):
-            continue
-        path = result.get("filePath")
-        if not path or path in seen:
-            continue
-        seen.add(path)
+    for path, original in episode_originals(episode).items():
         target = _target_inside(cwd, workdir, path)
         if target is None:
             continue
         checked += 1
-        if not target.is_file():
+        if original is None:
+            if target.exists():
+                mismatches.append(RestoreMismatch(path, "exists, but the episode created it"))
+        elif not target.is_file():
             mismatches.append(RestoreMismatch(path, "missing after restore"))
-        elif target.read_text(errors="replace") != result["originalFile"]:
+        elif target.read_text(errors="replace") != original:
             mismatches.append(RestoreMismatch(path, "differs from the file the episode's first edit saw"))
     return checked, mismatches
 
 
-def _target_inside(cwd: Path, destination: Path, tracked_path: str) -> Path | None:
+def _target_inside(cwd: Path, destination: Path, tracked_path: str,
+                   relative_base: Path | None = None) -> Path | None:
+    """Where a path from the episode lands in the restored copy, or None if it falls outside it.
+
+    A relative path is read against relative_base (the session's starting directory, for snapshot
+    paths) or against cwd when none is given."""
     path = Path(tracked_path)
-    if path.is_absolute():
-        try:
-            path = path.relative_to(cwd)
-        except ValueError:
-            return None
+    if not path.is_absolute():
+        path = (relative_base or cwd) / path
+    try:
+        path = path.relative_to(cwd)
+    except ValueError:
+        return None
     target = (destination / path).resolve()
     if not target.is_relative_to(destination.resolve()):
         return None

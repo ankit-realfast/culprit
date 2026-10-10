@@ -82,3 +82,14 @@ def snapshot(message_id, tracked):
             },
         },
     }
+
+
+def write_result(prompt_id, file_path, original_file=None, kind="create"):
+    """A Write tool result; kind "create" means the file did not exist before it."""
+    return {
+        "type": "user",
+        "promptId": prompt_id,
+        "toolUseResult": {"type": kind, "filePath": file_path, "content": "new", "originalFile": original_file},
+        "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
+    }
+
