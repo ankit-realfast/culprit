@@ -41,3 +41,20 @@ def test_an_episode_whose_only_signal_is_api_errors_is_not_a_candidate():
     ranked = rank_candidates([summary("api", FailureSignals(False, 0, 3, 0, 10.0)), summary("clean", CLEAN)], top=5)
     assert ranked == []
 
+
+
+def test_a_prompt_that_is_only_a_slash_command_is_recognised():
+    from culprit.logs import is_slash_command
+    for command in ["/compact", "/clear", "  /model claude-opus-5 ", "/review-pr 123", "/plugin:skill"]:
+        assert is_slash_command(command), command
+    for prose in ["fix the bug", "/Users/akp/a.py is broken", "/ fix", "//comment", "/fix\nand then explain why",
+                  "please run /compact", ""]:
+        assert not is_slash_command(prose), prose
+
+
+def test_slash_command_episodes_are_never_candidates(write_session):
+    from culprit.logs import summarize_session
+    from records import human, interrupt
+    path = write_session([human("/compact", "p1"), interrupt("p1"), human("fix it", "p2"), interrupt("p2")])
+    ranked = rank_candidates(summarize_session(path), top=5)
+    assert [c.summary.prompt_excerpt for c in ranked] == ["fix it"]

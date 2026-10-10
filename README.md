@@ -10,7 +10,8 @@ guesses the cause.
 
 1. **Triage.** Your logs (`~/.claude/projects/*.jsonl`) are split into episodes: one prompt and
    everything until your next prompt. Episodes are ranked by interrupts, tool errors, compactions and
-   slow turns. Episodes that can't be replayed are listed last, with the reason.
+   slow turns. A prompt that is only a slash command (`/compact`, `/model opus`) is never a candidate.
+   Episodes that can't be replayed are listed last, with the reason.
 2. **Confirm.** You say what went wrong (`stopped-short`, `wrong-result`, `ignored-instructions`,
    `wasteful` or `no-failure`) and approve a drafted success criterion.
 3. **Baseline.** The episode's starting files are rebuilt in a throwaway copy and the episode is

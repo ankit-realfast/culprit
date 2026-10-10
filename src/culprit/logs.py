@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -209,12 +210,20 @@ def _count_system(records: tuple[dict, ...], subtype: str) -> int:
 
 # --- triage: Rank episodes by how likely they are to have failed, for a human to confirm. ---
 # The score orders the human's review queue; it never labels an episode a failure on its own.
+# A prompt that is only a slash command (/compact, /clear, /model opus) asks Claude Code, not the agent,
+# for something, so it is never a candidate.
 
 INTERRUPT_WEIGHT = 5
 TOOL_ERROR_CAP = 5
 COMPACTION_WEIGHT = 2
 SLOW_WEIGHT = 3
 SLOW_PERCENTILE = 0.9
+# one line: a slash, a command word (a plugin's may hold ":"), then at most that line's arguments
+SLASH_COMMAND = re.compile(r"/[A-Za-z][\w:-]*(?:[ \t][^\n]*)?")
+
+
+def is_slash_command(text: str) -> bool:
+    return SLASH_COMMAND.fullmatch(text.strip()) is not None
 
 
 @dataclass(frozen=True)
@@ -225,10 +234,12 @@ class EpisodeSummary:
     session_file: str
     prompt_excerpt: str
     signals: FailureSignals
+    slash_command: bool = False
 
     @classmethod
     def from_episode(cls, episode: Episode) -> EpisodeSummary:
-        return cls(episode.episode_id, str(episode.session_file), excerpt(episode.prompt_text), signals_for(episode))
+        return cls(episode.episode_id, str(episode.session_file), excerpt(episode.prompt_text), signals_for(episode),
+                   is_slash_command(episode.prompt_text))
 
 
 def summarize_session(session_file: Path) -> list[EpisodeSummary]:
@@ -261,6 +272,7 @@ def score(signals: FailureSignals, slow_threshold_s: float) -> int:
 
 
 def rank_candidates(summaries: list[EpisodeSummary], top: int) -> list[Candidate]:
+    summaries = [s for s in summaries if not s.slash_command]
     slow_threshold_s = percentile([s.signals.duration_s for s in summaries], SLOW_PERCENTILE)
     scored = [Candidate(s, score(s.signals, slow_threshold_s)) for s in summaries]
     flagged = [c for c in scored if c.score > 0]
