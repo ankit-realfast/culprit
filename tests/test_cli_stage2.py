@@ -3,7 +3,7 @@ import json
 import pytest
 
 import culprit.cli as cli
-from culprit.criterion import load_criterion
+from culprit.model import load_criterion
 from culprit.store import read_symptom
 from fakes import FakeAsk
 from records import edit_result, human, interrupt, snapshot

@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from culprit.claude import ClaudeCallFailed, ask_claude, structured_call_command
+from culprit.model import ClaudeCallFailed, ask_claude, structured_call_command
 from fakes import completed
 
 SCHEMA = {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]}

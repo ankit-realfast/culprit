@@ -1,4 +1,4 @@
-from culprit.leak import LeakCheck, check_leak, leak_prompt
+from culprit.model import LeakCheck, check_leak, leak_prompt
 from fakes import FakeAsk
 
 

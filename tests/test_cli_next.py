@@ -1,7 +1,7 @@
 import json
 
 import culprit.cli as cli
-from culprit.criterion import Criterion, save_criterion
+from culprit.model import Criterion, save_criterion
 from culprit.experiment import VariantOutcome
 from culprit.store import episode_dir
 from culprit.verdict import Verdict

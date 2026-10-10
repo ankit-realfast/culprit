@@ -1,7 +1,7 @@
 import json
 from dataclasses import replace
 
-from culprit.criterion import Criterion
+from culprit.model import Criterion
 from culprit.logs import episodes_from_session
 from culprit.replay import ReplaySettings
 from culprit.selftest import (EXPECTED, IMPOSSIBLE, MISLEADING_INSTRUCTION_TEXT, PlantedFault, SelftestResult,

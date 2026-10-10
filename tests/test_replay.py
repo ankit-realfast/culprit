@@ -6,7 +6,7 @@ import pytest
 
 from culprit.logs import episodes_from_session
 from culprit.replay import (ReplaySettings, SetupScriptFailed, baseline_settings, project_folder_name, replay_command,
-                            replay_prompt, replay_permission_mode, replay_workdir, run_replay)
+                            replay_permission_mode, replay_prompt, replay_workdir, run_replay)
 from fakes import FakeRun
 from records import assistant, human
 

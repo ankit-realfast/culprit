@@ -3,7 +3,7 @@ import json
 import pytest
 
 import culprit.cli as cli
-from culprit.criterion import Criterion, save_criterion
+from culprit.model import Criterion, save_criterion
 from culprit.selftest import SelftestResult
 from culprit.store import episode_dir
 from records import human, snapshot

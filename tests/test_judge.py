@@ -1,7 +1,6 @@
 import json
 
-from culprit.criterion import Criterion
-from culprit.judge import MAX_DIFF_CHARS, Judgement, actions_from_transcript, judge_replay, judging_prompt
+from culprit.model import MAX_DIFF_CHARS, Criterion, Judgement, actions_from_transcript, judge_replay, judging_prompt
 from culprit.replay import CheckResult, ReplayResult
 from fakes import FakeAsk
 

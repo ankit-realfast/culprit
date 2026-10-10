@@ -1,5 +1,5 @@
 import culprit.cli as cli
-from culprit.criterion import Criterion, save_criterion
+from culprit.model import Criterion, save_criterion
 from culprit.store import episode_dir
 from culprit.verdict import Verdict
 from records import human, snapshot

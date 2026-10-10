@@ -1,7 +1,7 @@
 import json
 from dataclasses import replace
 
-from culprit.criterion import Criterion
+from culprit.model import Criterion
 from culprit.diagnose import NOT_RUN_REASON, diagnose
 from culprit.logs import episodes_from_session
 from culprit.experiment import EpisodeBudget, VariantOutcome

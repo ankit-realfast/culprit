@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from culprit.criterion import Criterion, criterion_step, load_criterion
+from culprit.model import Criterion, criterion_step, load_criterion
 from culprit.experiment import VariantOutcome, load_outcome, load_outcomes, pristine_dir, stored_spend
 from culprit.store import (confirm_step, display_id, episode_dir, known_episode_ids, load_restore, queued_ids,
                            read_symptom)

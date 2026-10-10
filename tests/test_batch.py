@@ -1,7 +1,7 @@
 import json
 
 from culprit.batch import diagnose_all, readiness_problem
-from culprit.criterion import Criterion, save_criterion
+from culprit.model import Criterion, save_criterion
 from culprit.experiment import BudgetExhausted
 from culprit.store import episode_dir
 from culprit.verdict import Verdict, save_verdict
@@ -129,7 +129,7 @@ def test_the_total_counts_what_earlier_batches_spent(tmp_path):
 
 
 def test_one_failing_episode_does_not_end_the_batch(tmp_path):
-    from culprit.claude import ClaudeCallFailed
+    from culprit.model import ClaudeCallFailed
     runs = tmp_path / "runs"
     queue(runs, "a:1", "b:1")
     prepare(runs, "a:1")

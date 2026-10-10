@@ -9,8 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from culprit.claude import CALL_CAP_USD, ClaudeCallFailed
-from culprit.criterion import criterion_step, load_criterion
+from culprit.model import CALL_CAP_USD, ClaudeCallFailed, criterion_step, load_criterion
 from culprit.diagnose import diagnose
 from culprit.experiment import BudgetExhausted, EpisodeBudget, Progress, pristine_dir, scoped, stored_spend
 from culprit.logs import EpisodeNotFound, find_episode, follow_up_prompts

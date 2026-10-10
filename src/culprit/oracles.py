@@ -9,10 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from culprit.claude import Ask, ask_claude
-from culprit.criterion import Criterion
+from culprit.model import Ask, Criterion, ask_claude, check_leak
 from culprit.logs import Episode, tool_uses
-from culprit.leak import check_leak
 from culprit.replay import ReplaySettings, target_inside
 from culprit.store import Cause, Symptom
 
