@@ -15,8 +15,9 @@ from culprit.diagnose import (BASELINE, DRAFTED_CAUSES, ENV_FIX_FILE, BudgetExha
                               VariantOutcome, batch_cost, diagnose, diagnose_all, diagnose_cost, diagnose_cost_for,
                               env_fix_script, load_outcome, load_verdict, numbers_line, plan_cost, pristine_dir,
                               retire_if_criterion_changed, run_variant, stored_spend)
-from culprit.calibration import (MIN_KAPPA, MIN_LABELS, UnknownRun, agreement, next_unlabelled, record_label, run_id,
-                                 run_summary)
+from culprit.trust import (MIN_KAPPA, MIN_LABELS, UnknownRun, agreement, control_min_passes, is_control,
+                           next_unlabelled, record_label, run_id, run_selftest, run_summary, selftest_accuracy,
+                           selftest_cost)
 from culprit.model import (CRITERION_FILE, ClaudeCallFailed, Criterion, approve_criterion, ask_claude, criterion_step,
                            draft_criterion, load_criterion, save_criterion)
 from culprit.logs import (Episode, EpisodeNotFound, FailureSignals, excerpt, find_episode, follow_up_prompts,
@@ -28,7 +29,6 @@ from culprit.replay import (DEFAULT_REPLAY_BUDGET_USD, OriginalModified, SetupSc
                             baseline_settings, check_restore, episode_originals, restore, restore_from_git)
 from culprit.report import REPORT_FILE, collect, render_report
 from culprit import replay
-from culprit.selftest import control_min_passes, is_control, run_selftest, selftest_accuracy, selftest_cost
 from culprit.status import STAGES, EpisodeStatus, episode_status, next_step, queue_status
 from culprit.store import (ORACLE_ORDER, RESTORE_FILE, Cause, NotReady, Symptom, UnknownEpisode, confirm_step,
                            display_id, episode_dir, queued_ids, read_symptom, record_symptom, require_queue,

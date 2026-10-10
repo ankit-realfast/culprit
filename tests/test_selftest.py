@@ -4,8 +4,8 @@ from dataclasses import replace
 from culprit.model import Criterion
 from culprit.logs import episodes_from_session
 from culprit.replay import ReplaySettings
-from culprit.selftest import (EXPECTED, IMPOSSIBLE, MISLEADING_INSTRUCTION_TEXT, PlantedFault, SelftestResult,
-                              control_min_passes, is_control, plant, run_selftest, selftest_accuracy, selftest_dir)
+from culprit.trust import (EXPECTED, IMPOSSIBLE, MISLEADING_INSTRUCTION_TEXT, PlantedFault, SelftestResult,
+                           control_min_passes, is_control, plant, run_selftest, selftest_accuracy, selftest_dir)
 from culprit.store import episode_dir
 from culprit.diagnose import Verdict, save_verdict
 from records import human

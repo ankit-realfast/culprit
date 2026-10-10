@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from culprit.calibration import (Agreement, UnknownRun, agreement, cohens_kappa, judged_runs, next_unlabelled,
-                                 record_label, run_id, run_summary)
+from culprit.trust import (Agreement, UnknownRun, agreement, cohens_kappa, judged_runs, next_unlabelled, record_label,
+                           run_id, run_summary)
 
 
 def judged(runs, episode, variant, i, passed, reason="r"):
