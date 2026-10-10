@@ -1,8 +1,8 @@
 import subprocess
 
 from culprit.logs import episodes_from_session
-from culprit.sandbox import (apply_episode_originals, check_restore, clone_tree, episode_originals, restore,
-                             strip_git_remotes)
+from culprit.replay import (apply_episode_originals, check_restore, clone_tree, episode_originals, restore,
+                            strip_git_remotes)
 from records import edit_result, human, write_result
 
 
@@ -160,7 +160,7 @@ def git_commit(repo, message, when):
 
 
 def test_files_nothing_recorded_are_rolled_back_to_the_last_commit_before_the_episode(write_session, tmp_path):
-    from culprit.sandbox import restore_from_git
+    from culprit.replay import restore_from_git
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
@@ -182,7 +182,7 @@ def test_files_nothing_recorded_are_rolled_back_to_the_last_commit_before_the_ep
 
 
 def test_a_project_outside_git_is_left_alone(write_session, tmp_path):
-    from culprit.sandbox import restore_from_git
+    from culprit.replay import restore_from_git
     repo = make_repo(tmp_path)
     workdir = tmp_path / "restored"
     clone_tree(repo, workdir)

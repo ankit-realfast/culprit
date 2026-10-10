@@ -13,8 +13,7 @@ from culprit.claude import Ask, ask_claude
 from culprit.criterion import Criterion
 from culprit.logs import Episode, tool_uses
 from culprit.leak import check_leak
-from culprit.replay import ReplaySettings
-from culprit.sandbox import target_inside
+from culprit.replay import ReplaySettings, target_inside
 from culprit.store import Cause, Symptom
 
 ORACLE_MODEL = "claude-fable-5-1"

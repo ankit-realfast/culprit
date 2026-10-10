@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import culprit.cli as cli
-import culprit.sandbox as sandbox
+import culprit.replay as replay
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -17,4 +17,4 @@ def test_a_command_without_store_settings_never_reaches_the_repo_or_real_logs(wr
     assert Path.cwd() != REPO
     real = Path.home() / ".claude"
     assert cli.default_projects() != real / "projects"
-    assert sandbox.DEFAULT_FILE_HISTORY != real / "file-history"
+    assert replay.DEFAULT_FILE_HISTORY != real / "file-history"

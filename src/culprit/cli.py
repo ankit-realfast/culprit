@@ -26,10 +26,10 @@ from culprit.experiment import (BudgetExhausted, EpisodeBudget, VariantOutcome, 
 from culprit.oracles import DRAFTED_CAUSES
 from culprit.preview import CostPlan, batch_cost, diagnose_cost, diagnose_cost_for, plan_cost
 from culprit.progress import ProgressPrinter
-from culprit.replay import DEFAULT_REPLAY_BUDGET_USD, OriginalModified, SetupScriptFailed, baseline_settings
+from culprit.replay import (DEFAULT_REPLAY_BUDGET_USD, OriginalModified, SetupScriptFailed, apply_episode_originals,
+                            baseline_settings, check_restore, episode_originals, restore, restore_from_git)
 from culprit.report import REPORT_FILE, collect, render_report
-from culprit import sandbox
-from culprit.sandbox import apply_episode_originals, check_restore, episode_originals, restore, restore_from_git
+from culprit import replay
 from culprit.selftest import control_min_passes, is_control, run_selftest, selftest_accuracy, selftest_cost
 from culprit.status import STAGES, EpisodeStatus, episode_status, next_step, queue_status
 from culprit.store import (Cause, NotReady, ORACLE_ORDER, RESTORE_FILE, Symptom, UnknownEpisode, confirm_step,
@@ -485,7 +485,7 @@ def restore_episode(runs_dir: Path, projects_dir: Path, episode_id: str) -> list
     if blockers:
         raise NotReplayable(f"{display_id(runs_dir, episode_id)} cannot be replayed: " + "; ".join(blockers))
     destination = pristine_dir(runs_dir, episode_id)
-    report = restore(episode, tracked, destination, file_history_root=sandbox.DEFAULT_FILE_HISTORY,
+    report = restore(episode, tracked, destination, file_history_root=replay.DEFAULT_FILE_HISTORY,
                      session_root=session_root(episode.session_file))
     root = session_root(episode.session_file) or Path(episode.cwd)
     covered = {str(Path(path) if Path(path).is_absolute() else root / path) for path in tracked}

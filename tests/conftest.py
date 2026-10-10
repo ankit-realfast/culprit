@@ -41,7 +41,7 @@ def isolated_from_real_data(tmp_path, monkeypatch):
     and Claude Code's file history tmp_path/file-history."""
     import culprit.cli as cli
     import culprit.logs as logs
-    import culprit.sandbox as sandbox
+    import culprit.replay as replay
 
     cwd = tmp_path / "cwd"
     cwd.mkdir()
@@ -49,7 +49,7 @@ def isolated_from_real_data(tmp_path, monkeypatch):
     monkeypatch.setenv("CULPRIT_RUNS", str(tmp_path / "runs"))
     monkeypatch.setenv("CULPRIT_PROJECTS", str(tmp_path / "projects"))
     monkeypatch.setattr(logs, "DEFAULT_PROJECTS", tmp_path / "no-real-projects")
-    monkeypatch.setattr(sandbox, "DEFAULT_FILE_HISTORY", tmp_path / "file-history")
+    monkeypatch.setattr(replay, "DEFAULT_FILE_HISTORY", tmp_path / "file-history")
     # the CLI drafts a criterion on confirm; tests that care about the draft install their own FakeAsk
     monkeypatch.setattr(cli, "ask_claude", lambda prompt, schema: {"success_means": "works", "checks": [],
                                                                    "must_not": []})
