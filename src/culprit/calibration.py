@@ -5,12 +5,13 @@ Verdicts are marked uncalibrated until at least MIN_LABELS replays are labelled 
 
 from __future__ import annotations
 
-import json
 from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 
 from culprit.experiment import JUDGEMENT_FILE, REPLAYS_DIR
+from culprit.replay import DIFF_FILE, RESULT_FILE
+from culprit.store import read_json, write_json
 
 HUMAN_LABEL_FILE = "human_label.json"
 MIN_LABELS = 20
@@ -45,9 +46,7 @@ def record_label(runs_dir: Path, run: str, passed: bool) -> Path:
     run_dir = runs_dir / run
     if not (run_dir / JUDGEMENT_FILE).is_file():
         raise UnknownRun(f"no judged replay at {run} under {runs_dir}")
-    path = run_dir / HUMAN_LABEL_FILE
-    path.write_text(json.dumps({"passed": passed}))
-    return path
+    return write_json(run_dir / HUMAN_LABEL_FILE, {"passed": passed})
 
 
 def cohens_kappa(pairs: list[tuple[bool, bool]]) -> float | None:
@@ -68,8 +67,8 @@ def agreement(runs_dir: Path) -> Agreement:
     for run_dir in judged_runs(runs_dir):
         label = run_dir / HUMAN_LABEL_FILE
         if label.is_file():
-            judge = json.loads((run_dir / JUDGEMENT_FILE).read_text())["passed"]
-            pairs.append((bool(judge), bool(json.loads(label.read_text())["passed"])))
+            judge = read_json(run_dir / JUDGEMENT_FILE)["passed"]
+            pairs.append((bool(judge), bool(read_json(label)["passed"])))
     return Agreement(len(pairs), sum(j == h for j, h in pairs), cohens_kappa(pairs))
 
 
@@ -80,9 +79,9 @@ def next_unlabelled(runs_dir: Path, skip: Collection[Path] = ()) -> Path | None:
 
 
 def run_summary(run_dir: Path) -> str:
-    judgement = json.loads((run_dir / JUDGEMENT_FILE).read_text())
-    result = json.loads((run_dir / "result.json").read_text())
-    diff_lines = (run_dir / "diff.patch").read_text(errors="replace").splitlines()
+    judgement = read_json(run_dir / JUDGEMENT_FILE)
+    result = read_json(run_dir / RESULT_FILE)
+    diff_lines = (run_dir / DIFF_FILE).read_text(errors="replace").splitlines()
     files_changed = sum(1 for line in diff_lines if line.startswith("+++ "))
     verdict = "pass" if judgement["passed"] else "fail"
     preview = "\n".join(diff_lines[:DIFF_PREVIEW_LINES])

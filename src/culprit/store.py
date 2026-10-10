@@ -11,6 +11,7 @@ from culprit.triage import Candidate
 
 CANDIDATES_FILE = "candidates.json"
 SYMPTOM_FILE = "symptom.json"
+RESTORE_FILE = "restore.json"  # how far the restored starting files can be trusted
 
 
 class UnknownEpisode(ValueError):
@@ -19,6 +20,17 @@ class UnknownEpisode(ValueError):
 
 class NotReady(FileNotFoundError):
     """A step that must come first has not been done; the message names the command that does it."""
+
+
+def read_json(path: Path, default=None):
+    """A JSON file under runs/, or default when it does not exist."""
+    return json.loads(path.read_text()) if path.is_file() else default
+
+
+def write_json(path: Path, data) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, default=str))
+    return path
 
 
 def episode_dir(runs_dir: Path, episode_id: str) -> Path:
@@ -81,8 +93,7 @@ def display_id(runs_dir: Path, episode_id: str) -> str:
 
 def candidate_rows(runs_dir: Path) -> list[dict]:
     """The stored triage queue in row order (the latest ranking first); empty before the first triage."""
-    path = runs_dir / CANDIDATES_FILE
-    return json.loads(path.read_text()) if path.exists() else []
+    return read_json(runs_dir / CANDIDATES_FILE, [])
 
 
 def save_candidates(runs_dir: Path, candidates: list[Candidate]) -> Path:
@@ -92,20 +103,14 @@ def save_candidates(runs_dir: Path, candidates: list[Candidate]) -> Path:
     fresh = [asdict(c) for c in candidates]
     fresh_ids = {c.summary.episode_id for c in candidates}
     kept = [row for row in candidate_rows(runs_dir) if row["summary"]["episode_id"] not in fresh_ids]
-    runs_dir.mkdir(parents=True, exist_ok=True)
-    path = runs_dir / CANDIDATES_FILE
-    path.write_text(json.dumps(fresh + sorted(kept, key=lambda row: row["score"], reverse=True), indent=2))
-    return path
+    return write_json(runs_dir / CANDIDATES_FILE, fresh + sorted(kept, key=lambda row: row["score"], reverse=True))
 
 
 def record_symptom(runs_dir: Path, episode_id: str, symptom: Symptom) -> Path:
     if episode_id not in _candidate_ids(runs_dir):
         raise UnknownEpisode(f"{episode_id} is not in {runs_dir / CANDIDATES_FILE}")
-    folder = episode_dir(runs_dir, episode_id)
-    folder.mkdir(parents=True, exist_ok=True)
-    path = folder / SYMPTOM_FILE
-    path.write_text(json.dumps({"episode_id": episode_id, "symptom": symptom.value}, indent=2))
-    return path
+    return write_json(episode_dir(runs_dir, episode_id) / SYMPTOM_FILE,
+                      {"episode_id": episode_id, "symptom": symptom.value})
 
 
 def confirm_step(runs_dir: Path, episode_id: str) -> str:
@@ -118,10 +123,12 @@ def confirm_step(runs_dir: Path, episode_id: str) -> str:
 
 
 def read_symptom(runs_dir: Path, episode_id: str) -> Symptom | None:
-    path = episode_dir(runs_dir, episode_id) / SYMPTOM_FILE
-    if not path.exists():
-        return None
-    return Symptom(json.loads(path.read_text())["symptom"])
+    stored = read_json(episode_dir(runs_dir, episode_id) / SYMPTOM_FILE)
+    return Symptom(stored["symptom"]) if stored else None
+
+
+def load_restore(folder: Path) -> dict | None:
+    return read_json(folder / RESTORE_FILE)
 
 
 def _candidate_ids(runs_dir: Path) -> set[str]:

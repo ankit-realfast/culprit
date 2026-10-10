@@ -42,6 +42,11 @@ MAX_DIFF_BYTES = 2_000_000
 # and may not fall back to running unsandboxed (verified live 2026-10-11: a write to ~ was refused)
 SANDBOX_SETTINGS = {"enabled": True, "allowUnsandboxedCommands": False, "failIfUnavailable": True}
 GIT_STATE_FILES = ("HEAD", "index")
+# what each replay leaves in its run folder
+TRANSCRIPT_FILE = "transcript.jsonl"
+DIFF_FILE = "diff.patch"
+RESULT_FILE = "result.json"
+MEMORY_DIR = "memory"  # also the name of a project's memory folder under Claude Code's projects
 
 
 @dataclass(frozen=True)
@@ -239,7 +244,7 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
     memory_dir = None
     if original_memory and original_memory.is_dir():
         # a copy, so whatever the replay writes to its memory never reaches the real project's notes
-        memory_dir = (run_dir / "memory").resolve()
+        memory_dir = (run_dir / MEMORY_DIR).resolve()
         shutil.rmtree(memory_dir, ignore_errors=True)
         shutil.copytree(original_memory, memory_dir)
     answers_file = None
@@ -274,11 +279,11 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
             stdout, stderr, exit_code = completed.stdout, completed.stderr, completed.returncode
         except subprocess.TimeoutExpired:
             stdout, stderr, exit_code = "", f"timed out after {REPLAY_TIMEOUT_S}s", -1
-        (run_dir / "transcript.jsonl").write_text(stdout)
+        (run_dir / TRANSCRIPT_FILE).write_text(stdout)
         (run_dir / "stderr.txt").write_text(stderr)
         result_line = _result_line(stdout)
         check_results = tuple(_run_check(command, workdir, run, env) for command in checks)
-        (run_dir / "diff.patch").write_text(_bounded_diff(pristine, workdir, run))
+        (run_dir / DIFF_FILE).write_text(_bounded_diff(pristine, workdir, run))
         if result_line is None:
             reason = "timed out" if exit_code == -1 else f"no result line (exit {exit_code})"
             # the cost is unknown, so it is charged at the cap rather than as free
@@ -289,7 +294,7 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
                                   str(result_line.get("result") or ""), float(result_line.get("total_cost_usd") or 0),
                                   int(result_line.get("num_turns") or 0), check_results,
                                   void_reason=_void_reason(result_line))
-        (run_dir / "result.json").write_text(json.dumps(asdict(replay), default=str, indent=2))
+        (run_dir / RESULT_FILE).write_text(json.dumps(asdict(replay), default=str, indent=2))
         if watched:
             after = tree_fingerprint(watched)
             changed = sorted(path for path in before.keys() | after.keys() if before.get(path) != after.get(path))
@@ -354,7 +359,7 @@ def _remove_if_only_empty_memory(project_folder: Path) -> None:
     if not project_folder.is_dir():
         return
     entries = list(project_folder.iterdir())
-    if all(entry.name == "memory" and entry.is_dir() and not any(entry.iterdir()) for entry in entries):
+    if all(entry.name == MEMORY_DIR and entry.is_dir() and not any(entry.iterdir()) for entry in entries):
         for entry in entries:
             entry.rmdir()
         project_folder.rmdir()

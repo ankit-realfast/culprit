@@ -26,15 +26,15 @@ from culprit.oracles import DRAFTED_CAUSES
 from culprit.preview import CostPlan, batch_cost, diagnose_cost, diagnose_cost_for, plan_cost, selftest_cost
 from culprit.progress import ProgressPrinter
 from culprit.replay import DEFAULT_REPLAY_BUDGET_USD, OriginalModified, SetupScriptFailed, baseline_settings
-from culprit.report import REPORT_FILE, RESTORE_FILE, collect, render_report
+from culprit.report import REPORT_FILE, collect, render_report
 from culprit import sandbox
 from culprit.sandbox import apply_episode_originals, check_restore, episode_originals, restore, restore_from_git
 from culprit.selftest import control_min_passes, is_control, run_selftest, selftest_accuracy
 from culprit.signals import FailureSignals
 from culprit.snapshot import load_snapshot, session_root
 from culprit.status import STAGES, EpisodeStatus, episode_status, next_step, queue_status
-from culprit.store import (CANDIDATES_FILE, NotReady, UnknownEpisode, candidate_rows, confirm_step, display_id,
-                           episode_dir, read_symptom, record_symptom, resolve_episode_id, save_candidates)
+from culprit.store import (CANDIDATES_FILE, RESTORE_FILE, NotReady, UnknownEpisode, candidate_rows, confirm_step, display_id,
+                           episode_dir, read_symptom, record_symptom, resolve_episode_id, save_candidates, write_json)
 from culprit.taxonomy import ORACLE_ORDER, Cause, Symptom
 from culprit.verdict import BASELINE, load_verdict, numbers_line
 from culprit.triage import rank_candidates, summarize_session
@@ -504,8 +504,7 @@ def restore_episode(runs_dir: Path, projects_dir: Path, episode_id: str) -> list
              "checked": checked, "restored": report.restored,
              "unknown": len(report.unknown), "missing_backups": len(report.missing_backups),
              "outside_cwd": len(report.outside_cwd), "set_from_episode": written, "removed": removed}
-    episode_dir(runs_dir, episode_id).mkdir(parents=True, exist_ok=True)
-    (episode_dir(runs_dir, episode_id) / RESTORE_FILE).write_text(json.dumps(trust, indent=2))
+    write_json(episode_dir(runs_dir, episode_id) / RESTORE_FILE, trust)
     hooks = project_hooks(Path(episode.cwd))
     lines.append("project hooks that will run in every replay: " + "; ".join(hooks) if hooks else "no project hooks")
     return lines

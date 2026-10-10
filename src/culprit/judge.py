@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from culprit.claude import Ask, ask_claude
 from culprit.criterion import Criterion
-from culprit.replay import ReplayResult
+from culprit.replay import DIFF_FILE, TRANSCRIPT_FILE, ReplayResult
 
 MAX_DIFF_CHARS = 60_000
 MAX_ACTIONS_CHARS = 20_000
@@ -88,8 +88,8 @@ def judge_replay(criterion: Criterion, replay: ReplayResult, ask: Ask = ask_clau
         return Judgement(False, f"check failed: {failed[0].command} (exit {failed[0].exit_code})", "check")
     if replay.is_error:
         return Judgement(False, f"the replay ended in an error: {replay.result_text[:300]}", "replay")
-    diff = (replay.run_dir / "diff.patch").read_text(errors="replace")
-    transcript_path = replay.run_dir / "transcript.jsonl"
+    diff = (replay.run_dir / DIFF_FILE).read_text(errors="replace")
+    transcript_path = replay.run_dir / TRANSCRIPT_FILE
     actions = actions_from_transcript(transcript_path.read_text(errors="replace")) if transcript_path.exists() else ""
     answer = ask(judging_prompt(criterion, replay, diff, actions), JUDGEMENT_SCHEMA)
     return Judgement(bool(answer["passed"]), str(answer["reason"]), "model")

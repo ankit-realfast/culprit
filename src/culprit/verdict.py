@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from culprit.experiment import VariantOutcome
 from culprit.stats import fisher_one_sided
+from culprit.store import read_json, write_json
 
 SIGNIFICANCE = 0.05
 VERDICT_FILE = "verdict.json"
@@ -55,16 +55,12 @@ def numbers_line(verdict: Verdict) -> str | None:
 
 
 def save_verdict(folder: Path, verdict: Verdict) -> Path:
-    folder.mkdir(parents=True, exist_ok=True)
-    path = folder / VERDICT_FILE
-    path.write_text(json.dumps(asdict(verdict), indent=2))
-    return path
+    return write_json(folder / VERDICT_FILE, asdict(verdict))
 
 
 def load_verdict(folder: Path) -> Verdict | None:
-    path = folder / VERDICT_FILE
-    if not path.exists():
+    data = read_json(folder / VERDICT_FILE)
+    if data is None:
         return None
-    data = json.loads(path.read_text())
     data["pair"] = tuple(data.get("pair") or ())
     return Verdict(**data)

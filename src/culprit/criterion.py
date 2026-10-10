@@ -5,13 +5,12 @@ Every pass/fail judgement culprit makes about a replay is made against this crit
 
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from culprit.claude import Ask, ask_claude
 from culprit.episodes import Episode
-from culprit.store import NotReady, display_id, episode_dir
+from culprit.store import NotReady, display_id, episode_dir, read_json, write_json
 
 CRITERION_FILE = "criterion.json"
 CRITERION_SCHEMA = {
@@ -62,18 +61,13 @@ def draft_criterion(episode: Episode, follow_ups: list[str], ask: Ask = ask_clau
 
 
 def save_criterion(runs_dir: Path, episode_id: str, criterion: Criterion) -> Path:
-    folder = episode_dir(runs_dir, episode_id)
-    folder.mkdir(parents=True, exist_ok=True)
-    path = folder / CRITERION_FILE
-    path.write_text(json.dumps(asdict(criterion), indent=2))
-    return path
+    return write_json(episode_dir(runs_dir, episode_id) / CRITERION_FILE, asdict(criterion))
 
 
 def load_criterion(runs_dir: Path, episode_id: str) -> Criterion | None:
-    path = episode_dir(runs_dir, episode_id) / CRITERION_FILE
-    if not path.exists():
+    data = read_json(episode_dir(runs_dir, episode_id) / CRITERION_FILE)
+    if data is None:
         return None
-    data = json.loads(path.read_text())
     return Criterion(data["success_means"], tuple(data["checks"]), tuple(data["must_not"]), bool(data["approved"]))
 
 

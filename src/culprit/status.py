@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
 from culprit.criterion import Criterion, criterion_step, load_criterion
-from culprit.experiment import OUTCOME_FILE, PRISTINE_DIR, REPLAYS_DIR, VariantOutcome, load_outcome, stored_spend
-from culprit.report import RESTORE_FILE
-from culprit.store import candidate_rows, confirm_step, display_id, episode_dir, known_episode_ids, read_symptom
+from culprit.experiment import PRISTINE_DIR, VariantOutcome, load_outcome, load_outcomes, stored_spend
+from culprit.store import (candidate_rows, confirm_step, display_id, episode_dir, known_episode_ids, load_restore,
+                           read_symptom)
 from culprit.verdict import BASELINE, Verdict, load_verdict
 
 STAGES = ("not queued", "queued", "confirmed", "criterion drafted", "criterion approved", "restored", "baselined",
@@ -56,11 +55,8 @@ def episode_status(runs_dir: Path, episode_id: str) -> EpisodeStatus:
                 hint = step()
                 break
             stage = reached
-    restore = json.loads((folder / RESTORE_FILE).read_text()) if (folder / RESTORE_FILE).is_file() else None
-    outcomes = tuple(VariantOutcome(**json.loads(path.read_text()))
-                     for path in sorted((folder / REPLAYS_DIR).glob(f"*/{OUTCOME_FILE}")))
     return EpisodeStatus(episode_id, stage, hint or "run `culprit report`", symptom_value,
-                         criterion, restore, outcomes, stored_spend(folder), verdict)
+                         criterion, load_restore(folder), load_outcomes(folder), stored_spend(folder), verdict)
 
 
 def next_step(runs_dir: Path, episode_id: str) -> str:

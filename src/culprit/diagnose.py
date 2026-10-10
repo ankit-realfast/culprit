@@ -19,7 +19,7 @@ from culprit.experiment import (CALLS_FILE, PRISTINE_DIR, REPLAYS_DIR, SUPERSEDE
                                 VariantOutcome, load_outcome, record_call_spend, run_variant)
 from culprit.oracles import build_variant, combine
 from culprit.replay import ReplaySettings, settings_from_json, settings_to_json
-from culprit.store import episode_dir
+from culprit.store import episode_dir, read_json, write_json
 from culprit.taxonomy import ORACLE_ORDER, Cause, Symptom
 from culprit.verdict import BASELINE, COMBINED, VERDICT_FILE, Verdict, beats, reproducible, save_verdict
 
@@ -40,7 +40,7 @@ def retire_if_criterion_changed(folder: Path, criterion: Criterion) -> bool:
     marker = folder / CRITERION_USED_FILE
     key = criterion_key(criterion)
     retired = False
-    if marker.is_file() and json.loads(marker.read_text())["key"] != key:
+    if read_json(marker, {}).get("key", key) != key:
         stale = [folder / name for name in (REPLAYS_DIR, VARIANTS_DIR, VERDICT_FILE, CALLS_FILE)
                  if (folder / name).exists()]
         if stale:
@@ -49,8 +49,7 @@ def retire_if_criterion_changed(folder: Path, criterion: Criterion) -> bool:
             for path in stale:
                 shutil.move(str(path), destination / path.name)
             retired = True
-    folder.mkdir(parents=True, exist_ok=True)
-    marker.write_text(json.dumps({"key": key}))
+    write_json(marker, {"key": key})
     return retired
 
 
@@ -126,13 +125,11 @@ def diagnose(episode: Episode, criterion: Criterion, symptom: Symptom, base: Rep
 
 def _oracle(folder: Path, cause: Cause, base: ReplaySettings, untested: dict[str, str], make) -> ReplaySettings | None:
     path = folder / VARIANTS_DIR / f"{cause.value}.json"
-    if path.exists():
-        data = json.loads(path.read_text())
-    else:
+    data = read_json(path)
+    if data is None:
         made = make()
         data = {"untested": made.untested_reason} if made.settings is None else settings_to_json(made.settings)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data, indent=2))
+        write_json(path, data)
     if "untested" in data:
         untested[cause.value] = data["untested"]
         return None

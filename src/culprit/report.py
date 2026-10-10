@@ -7,12 +7,12 @@ the verdicts can be trusted, every verdict with its evidence, and what culprit c
 
 from __future__ import annotations
 
-import json
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
 from culprit.selftest import SELFTEST_DIR
+from culprit.store import load_restore
 from culprit.taxonomy import Cause, Symptom
 from culprit.verdict import load_verdict, numbers_line
 
@@ -40,7 +40,6 @@ KNOWN_LIMITS = (
     "A harness verdict says what made it pass, not whether the fix is yours or Claude Code's.",
     "Replays start from the start of the episode, not from the step where it went wrong.",
 )
-RESTORE_FILE = "restore.json"
 CAUSE_RANK = {cause.value: rank for rank, cause in enumerate(Cause)}
 SYMPTOM_ROWS = [s.value for s in Symptom]
 
@@ -77,9 +76,8 @@ def collect(runs_dir: Path) -> list[Row]:
     for folder in sorted(p for p in runs_dir.iterdir() if p.is_dir() and p.name != SELFTEST_DIR) if runs_dir.is_dir() else []:
         verdict = load_verdict(folder)
         if verdict is not None:
-            restore = json.loads((folder / RESTORE_FILE).read_text()) if (folder / RESTORE_FILE).is_file() else None
             rows.append(Row(verdict.episode_id, verdict.symptom, verdict.cause, verdict.evidence, verdict.pair,
-                            verdict.untested, restore, numbers_line(verdict)))
+                            verdict.untested, load_restore(folder), numbers_line(verdict)))
     return rows
 
 
