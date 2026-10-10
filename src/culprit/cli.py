@@ -7,27 +7,28 @@ import sys
 from pathlib import Path
 
 from culprit.claude import ClaudeCallFailed, ask_claude
-from culprit.criterion import approve_criterion, draft_criterion, load_criterion, save_criterion
+from culprit.criterion import Criterion, approve_criterion, draft_criterion, load_criterion, save_criterion
 from culprit.eligibility import project_hooks, replay_blockers
-from culprit.episodes import episodes_from_session, session_files
+from culprit.episodes import Episode, episodes_from_session, session_files
+from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget, run_variant
 from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
+from culprit.replay import DEFAULT_REPLAY_BUDGET_USD, SetupScriptFailed, baseline_settings
 from culprit.sandbox import DEFAULT_FILE_HISTORY, apply_episode_originals, check_restore, restore
 from culprit.signals import FailureSignals
 from culprit.snapshot import load_snapshot, session_root
 from culprit.store import UnknownEpisode, episode_dir, record_symptom, save_candidates
 from culprit.taxonomy import Symptom
 from culprit.triage import EpisodeSummary, rank_candidates
-
 DEFAULT_PROJECTS = Path.home() / ".claude" / "projects"
 DEFAULT_RUNS = Path("runs")
-PRISTINE_DIR = "pristine"
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.handler(args)
-    except (UnknownEpisode, EpisodeNotFound, FileNotFoundError, ClaudeCallFailed) as refusal:
+    except (UnknownEpisode, EpisodeNotFound, FileNotFoundError, ClaudeCallFailed, BudgetExhausted,
+            SetupScriptFailed) as refusal:
         print(f"culprit: {refusal}", file=sys.stderr)
         return 1
 
@@ -59,6 +60,14 @@ def build_parser() -> argparse.ArgumentParser:
     restore_parser.add_argument("--file-history", type=Path, default=DEFAULT_FILE_HISTORY)
     restore_parser.add_argument("--dest", type=Path, default=None)
     restore_parser.set_defaults(handler=restore_command)
+
+    baseline = commands.add_parser("baseline", help="replay the unchanged episode N times and judge each run")
+    baseline.add_argument("episode_id")
+    _projects_and_runs(baseline)
+    baseline.add_argument("--n", type=int, default=5)
+    baseline.add_argument("--budget", type=float, default=10.0, help="spend cap in USD for this command")
+    baseline.add_argument("--replay-budget", type=float, default=DEFAULT_REPLAY_BUDGET_USD)
+    baseline.set_defaults(handler=baseline_command)
     return parser
 
 
@@ -157,4 +166,24 @@ def restore_command(args: argparse.Namespace) -> int:
     print(f"{written} file(s) set from the episode's own record, {removed} removed (created during the episode)")
     hooks = project_hooks(Path(episode.cwd))
     print("project hooks that will run in every replay: " + "; ".join(hooks) if hooks else "no project hooks")
+    return 0
+
+
+def ready_to_replay(args: argparse.Namespace) -> tuple[Episode, Criterion]:
+    """The episode and its approved criterion, once restore has built the pristine copy; refuses otherwise."""
+    episode = find_episode(args.projects, args.episode_id)
+    criterion = load_criterion(args.runs, args.episode_id)
+    if criterion is None or not criterion.approved:
+        raise FileNotFoundError(f"no approved criterion for {args.episode_id} — run "
+                                f"`culprit criterion draft {args.episode_id}` then `culprit criterion approve {args.episode_id}`")
+    if not (episode_dir(args.runs, args.episode_id) / PRISTINE_DIR).is_dir():
+        raise FileNotFoundError(f"{args.episode_id} has no restored copy — run `culprit restore {args.episode_id}` first")
+    return episode, criterion
+
+
+def baseline_command(args: argparse.Namespace) -> int:
+    episode, criterion = ready_to_replay(args)
+    outcome = run_variant("baseline", baseline_settings(episode, args.replay_budget), n=args.n, episode=episode,
+                          runs_dir=args.runs, criterion=criterion, budget=EpisodeBudget(args.budget))
+    print(f"baseline: {outcome.passes} of {outcome.runs} passed, ${outcome.cost_usd:.2f} spent on replays")
     return 0
