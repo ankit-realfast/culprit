@@ -6,7 +6,7 @@ import pytest
 
 from culprit.episodes import episodes_from_session
 from culprit.replay import (ReplaySettings, SetupScriptFailed, baseline_settings, project_folder_name,
-                            replay_command, replay_permission_mode, replay_workdir, run_replay)
+                            replay_command, replay_prompt, replay_permission_mode, replay_workdir, run_replay)
 from fakes import FakeRun
 from records import assistant, human
 
@@ -47,7 +47,8 @@ def test_the_command_is_locked_down_and_carries_every_setting():
     command = replay_command(settings(append_system_prompt="verify first", tools="default",
                                       disallowed_tools=("WebFetch",), context_preamble="FILES"))
     joined = " ".join(command)
-    assert command[:3] == ["claude", "-p", "FILES\n\nfix the bug"]
+    assert command[:2] == ["claude", "-p"]
+    assert replay_prompt(settings(context_preamble="FILES")) == "FILES\n\nfix the bug"
     for required in ["--output-format stream-json", "--verbose", "--strict-mcp-config",
                      '--mcp-config {"mcpServers":{}}', "--permission-prompts none", "--permission-mode auto",
                      "--no-session-persistence", "--max-budget-usd 2.00", "--model claude-opus-5",
@@ -178,7 +179,8 @@ def test_paths_into_the_original_project_point_at_the_clone_and_edits_there_are_
     workdir = tmp_path / ".culprit-replay-x"
     command = replay_command(settings(prompt=f"fix {original}/a.py", context_preamble=f"=== {original}/b.py ==="),
                              original_cwd=original, workdir=workdir)
-    assert command[2] == f"=== {workdir}/b.py ===\n\nfix {workdir}/a.py"
+    assert replay_prompt(settings(prompt=f"fix {original}/a.py", context_preamble=f"=== {original}/b.py ==="),
+                         original_cwd=original, workdir=workdir) == f"=== {workdir}/b.py ===\n\nfix {workdir}/a.py"
     denied = command[command.index("--disallowedTools") + 1:]
     for tool in ("Edit", "Write", "NotebookEdit"):
         assert f"{tool}(/{original}/**)" in denied
@@ -225,3 +227,36 @@ def test_a_run_whose_cost_is_unknown_is_charged_its_cap(tmp_path):
                         run=FakeRun(claude_raises=subprocess.TimeoutExpired(cmd="claude", timeout=1)),
                         projects_dir=tmp_path / "p")
     assert result.cost_usd == 1.5
+
+
+def test_the_prompt_goes_on_stdin_so_a_leading_dash_is_never_an_option(tmp_path):
+    command = replay_command(settings(prompt="-v fix the flag parser"))
+    assert command[:2] == ["claude", "-p"] and "-v fix the flag parser" not in command
+    run = FakeRun(claude_stdout=RESULT)
+    run_replay(settings(prompt="-v fix the flag parser"), pristine_tree(tmp_path), tmp_path / "run0",
+               tmp_path / ".culprit-replay-dash", (), run=run, projects_dir=tmp_path / "p")
+    claude_kwargs = next(kwargs for command, kwargs in run.calls if command[0] == "claude")
+    assert claude_kwargs["input"] == "-v fix the flag parser"
+
+
+def test_a_timeout_kills_every_process_the_replay_started():
+    import time
+    from culprit.replay import run_in_own_process_group
+    marker = "37.4242"
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_in_own_process_group(["bash", "-c", f"sleep {marker} & sleep {marker}"], capture_output=True,
+                                 text=True, timeout=1)
+    time.sleep(0.3)
+    left = subprocess.run(["pgrep", "-f", f"sleep {marker}"], capture_output=True, text=True)
+    assert left.stdout.strip() == ""
+
+
+def test_the_stored_diff_skips_dependency_folders_and_is_bounded(tmp_path):
+    from culprit.replay import MAX_DIFF_BYTES
+    run = FakeRun(claude_stdout=RESULT, diff="+x\n" * (MAX_DIFF_BYTES // 3 + 1000))
+    run_replay(settings(), pristine_tree(tmp_path), tmp_path / "run0", tmp_path / ".culprit-replay-diff", (),
+               run=run, projects_dir=tmp_path / "p")
+    diff_command = next(command for command, _ in run.calls if command[0] == "diff")
+    assert "--exclude=node_modules" in diff_command and "--exclude=.venv" in diff_command
+    stored = (tmp_path / "run0" / "diff.patch").read_text()
+    assert len(stored.encode()) <= MAX_DIFF_BYTES + 200 and "[diff cut" in stored

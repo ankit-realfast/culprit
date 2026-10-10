@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import uuid
 from dataclasses import asdict, dataclass
@@ -29,6 +30,10 @@ OUTPUT_TAIL_CHARS = 2000
 REPLAY_DIR_PREFIX = ".culprit-replay-"
 WRITE_TOOLS = ("Edit", "Write", "NotebookEdit")
 VOID_SUBTYPES = ("error_max_budget_usd", "error_during_execution")
+DIFF_EXCLUDES = (".git", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", "dist", "build", ".next",
+                 "target")
+DIFF_TIMEOUT_S = 120
+MAX_DIFF_BYTES = 2_000_000
 GIT_STATE_FILES = ("HEAD", "index")
 
 
@@ -91,15 +96,22 @@ def full_prompt(settings: ReplaySettings) -> str:
     return settings.prompt
 
 
-def replay_command(settings: ReplaySettings, original_cwd: Path | None = None,
-                   workdir: Path | None = None) -> list[str]:
-    prompt, appended = full_prompt(settings), settings.append_system_prompt
+def replay_prompt(settings: ReplaySettings, original_cwd: Path | None = None, workdir: Path | None = None) -> str:
+    """What the replay is asked, sent on stdin so a prompt starting with "-" is never read as an option."""
+    prompt = full_prompt(settings)
     if original_cwd and workdir:
         # the human's text often names files by absolute path in the original project: point it at the copy
         prompt = _point_at_clone(prompt, original_cwd, workdir)
-        appended = _point_at_clone(appended, original_cwd, workdir) if appended else appended
+    return prompt
+
+
+def replay_command(settings: ReplaySettings, original_cwd: Path | None = None,
+                   workdir: Path | None = None) -> list[str]:
+    appended = settings.append_system_prompt
+    if appended and original_cwd and workdir:
+        appended = _point_at_clone(appended, original_cwd, workdir)
     command = [
-        "claude", "-p", prompt,
+        "claude", "-p",
         "--output-format", "stream-json", "--verbose",
         "--strict-mcp-config", "--mcp-config", NO_MCP_SERVERS,
         "--permission-prompts", "none",
@@ -151,8 +163,25 @@ def project_folder_name(path: Path) -> str:
     return re.sub(r"[^A-Za-z0-9]", "-", str(path))
 
 
+def run_in_own_process_group(command: list[str], *, input: str | None = None, capture_output: bool = True,
+                             text: bool = True, timeout: float | None = None, cwd: Path | None = None,
+                             env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+    """subprocess.run, except a timeout kills everything the command started, not just the command."""
+    process = subprocess.Popen(command, stdin=subprocess.PIPE if input is not None else None,
+                               stdout=subprocess.PIPE if capture_output else None,
+                               stderr=subprocess.PIPE if capture_output else None, text=text, cwd=cwd, env=env,
+                               start_new_session=True)
+    try:
+        stdout, stderr = process.communicate(input, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.communicate()
+        raise
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
 def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir: Path, checks: tuple[str, ...],
-               run=subprocess.run, projects_dir: Path = DEFAULT_PROJECTS,
+               run=run_in_own_process_group, projects_dir: Path = DEFAULT_PROJECTS,
                original_cwd: Path | None = None) -> ReplayResult:
     run_dir.mkdir(parents=True, exist_ok=True)
     clone_tree(pristine, workdir)
@@ -171,7 +200,8 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
                 raise SetupScriptFailed(f"{settings.setup_script} exited {setup.returncode}: {setup.stderr[-500:]}")
         try:
             completed = run(replay_command(settings, original_cwd, workdir), cwd=workdir, capture_output=True,
-                            text=True, timeout=REPLAY_TIMEOUT_S, env=env)
+                            text=True, timeout=REPLAY_TIMEOUT_S, env=env,
+                            input=replay_prompt(settings, original_cwd, workdir))
             stdout, stderr, exit_code = completed.stdout, completed.stderr, completed.returncode
         except subprocess.TimeoutExpired:
             stdout, stderr, exit_code = "", f"timed out after {REPLAY_TIMEOUT_S}s", -1
@@ -179,8 +209,7 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
         (run_dir / "stderr.txt").write_text(stderr)
         result_line = _result_line(stdout)
         check_results = tuple(_run_check(command, workdir, run, env) for command in checks)
-        diff = run(["diff", "-ruN", "--exclude=.git", str(pristine), str(workdir)], capture_output=True, text=True)
-        (run_dir / "diff.patch").write_text(diff.stdout)
+        (run_dir / "diff.patch").write_text(_bounded_diff(pristine, workdir, run))
         if result_line is None:
             reason = "timed out" if exit_code == -1 else f"no result line (exit {exit_code})"
             # the cost is unknown, so it is charged at the cap rather than as free
@@ -202,6 +231,19 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
         _remove_if_only_empty_memory(project_folder)
+
+
+def _bounded_diff(pristine: Path, workdir: Path, run) -> str:
+    excludes = [f"--exclude={name}" for name in DIFF_EXCLUDES]
+    try:
+        diff = run(["diff", "-ruN", *excludes, str(pristine), str(workdir)], capture_output=True, text=True,
+                   timeout=DIFF_TIMEOUT_S).stdout
+    except subprocess.TimeoutExpired:
+        return f"[diff timed out after {DIFF_TIMEOUT_S}s]\n"
+    data = diff.encode()
+    if len(data) <= MAX_DIFF_BYTES:
+        return diff
+    return data[:MAX_DIFF_BYTES].decode(errors="ignore") + f"\n[diff cut: {len(data) - MAX_DIFF_BYTES} more bytes]\n"
 
 
 def _void_reason(result_line: dict) -> str | None:
