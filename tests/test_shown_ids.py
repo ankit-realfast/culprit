@@ -25,43 +25,49 @@ def test_the_short_id_is_shown_only_when_it_finds_that_episode_alone(tmp_path):
     assert display_id(runs, "eeeeeeee-1:ffffffff-2") == "eeeeeeee-1:ffffffff-2"  # unknown: nothing to expand from
 
 
-def test_next_lines_and_status_rows_use_the_short_id(tmp_path, capsys):
+def logged(write_session, tmp_path, *ids):
+    repo = tmp_path / "repo"
+    repo.mkdir(exist_ok=True)
+    for episode_id in ids:
+        session, prompt = episode_id.split(":")
+        write_session([snapshot("u-1", {}), human("fix a", prompt, session_id=session, cwd=str(repo))],
+                      name=f"{session}.jsonl")
+
+
+def test_next_lines_and_status_rows_use_the_short_id(write_session, tmp_path, capsys):
     runs = tmp_path / "runs"
     queue(runs, A, B)
+    logged(write_session, tmp_path, A)
     assert cli.main(["confirm", A, "wrong-result"]) == 0
     err = capsys.readouterr().err
-    assert "culprit criterion draft aaaaaaaa:bbbbbbbb" in err and A not in err
+    assert "culprit confirm aaaaaaaa:bbbbbbbb wrong-result" in err and A not in err
     assert cli.main(["status"]) == 0
     out = capsys.readouterr().out
-    assert "culprit criterion draft aaaaaaaa:bbbbbbbb" in out and "culprit confirm cccccccc:dddddddd" in out
+    assert "culprit status aaaaaaaa:bbbbbbbb" in out and "culprit confirm cccccccc:dddddddd" in out
     assert A not in out
 
 
-def test_an_ambiguous_short_id_falls_back_to_the_full_id(tmp_path, capsys):
+def test_an_ambiguous_short_id_falls_back_to_the_full_id(write_session, tmp_path, capsys):
     runs = tmp_path / "runs"
     queue(runs, A, TWIN)
+    logged(write_session, tmp_path, A)
     assert cli.main(["confirm", A, "wrong-result"]) == 0
-    assert f"culprit criterion draft {A}" in capsys.readouterr().err
+    assert f"culprit confirm {A} wrong-result" in capsys.readouterr().err
 
 
 def test_refusals_name_the_short_id(write_session, tmp_path, capsys):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    session, prompt = A.split(":")
-    write_session([snapshot("u-1", {}), human("fix a", prompt, session_id=session, cwd=str(repo))],
-                  name=f"{session}.jsonl")
+    logged(write_session, tmp_path, A)
     runs = tmp_path / "runs"
     queue(runs, A, B)
-    assert cli.main(["baseline", A]) == 3
-    assert "culprit criterion draft aaaaaaaa:bbbbbbbb" in capsys.readouterr().err
-    save_criterion(runs, A, Criterion("works", (), (), approved=True))
-    assert cli.main(["baseline", A]) == 1  # the log has no snapshot for this prompt, so restoring first refuses
-    assert "aaaaaaaa:bbbbbbbb cannot be replayed" in capsys.readouterr().err
-    assert cli.main(["criterion", "draft", A]) == 1
-    assert "culprit criterion show aaaaaaaa:bbbbbbbb" in capsys.readouterr().err
-    (episode_dir(runs, A) / "pristine").mkdir()
     assert cli.main(["diagnose", A]) == 3
-    assert "culprit confirm aaaaaaaa:bbbbbbbb" in capsys.readouterr().err
+    assert "culprit confirm aaaaaaaa:bbbbbbbb <symptom>" in capsys.readouterr().err
+    (episode_dir(runs, A)).mkdir()
+    (episode_dir(runs, A) / "symptom.json").write_text(json.dumps({"episode_id": A, "symptom": "wrong-result"}))
+    assert cli.main(["diagnose", A]) == 3
+    assert "culprit confirm aaaaaaaa:bbbbbbbb wrong-result" in capsys.readouterr().err
+    save_criterion(runs, A, Criterion("works", (), (), approved=True))
+    assert cli.main(["diagnose", A]) == 1  # the log has no snapshot for this prompt, so restoring first refuses
+    assert "aaaaaaaa:bbbbbbbb cannot be replayed" in capsys.readouterr().err
     assert "culprit confirm cccccccc:dddddddd" in readiness_problem(runs, B)
 
 

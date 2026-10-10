@@ -62,8 +62,8 @@ def test_readiness_names_the_first_missing_step(tmp_path):
     prepare(tmp_path, "c:1", restored=False)
     prepare(tmp_path, "d:1")
     assert "culprit confirm" in readiness_problem(tmp_path, "a:1")
-    assert "culprit criterion approve" in readiness_problem(tmp_path, "b:1")
-    assert "criterion draft" not in readiness_problem(tmp_path, "b:1")  # drafting again would overwrite it
+    assert "approve" in readiness_problem(tmp_path, "b:1") and "culprit confirm b:1" in readiness_problem(tmp_path, "b:1")
+    assert "draft" not in readiness_problem(tmp_path, "b:1")  # drafting again would overwrite it
     assert "culprit diagnose c:1" in readiness_problem(tmp_path, "c:1")
     assert readiness_problem(tmp_path, "d:1") is None
 
@@ -149,7 +149,7 @@ def test_one_failing_episode_does_not_end_the_batch(tmp_path):
 def test_readiness_with_no_criterion_names_draft(tmp_path):
     prepare(tmp_path, "a:1")
     (episode_dir(tmp_path, "a:1") / "criterion.json").unlink()
-    assert "culprit criterion draft a:1" in readiness_problem(tmp_path, "a:1")
+    assert "culprit confirm a:1 wrong-result` to draft" in readiness_problem(tmp_path, "a:1")
 
 
 def test_batch_progress_names_the_episode(tmp_path):

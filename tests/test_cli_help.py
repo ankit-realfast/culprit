@@ -3,8 +3,8 @@ import pytest
 import culprit.cli as cli
 
 GROUPS = {
-    "workflow": ["triage", "restore", "baseline", "env-fix", "diagnose", "report", "status"],
-    "human review": ["confirm", "criterion"],
+    "workflow": ["triage", "env-fix", "diagnose", "report", "status"],
+    "human review": ["confirm"],
     "trust": ["review", "label", "calibration", "selftest"],
 }
 

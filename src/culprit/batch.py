@@ -35,11 +35,12 @@ class BatchSummary:
 
 def readiness_problem(runs_dir: Path, episode_id: str) -> str | None:
     shown = display_id(runs_dir, episode_id)
-    if read_symptom(runs_dir, episode_id) is None:
+    symptom = read_symptom(runs_dir, episode_id)
+    if symptom is None:
         return f"not confirmed — {confirm_step(runs_dir, episode_id)}"
     criterion = load_criterion(runs_dir, episode_id)
     if criterion is None or not criterion.approved:
-        return f"no approved criterion — {criterion_step(criterion, shown)}"
+        return f"no approved criterion — {criterion_step(criterion, shown, symptom.value)}"
     if not (episode_dir(runs_dir, episode_id) / PRISTINE_DIR).is_dir():
         return f"not restored — `culprit diagnose {shown}` restores it or says why it cannot"
     return None

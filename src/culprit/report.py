@@ -95,8 +95,8 @@ def fix_list(rows: list[Row]) -> list[Fix]:
 def render_report(rows: list[Row], trust: list[str]) -> str:
     lines = ["# culprit report", ""]
     if not rows:
-        lines += ["No verdicts yet. Confirm failures with `culprit triage` and `culprit confirm`, prepare them with "
-                  "`culprit criterion`, then run `culprit diagnose` (one episode, or every one with no id).",
+        lines += ["No verdicts yet. Rank failures with `culprit triage`, confirm them and approve what success means "
+                  "with `culprit confirm`, then run `culprit diagnose` (one episode, or every one with no id).",
                   "", "## How far to trust this", "", *[f"- {line}" for line in trust]]
         return "\n".join(lines) + "\n"
     fixes = fix_list(rows)

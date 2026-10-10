@@ -48,7 +48,7 @@ def test_approve_reads_the_human_edited_file(tmp_path):
 
 
 def test_approving_without_a_draft_names_the_missing_step(tmp_path):
-    with pytest.raises(FileNotFoundError, match="culprit criterion draft"):
+    with pytest.raises(FileNotFoundError, match="culprit confirm s1:p1 <symptom>"):
         approve_criterion(tmp_path, "s1:p1")
 
 

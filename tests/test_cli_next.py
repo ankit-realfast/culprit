@@ -23,38 +23,21 @@ def last_err_line(capsys):
     return capsys.readouterr().err.strip().splitlines()[-1]
 
 
-def test_confirm_names_the_criterion_draft_next(write_session, tmp_path, capsys):
+def test_confirm_names_the_approval_next_then_diagnose(write_session, tmp_path, capsys):
     _, runs = queued(write_session, tmp_path)
     assert cli.main(["confirm", "s1:p1", "wrong-result"]) == 0
-    assert last_err_line(capsys) == "next: run `culprit criterion draft s1:p1` then `culprit criterion approve s1:p1`"
-
-
-def test_criterion_approve_names_restore_next(write_session, tmp_path, capsys):
-    _, runs = queued(write_session, tmp_path)
-    cli.main(["confirm", "s1:p1", "wrong-result"])
-    save_criterion(runs, "s1:p1", Criterion("works", (), ()))
-    capsys.readouterr()
-    assert cli.main(["criterion", "approve", "s1:p1"]) == 0
-    assert last_err_line(capsys) == "next: run `culprit restore s1:p1`"
-
-
-def test_baseline_names_diagnose_next(write_session, tmp_path, capsys, monkeypatch):
-    projects, runs = queued(write_session, tmp_path)
-    cli.main(["confirm", "s1:p1", "wrong-result"])
-    save_criterion(runs, "s1:p1", Criterion("works", (), (), approved=True))
-    (episode_dir(runs, "s1:p1") / "pristine").mkdir()
-
-    def fake_run_variant(variant, settings, **kwargs):
-        folder = episode_dir(runs, "s1:p1") / "replays" / variant
-        folder.mkdir(parents=True)
-        (folder / "outcome.json").write_text(json.dumps({"variant": variant, "passes": 0, "runs": 5,
-                                                         "cost_usd": 1.0, "void": 0}))
-        return VariantOutcome(variant, 0, 5, 1.0)
-
-    monkeypatch.setattr(cli, "run_variant", fake_run_variant)
-    capsys.readouterr()
-    assert cli.main(["baseline", "s1:p1"]) == 0
+    assert last_err_line(capsys) == ("next: review it with `culprit status s1:p1`, then rerun "
+                                     "`culprit confirm s1:p1 wrong-result` to approve it")
+    assert cli.main(["confirm", "s1:p1", "wrong-result"]) == 0
     assert last_err_line(capsys) == "next: run `culprit diagnose s1:p1`"
+
+
+def test_a_symptom_without_a_criterion_names_confirm_to_draft_it(write_session, tmp_path, capsys):
+    from culprit.status import next_step
+    _, runs = queued(write_session, tmp_path)
+    (episode_dir(runs, "s1:p1")).mkdir()
+    (episode_dir(runs, "s1:p1") / "symptom.json").write_text('{"episode_id": "s1:p1", "symptom": "wasteful"}')
+    assert next_step(runs, "s1:p1") == "run `culprit confirm s1:p1 wasteful` to draft what success means"
 
 
 def test_diagnose_and_env_fix_name_their_next_step(write_session, tmp_path, capsys, monkeypatch):
@@ -66,7 +49,7 @@ def test_diagnose_and_env_fix_name_their_next_step(write_session, tmp_path, caps
     script.write_text("true\n")
     capsys.readouterr()
     assert cli.main(["env-fix", "s1:p1", str(script)]) == 0
-    assert last_err_line(capsys) == "next: run `culprit baseline s1:p1`"
+    assert last_err_line(capsys) == "next: run `culprit diagnose s1:p1`"
 
     def fake_diagnose(episode, criterion, symptom, base, **kwargs):
         verdict = Verdict("s1:p1", "wrong-result", "model", "model passed 4/5", {}, {})

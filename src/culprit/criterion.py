@@ -77,18 +77,20 @@ def load_criterion(runs_dir: Path, episode_id: str) -> Criterion | None:
     return Criterion(data["success_means"], tuple(data["checks"]), tuple(data["must_not"]), bool(data["approved"]))
 
 
-def criterion_step(criterion: Criterion | None, episode_id: str) -> str:
-    """The command that gets this episode an approved criterion; never suggests redrafting over a draft."""
+def criterion_step(criterion: Criterion | None, episode_id: str, symptom: str | None) -> str:
+    """The command that gets this episode an approved criterion: `confirm` drafts it, and confirming the same
+    symptom again approves the draft. Never suggests redrafting over a draft."""
+    confirm = f"`culprit confirm {episode_id} {symptom or '<symptom>'}`"
     if criterion is None:
-        return f"run `culprit criterion draft {episode_id}` then `culprit criterion approve {episode_id}`"
-    return f"review it with `culprit criterion show {episode_id}`, then run `culprit criterion approve {episode_id}`"
+        return f"run {confirm} to draft what success means"
+    return f"review it with `culprit status {episode_id}`, then rerun {confirm} to approve it"
 
 
 def approve_criterion(runs_dir: Path, episode_id: str) -> Criterion:
     criterion = load_criterion(runs_dir, episode_id)
     if criterion is None:
         shown = display_id(runs_dir, episode_id)
-        raise NotReady(f"no criterion for {shown} — run `culprit criterion draft {shown}` first")
+        raise NotReady(f"no criterion for {shown} — run `culprit confirm {shown} <symptom>` first")
     approved = replace(criterion, approved=True)
     save_criterion(runs_dir, episode_id, approved)
     return approved

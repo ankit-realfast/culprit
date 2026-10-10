@@ -47,8 +47,8 @@ def spy(monkeypatch):
 
 
 @pytest.mark.parametrize("argv", [
-    ["baseline", "s1:p1", "--yes"], ["baseline", "s1:p1", "-y"], ["baseline", "s1:p1", "--dry-run"],
-    ["baseline", "s1:p1", "--budget", "3"], ["diagnose", "s1:p1", "--replay-budget", "3"],
+    ["diagnose", "s1:p1", "--yes"], ["selftest", "s1:p1", "-y"], ["diagnose", "--dry-run"],
+    ["diagnose", "s1:p1", "--budget", "3"], ["diagnose", "s1:p1", "--replay-budget", "3"],
     ["selftest", "s1:p1", "--budget-per-fault", "3"], ["diagnose", "--per-episode", "3"],
     ["diagnose", "--total", "3"]])
 def test_spend_is_not_set_or_confirmed_by_flags(argv, capsys):
@@ -66,7 +66,7 @@ def test_the_plan_is_printed_on_stderr_and_nothing_is_asked(write_session, tmp_p
         raise AssertionError("asked a question before spending")
 
     monkeypatch.setattr("builtins.input", no_questions)
-    assert cli.main(["baseline", "s1:p1"]) == 0
+    assert cli.main(["selftest", "s1:p1"]) == 1  # replays the missing baseline, which is not a control
     captured = capsys.readouterr()
     assert "up to 10 replays" in captured.err and "cap $40.00" in captured.err
     assert "up to" not in captured.out

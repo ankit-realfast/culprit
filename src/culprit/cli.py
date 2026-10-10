@@ -95,29 +95,26 @@ def require_store(runs_dir: Path) -> None:
 
 
 COMMAND_GROUPS = {
-    "workflow": ("triage", "restore", "baseline", "env-fix", "diagnose", "report", "status"),
-    "human review": ("confirm", "criterion"),
+    "workflow": ("triage", "env-fix", "diagnose", "report", "status"),
+    "human review": ("confirm",),
     "trust": ("review", "label", "calibration", "selftest"),
 }
 EXAMPLE_RUN = """example run:
   culprit triage --top 20                  rank likely failures; rows are numbered #1, #2, ...
-  culprit confirm #1 wrong-result          say what went wrong
-  culprit criterion draft #1               draft what success means, then edit it
-  culprit criterion approve #1
-  culprit restore #1                       rebuild the starting files
-  culprit baseline #1                      replay it unchanged
-  culprit diagnose #1                      find the layer to change
-  culprit diagnose                         diagnose every confirmed episode in the queue
+  culprit confirm #1 wrong-result          say what went wrong; drafts what success means
+  culprit status #1                        read the draft (edit runs/<episode>/criterion.json if needed)
+  culprit confirm #1 wrong-result          approve it
+  culprit diagnose #1                      restore, replay, find the layer to change
+  culprit diagnose                         every confirmed episode in the queue
   culprit report                           rank the changes across episodes
   culprit status                           where every episode stands, and what to run next
 """
 EXAMPLES = {
     "triage": "  culprit triage --top 40\n  CULPRIT_PROJECTS=~/other/projects CULPRIT_RUNS=~/work/runs culprit triage\n",
-    "confirm": "  culprit confirm #1 wrong-result\n  culprit confirm 1a2b3c4d:5e6f7a8b no-failure\n",
+    "confirm": ("  culprit confirm #1 wrong-result         record it and draft what success means\n"
+                "  culprit confirm #1 wrong-result         again, once the draft reads right: approve it\n"
+                "  culprit confirm 1a2b3c4d:5e6f7a8b no-failure\n"),
     "status": "  culprit status\n  culprit status #1\n",
-    "criterion": "  culprit criterion draft #1\n  culprit criterion show #1\n  culprit criterion approve #1\n",
-    "restore": "  culprit restore #1\n",
-    "baseline": "  culprit baseline #1\n",
     "env-fix": "  culprit env-fix #1 fix-env.sh         run before Claude starts in the environment oracle\n",
     "diagnose": "  culprit diagnose #1\n  culprit diagnose       every confirmed episode in the queue, then the report\n",
     "review": "  culprit review\n",
@@ -145,7 +142,7 @@ def build_parser() -> argparse.ArgumentParser:
     _json_flag(triage)
     triage.set_defaults(handler=triage_command)
 
-    confirm = add("confirm", "record what went wrong in a queued episode")
+    confirm = add("confirm", "record what went wrong, then draft (or, run again, approve) what success means")
     confirm.add_argument("episode_id")
     confirm.add_argument("symptom", choices=[s.value for s in Symptom])
     confirm.set_defaults(handler=confirm_command, needs_store=True)
@@ -154,20 +151,6 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("episode_id", nargs="?")
     _json_flag(status)
     status.set_defaults(handler=status_command, needs_store=True)
-
-    criterion = add("criterion", "draft, show or approve what success means for an episode")
-    criterion.add_argument("action", choices=["draft", "show", "approve"])
-    criterion.add_argument("episode_id")
-    criterion.set_defaults(handler=criterion_command)
-
-    restore_parser = add("restore", "rebuild an episode's starting files and check them")
-    restore_parser.add_argument("episode_id")
-    restore_parser.set_defaults(handler=restore_command)
-
-    baseline = add("baseline", "replay the unchanged episode N times and judge each run")
-    baseline.add_argument("episode_id")
-    _json_flag(baseline)
-    baseline.set_defaults(handler=baseline_command)
 
     env_fix = add("env-fix", "supply a script that fixes the environment for the environment oracle")
     env_fix.add_argument("episode_id")
@@ -277,10 +260,46 @@ def _evidence(signals: FailureSignals) -> str:
 
 
 def confirm_command(args: argparse.Namespace) -> int:
+    """Record the symptom, then move the criterion on: draft it when there is none, approve the draft when the
+    same symptom is confirmed again (the person has seen it by then), otherwise show it again."""
+    shown = display_id(args.runs, args.episode_id)
+    before = read_symptom(args.runs, args.episode_id)
     path = record_symptom(args.runs, args.episode_id, Symptom(args.symptom))
-    print(f"recorded {args.symptom} for {args.episode_id} in {path}")
+    print(f"recorded {args.symptom} for {shown} in {path}")
+    criterion = load_criterion(args.runs, args.episode_id)
+    if criterion is None:
+        criterion = draft_criterion_for(args.runs, args.projects, args.episode_id)
+        print(f"drafted {episode_dir(args.runs, args.episode_id) / CRITERION_FILE}:")
+        show_draft(args.runs, args.episode_id, criterion, args.symptom)
+    elif not criterion.approved and before is not None and before.value == args.symptom:
+        approve_criterion(args.runs, args.episode_id)
+        print(f"approved the criterion for {shown}")
+    elif not criterion.approved:
+        show_draft(args.runs, args.episode_id, criterion, args.symptom)
     print_next(args.runs, args.episode_id)
     return 0
+
+
+def draft_criterion_for(runs_dir: Path, projects_dir: Path, episode_id: str) -> Criterion:
+    """Draft what success means from the episode and the human's follow-ups (one model call) and save it."""
+    episode = find_episode(projects_dir, episode_id)
+    criterion = draft_criterion(episode, follow_up_prompts(projects_dir, episode_id), ask=ask_claude)
+    save_criterion(runs_dir, episode_id, criterion)
+    return criterion
+
+
+def criterion_lines(criterion: Criterion) -> list[str]:
+    state = "approved" if criterion.approved else "draft, not approved"
+    return ([f"criterion [{state}]: {criterion.success_means}"] + [f"  check: {check}" for check in criterion.checks]
+            + [f"  must not: {rule}" for rule in criterion.must_not])
+
+
+def show_draft(runs_dir: Path, episode_id: str, criterion: Criterion, symptom: str) -> None:
+    for line in criterion_lines(criterion):
+        print(f"  {line}")
+    shown = display_id(runs_dir, episode_id)
+    print(f"approve: rerun `culprit confirm {shown} {symptom}` once it says what success means "
+          f"(edit {episode_dir(runs_dir, episode_id) / CRITERION_FILE} first if it does not)")
 
 
 def print_next(runs_dir: Path, episode_id: str) -> None:
@@ -313,11 +332,7 @@ def status_command(args: argparse.Namespace) -> int:
 
 def status_lines(status: EpisodeStatus) -> list[str]:
     lines = [status.episode_id, f"stage: {status.stage}", f"symptom: {status.symptom or 'not confirmed'}"]
-    if status.criterion is None:
-        lines.append("criterion: none")
-    else:
-        state = "approved" if status.criterion.approved else "draft, not approved"
-        lines.append(f"criterion [{state}]: {status.criterion.success_means}")
+    lines += criterion_lines(status.criterion) if status.criterion else ["criterion: none"]
     if status.restore:
         r = status.restore
         lines.append(f"restore: snapshot agrees for {r.get('snapshot_agreed', 0)} of {r.get('checked', 0)} files, "
@@ -330,37 +345,6 @@ def status_lines(status: EpisodeStatus) -> list[str]:
         lines.append(f"cause: {status.verdict.cause} — {status.verdict.evidence}")
     lines.append(f"next: {status.next_step}")
     return lines
-
-
-def criterion_command(args: argparse.Namespace) -> int:
-    if args.action == "draft":
-        if load_criterion(args.runs, args.episode_id) is not None:
-            shown = display_id(args.runs, args.episode_id)
-            print(f"culprit: {shown} already has a criterion — view it with `culprit criterion show {shown}`; "
-                  f"to change it, edit {episode_dir(args.runs, args.episode_id) / CRITERION_FILE}", file=sys.stderr)
-            return EXIT_REFUSED
-        episode = find_episode(args.projects, args.episode_id)
-        follow_ups = follow_up_prompts(args.projects, args.episode_id)
-        path = save_criterion(args.runs, args.episode_id, draft_criterion(episode, follow_ups, ask=ask_claude))
-        print(f"drafted {path} — edit it if needed before approving")
-        print_next(args.runs, args.episode_id)
-        return 0
-    if args.action == "approve":
-        approve_criterion(args.runs, args.episode_id)
-        print(f"approved the criterion for {args.episode_id}")
-        print_next(args.runs, args.episode_id)
-        return 0
-    criterion = load_criterion(args.runs, args.episode_id)
-    if criterion is None:
-        shown = display_id(args.runs, args.episode_id)
-        raise NotReady(f"no criterion for {shown} — run `culprit criterion draft {shown}` first")
-    state = "approved" if criterion.approved else "draft, not approved"
-    print(f"[{state}]\nsuccess means: {criterion.success_means}")
-    for check in criterion.checks:
-        print(f"check: {check}")
-    for rule in criterion.must_not:
-        print(f"must not: {rule}")
-    return 0
 
 
 class NotReplayable(Exception):
@@ -406,24 +390,15 @@ def restore_episode(runs_dir: Path, projects_dir: Path, episode_id: str) -> list
     return lines
 
 
-def restore_command(args: argparse.Namespace) -> int:
-    destination = episode_dir(args.runs, args.episode_id) / PRISTINE_DIR
-    if destination.exists():
-        print(f"culprit: {destination} already exists — delete it to restore again", file=sys.stderr)
-        return 1
-    for line in restore_episode(args.runs, args.projects, args.episode_id):
-        print(line)
-    print_next(args.runs, args.episode_id)
-    return 0
-
-
 def ready_to_replay(args: argparse.Namespace) -> tuple[Episode, Criterion]:
     """The episode and its approved criterion, restoring its starting files first when they are missing."""
     episode = find_episode(args.projects, args.episode_id)
     criterion = load_criterion(args.runs, args.episode_id)
     shown = display_id(args.runs, args.episode_id)
     if criterion is None or not criterion.approved:
-        raise NotReady(f"no approved criterion for {shown} — {criterion_step(criterion, shown)}")
+        symptom = read_symptom(args.runs, args.episode_id)
+        raise NotReady(f"no approved criterion for {shown} — "
+                       f"{criterion_step(criterion, shown, symptom.value if symptom else None)}")
     if not (episode_dir(args.runs, args.episode_id) / PRISTINE_DIR).is_dir():
         out = sys.stderr if getattr(args, "json", False) else sys.stdout  # under --json stdout holds only JSON
         for line in restore_episode(args.runs, args.projects, args.episode_id):
@@ -431,26 +406,21 @@ def ready_to_replay(args: argparse.Namespace) -> tuple[Episode, Criterion]:
     return episode, criterion
 
 
-def baseline_command(args: argparse.Namespace) -> int:
-    episode, criterion = ready_to_replay(args)
-    spent = stored_spend(episode_dir(args.runs, args.episode_id))
+def run_baseline(args: argparse.Namespace, episode: Episode, criterion: Criterion) -> VariantOutcome:
+    """Replay the unchanged episode N times under the episode cap and judge each run."""
+    folder = episode_dir(args.runs, args.episode_id)
+    spent = stored_spend(folder)
     show_plan(plan_cost([REPLAY_BUDGET_USD], n=RUNS_PER_VARIANT, spent_usd=spent, cap_usd=EPISODE_CAP_USD))
-    if retire_if_criterion_changed(episode_dir(args.runs, args.episode_id), criterion):
+    if retire_if_criterion_changed(folder, criterion):
         print("the criterion changed since the last runs: they were moved to superseded/ and will not be reused",
               file=sys.stderr)
     budget = EpisodeBudget(EPISODE_CAP_USD, spent_usd=spent)
     with ProgressPrinter() as progress:
-        outcome = run_variant("baseline", baseline_settings(episode, REPLAY_BUDGET_USD), n=RUNS_PER_VARIANT, episode=episode,
-                              runs_dir=args.runs, criterion=criterion, budget=budget, progress=progress)
-    if args.json:
-        emit({"episode_id": args.episode_id, "outcome": asdict(outcome), "next": next_step(args.runs, args.episode_id)})
-        print_next(args.runs, args.episode_id)
-        return 0
+        outcome = run_variant("baseline", baseline_settings(episode, REPLAY_BUDGET_USD), n=RUNS_PER_VARIANT,
+                              episode=episode, runs_dir=args.runs, criterion=criterion, budget=budget,
+                              progress=progress)
     print(f"baseline: {outcome.passes} of {outcome.runs} passed, ${outcome.cost_usd:.2f} spent on replays")
-    print_next(args.runs, args.episode_id)
-    return 0
-
-
+    return outcome
 
 
 def env_fix_command(args: argparse.Namespace) -> int:
@@ -542,14 +512,13 @@ def calibration_command(args: argparse.Namespace) -> int:
 
 def selftest_command(args: argparse.Namespace) -> int:
     episode, criterion = ready_to_replay(args)
-    if not is_control(args.runs, args.episode_id):
-        baseline = load_outcome(episode_dir(args.runs, args.episode_id), "baseline")
-        shown = display_id(args.runs, args.episode_id)
-        if baseline is None:
-            raise NotReady(f"{shown} has no baseline — run `culprit baseline {shown}` first; "
-                           f"a control must pass at least {CONTROL_MIN_PASSES} of 5")
-        print(f"culprit: {args.episode_id} is not a control — its baseline passed {baseline.passes} of "
-              f"{baseline.runs}, and a control must pass at least {CONTROL_MIN_PASSES} of 5", file=sys.stderr)
+    baseline = load_outcome(episode_dir(args.runs, args.episode_id), "baseline")
+    if baseline is None:
+        baseline = run_baseline(args, episode, criterion)
+    if baseline.passes < CONTROL_MIN_PASSES:
+        print(f"culprit: {display_id(args.runs, args.episode_id)} is not a control — its baseline passed "
+              f"{baseline.passes} of {baseline.runs}, and a control must pass at least {CONTROL_MIN_PASSES} of 5",
+              file=sys.stderr)
         return EXIT_REFUSED
     show_plan(selftest_cost(args.runs, args.episode_id, criterion, baseline_settings(episode, REPLAY_BUDGET_USD),
                             n=RUNS_PER_VARIANT, budget_per_fault=FAULT_CAP_USD))

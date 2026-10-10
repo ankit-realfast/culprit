@@ -36,13 +36,16 @@ def episode_status(runs_dir: Path, episode_id: str) -> EpisodeStatus:
     criterion = load_criterion(runs_dir, episode_id)
     verdict = load_verdict(folder)
     shown = display_id(runs_dir, episode_id)
+    symptom_value = symptom.value if symptom else None
+    diagnose = f"run `culprit diagnose {shown}`"  # it restores and runs the baseline before the oracles
     steps = [  # (stage reached once done, done?, what to run when it is not)
         ("confirmed", symptom is not None, lambda: confirm_step(runs_dir, episode_id)),
-        ("criterion drafted", criterion is not None, lambda: criterion_step(criterion, shown)),
-        ("criterion approved", bool(criterion and criterion.approved), lambda: criterion_step(criterion, shown)),
-        ("restored", (folder / PRISTINE_DIR).is_dir(), lambda: f"run `culprit restore {shown}`"),
-        ("baselined", load_outcome(folder, "baseline") is not None, lambda: f"run `culprit baseline {shown}`"),
-        ("diagnosed", verdict is not None, lambda: f"run `culprit diagnose {shown}`"),
+        ("criterion drafted", criterion is not None, lambda: criterion_step(criterion, shown, symptom_value)),
+        ("criterion approved", bool(criterion and criterion.approved),
+         lambda: criterion_step(criterion, shown, symptom_value)),
+        ("restored", (folder / PRISTINE_DIR).is_dir(), lambda: diagnose),
+        ("baselined", load_outcome(folder, "baseline") is not None, lambda: diagnose),
+        ("diagnosed", verdict is not None, lambda: diagnose),
     ]
     stage, hint = ("queued" if queued else "not queued"), None
     if verdict is not None:  # a verdict can come without a baseline (no-failure), so it settles the stage alone
@@ -56,7 +59,7 @@ def episode_status(runs_dir: Path, episode_id: str) -> EpisodeStatus:
     restore = json.loads((folder / RESTORE_FILE).read_text()) if (folder / RESTORE_FILE).is_file() else None
     outcomes = tuple(VariantOutcome(**json.loads(path.read_text()))
                      for path in sorted((folder / REPLAYS_DIR).glob(f"*/{OUTCOME_FILE}")))
-    return EpisodeStatus(episode_id, stage, hint or "run `culprit report`", symptom.value if symptom else None,
+    return EpisodeStatus(episode_id, stage, hint or "run `culprit report`", symptom_value,
                          criterion, restore, outcomes, stored_spend(folder), verdict)
 
 

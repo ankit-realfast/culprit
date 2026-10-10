@@ -57,11 +57,11 @@ def test_each_stage_names_the_first_missing_step(tmp_path):
                       "diagnosed"]
     hints = [hint for _, hint in steps]
     assert f"culprit confirm {short_id(ID)} <symptom>" in hints[0]
-    assert f"culprit criterion draft {short_id(ID)}" in hints[1]
-    assert f"culprit criterion approve {short_id(ID)}" in hints[2] and "draft" not in hints[2]
-    assert f"culprit restore {short_id(ID)}" in hints[3]
-    assert f"culprit baseline {short_id(ID)}" in hints[4]
-    assert f"culprit diagnose {short_id(ID)}" in hints[5]
+    assert f"culprit confirm {short_id(ID)} wrong-result" in hints[1] and "draft" in hints[1]
+    assert f"culprit status {short_id(ID)}" in hints[2] and "approve" in hints[2]
+    assert f"culprit confirm {short_id(ID)} wrong-result" in hints[2]
+    for hint in hints[3:6]:  # diagnose restores and runs the baseline itself
+        assert hint == f"run `culprit diagnose {short_id(ID)}`"
     assert "culprit report" in hints[6]
 
 
@@ -88,14 +88,14 @@ def test_status_without_an_id_prints_one_line_per_episode(tmp_path, capsys):
     assert cli.main(["status"]) == 0
     out = capsys.readouterr().out.splitlines()
     assert len(out) == 1
-    assert "aaaaaaaa:bbbbbbbb" in out[0] and "confirmed" in out[0] and f"culprit criterion draft {short_id(ID)}" in out[0]
+    assert "aaaaaaaa:bbbbbbbb" in out[0] and "confirmed" in out[0] and f"culprit confirm {short_id(ID)} wrong-result" in out[0]
 
 
 def test_status_with_an_id_shows_criterion_restore_runs_spend_and_verdict(tmp_path, capsys):
     runs = tmp_path / "runs"
     queue(runs, ID)
     confirm(runs)
-    save_criterion(runs, ID, Criterion("the tests pass", ("pytest -q",), (), approved=True))
+    save_criterion(runs, ID, Criterion("the tests pass", ("pytest -q",), ("delete tests",), approved=True))
     (episode_dir(runs, ID) / "pristine").mkdir()
     (episode_dir(runs, ID) / "restore.json").write_text(json.dumps({"snapshot_agreed": 3, "checked": 4,
                                                                     "unknown": 1, "missing_backups": 0}))
@@ -105,6 +105,7 @@ def test_status_with_an_id_shows_criterion_restore_runs_spend_and_verdict(tmp_pa
     out = capsys.readouterr().out
     assert "diagnosed" in out
     assert "approved" in out and "the tests pass" in out
+    assert "check: pytest -q" in out and "must not: delete tests" in out
     assert "3 of 4" in out
     assert "baseline: 1 of 5 passed" in out
     assert "$1.50" in out

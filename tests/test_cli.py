@@ -52,7 +52,8 @@ def test_a_second_triage_keeps_the_queue_and_says_how_many_are_queued(write_sess
     assert "2 queued" in out
     assert out.lstrip().startswith("#1 ")
     assert "1 more queued, not in this top 1 — see `culprit status`" in out
-    assert main(["confirm", "s1:p2", "stopped-short"]) == 0
+    assert main(["confirm", "s1:p2", "stopped-short"]) == 1  # its log is gone, so no criterion can be drafted
+    assert read_symptom(runs, "s1:p2").value == "stopped-short"
 
 
 def test_triage_numbers_rows_and_commands_take_the_number(write_session, tmp_path, capsys):

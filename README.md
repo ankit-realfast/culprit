@@ -18,13 +18,12 @@ more often than the unchanged one (one-sided Fisher exact test, p < 0.05 over 5 
    Episodes a replay cannot use (say, their working directory is gone) come after every replayable one,
    with the reason printed under the row.
 2. You `confirm` what went wrong: `stopped-short`, `wrong-result`, `ignored-instructions`, `wasteful`,
-   or `no-failure`.
-3. `criterion draft` writes what success means from your follow-up messages; you edit and `approve` it.
-   Drafting never overwrites an existing criterion; to change one, edit `runs/<episode>/criterion.json`.
-4. `restore` rebuilds the files the episode started from in a throwaway copy.
-5. `baseline` replays the episode unchanged 5 times. Passing 3+ times means the failure was luck.
-6. `diagnose` restores the starting files if `restore` has not, then replays the episode with one layer
-   improved at a time, cheapest fix first:
+   or `no-failure`. confirm then drafts what success means from your follow-up messages and prints it;
+   edit `runs/<episode>/criterion.json` if it is wrong, then run the same `confirm` again to approve it.
+   A criterion is never redrafted over; to change one, edit its file.
+3. `diagnose` rebuilds the files the episode started from in a throwaway copy (once), then replays the
+   episode unchanged 5 times. Passing 3+ times means the failure was luck.
+4. Otherwise it replays it with one layer improved at a time, cheapest fix first:
 
    | Change | Verdict if it now passes |
    |---|---|
@@ -35,7 +34,7 @@ more often than the unchanged one (one-sided Fisher exact test, p < 0.05 over 5 
    | Fable instead of the original model | **model** — change or route the model |
 
    If no single change works, it tries them together and in pairs: **multi-cause** or **unexplained**.
-7. `report` ranks the changes by how many of your failures each would have fixed.
+5. `report` ranks the changes by how many of your failures each would have fixed.
 
 ## Install
 
@@ -51,23 +50,21 @@ uv run pytest -q
 
 ```bash
 uv run culprit triage --top 40
-uv run culprit confirm <episode-id> wrong-result
-uv run culprit criterion draft <episode-id>     # edit runs/<episode>/criterion.json if needed
-uv run culprit criterion approve <episode-id>
-uv run culprit restore <episode-id>
-uv run culprit baseline <episode-id>          # read runs/<episode>/replays/
-uv run culprit diagnose <episode-id>
-uv run culprit report                           # writes runs/report.md
+uv run culprit confirm <episode-id> wrong-result   # drafts the criterion; edit runs/<episode>/criterion.json
+uv run culprit confirm <episode-id> wrong-result   # again, to approve it
+uv run culprit diagnose <episode-id>               # restore, baseline, oracles; read runs/<episode>/replays/
+uv run culprit diagnose                            # every confirmed episode in the queue, then the report
+uv run culprit report                              # writes runs/report.md
 uv run culprit status [<episode-id>]            # where each episode stands and what to run next
 ```
 
 `culprit --help` lists the commands by group (workflow, human review, trust) with this run-through;
 `culprit <command> --help` ends with examples.
 
-For scripts, `triage`, `status`, `baseline`, `diagnose` and `calibration` take `--json`: stdout is then
+For scripts, `triage`, `status`, `diagnose` and `calibration` take `--json`: stdout is then
 one JSON document and nothing else (progress, `next:` lines and questions stay on stderr).
 
-`baseline`, `diagnose` and `selftest` print a line on stderr as each replay finishes:
+`diagnose` and `selftest` print a line on stderr as each replay finishes:
 its result, its cost and what the episode has spent so far. While a replay runs, a
 `… still running` line every 30 s shows it is alive.
 
@@ -89,8 +86,8 @@ queue, sharing a $400 total, then writes the report.
 
 Trust: label replays with `culprit review` / `culprit label <run> pass|fail`; `culprit calibration`
 shows how often the judge agrees with you (calibrated at ≥ 20 labels and Cohen's kappa ≥ 0.6).
-`culprit selftest <episode-id>` plants a known fault in each layer of an episode that normally passes
-and reports how often culprit names it.
+`culprit selftest <episode-id>` takes an episode that normally passes (replaying its baseline first if it
+has none), plants a known fault in each layer and reports how often culprit names it.
 
 Exit codes: 0 done · 1 refused or failed · 2 bad arguments · 3 not ready (a step that must come first
 is missing; the message names it) · 4 spend cap reached · 130 stopped with Ctrl-C (the replay in
@@ -106,7 +103,7 @@ Runs that fail for reasons outside the agent (API errors, culprit's own cap, tim
 and are retried. If no result could beat the baseline at N runs, culprit stops before the oracles and
 says "not testable".
 
-Before it spends anything, `baseline`, `diagnose` and `selftest` print on stderr the most
+Before it spends anything, `diagnose` and `selftest` print on stderr the most
 they could run (every variant with all its void retries, plus drafting calls) and spend (that worst case,
 limited by what is left of the cap), then start without asking.
 
@@ -142,8 +139,8 @@ limited by what is left of the cap), then start without asking.
 ## Status
 
 Built and unit-tested (199 tests); a final review's critical and important findings are fixed. Triage
-and restore have run on real logs; no real episode has been replayed yet — start with one baseline
-and read its output before anything larger.
+and restore have run on real logs; no real episode has been replayed yet — start with one
+`diagnose` and read its output before anything larger.
 
 Design: [`docs/specs/2026-10-11-culprit-design.md`](docs/specs/2026-10-11-culprit-design.md) ·
 Plan: [`docs/plans/2026-10-11-culprit-plan.md`](docs/plans/2026-10-11-culprit-plan.md)

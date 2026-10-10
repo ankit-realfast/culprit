@@ -41,19 +41,10 @@ def test_status_json_for_the_queue_and_for_one_episode(write_session, tmp_path, 
     assert cli.main(["status", "--json"]) == 0
     [episode] = only_json(capsys)["episodes"]
     assert episode["episode_id"] == "s1:p1" and episode["stage"] == "restored"
-    assert episode["next_step"] == "run `culprit baseline s1:p1`"
+    assert episode["next_step"] == "run `culprit diagnose s1:p1`"
     assert cli.main(["status", "s1:p1", "--json"]) == 0
     one = only_json(capsys)
     assert one["criterion"]["approved"] is True and one["symptom"] == "wrong-result" and one["verdict"] is None
-
-
-def test_baseline_json(write_session, tmp_path, capsys, monkeypatch):
-    flags = ready(write_session, tmp_path)
-    monkeypatch.setattr(cli, "run_variant", lambda variant, settings, **k: VariantOutcome(variant, 1, k["n"], 3.1))
-    assert cli.main(["baseline", "s1:p1", *flags, "--json"]) == 0
-    data = only_json(capsys)
-    assert data["outcome"] == {"variant": "baseline", "passes": 1, "runs": 5, "cost_usd": 3.1, "void": 0}
-    assert data["episode_id"] == "s1:p1" and "next" in data
 
 
 def test_diagnose_json(write_session, tmp_path, capsys, monkeypatch):

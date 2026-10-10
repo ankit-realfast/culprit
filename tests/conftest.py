@@ -51,3 +51,6 @@ def isolated_from_real_data(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "DEFAULT_PROJECTS", tmp_path / "no-real-projects")
     monkeypatch.setattr(replay, "DEFAULT_PROJECTS", tmp_path / "no-real-projects")
     monkeypatch.setattr(sandbox, "DEFAULT_FILE_HISTORY", tmp_path / "file-history")
+    # the CLI drafts a criterion on confirm; tests that care about the draft install their own FakeAsk
+    monkeypatch.setattr(cli, "ask_claude", lambda prompt, schema: {"success_means": "works", "checks": [],
+                                                                   "must_not": []})
