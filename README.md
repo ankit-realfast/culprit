@@ -89,7 +89,7 @@ says "not testable".
 
 ## Status
 
-Built and unit-tested (171 tests); a final review's critical and important findings are fixed. Triage
+Built and unit-tested (177 tests); a final review's critical and important findings are fixed. Triage
 and restore have run on real logs; no real episode has been replayed yet — start with one cheap baseline
 (`--n 1 --budget 3`) and read its output before anything larger.
 
