@@ -20,7 +20,8 @@ from culprit.diagnose import diagnose, retire_if_criterion_changed
 from culprit.eligibility import project_hooks, replay_blockers
 from culprit import episodes
 from culprit.episodes import Episode, excerpt, session_files
-from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget, load_outcome, run_variant, stored_spend
+from culprit.experiment import (BudgetExhausted, EpisodeBudget, VariantOutcome, load_outcome, pristine_dir, run_variant,
+                                stored_spend)
 from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
 from culprit.oracles import DRAFTED_CAUSES
 from culprit.preview import CostPlan, batch_cost, diagnose_cost, diagnose_cost_for, plan_cost, selftest_cost
@@ -348,7 +349,7 @@ def _confirm_progress(runs_dir: Path, episode_id: str) -> tuple[bool, bool]:
     criterion = load_criterion(runs_dir, episode_id)
     folder = episode_dir(runs_dir, episode_id)
     approved = read_symptom(runs_dir, episode_id) is not None and criterion is not None and criterion.approved
-    return approved, (folder / PRISTINE_DIR).is_dir() or load_verdict(folder) is not None
+    return approved, pristine_dir(runs_dir, episode_id).is_dir() or load_verdict(folder) is not None
 
 
 def confirm_walk_step(args: argparse.Namespace, position: int, row: dict, blockers: list[str]) -> str:
@@ -388,7 +389,7 @@ def confirm_walk_step(args: argparse.Namespace, position: int, row: dict, blocke
             return "quit" if answer == "quit" else "skip"
         approve_criterion(args.runs, episode_id)
         print("approved")
-    if not blockers and not (episode_dir(args.runs, episode_id) / PRISTINE_DIR).is_dir():
+    if not blockers and not pristine_dir(args.runs, episode_id).is_dir():
         for line in restore_episode(args.runs, args.projects, episode_id):
             print(line)
     return "done"
@@ -478,7 +479,7 @@ def restore_episode(runs_dir: Path, projects_dir: Path, episode_id: str) -> list
     blockers = replay_blockers(episode, tracked)
     if blockers:
         raise NotReplayable(f"{display_id(runs_dir, episode_id)} cannot be replayed: " + "; ".join(blockers))
-    destination = episode_dir(runs_dir, episode_id) / PRISTINE_DIR
+    destination = pristine_dir(runs_dir, episode_id)
     report = restore(episode, tracked, destination, file_history_root=sandbox.DEFAULT_FILE_HISTORY,
                      session_root=session_root(episode.session_file))
     root = session_root(episode.session_file) or Path(episode.cwd)
@@ -517,7 +518,7 @@ def ready_to_replay(args: argparse.Namespace) -> tuple[Episode, Criterion]:
         symptom = read_symptom(args.runs, args.episode_id)
         raise NotReady(f"no approved criterion for {shown} — "
                        f"{criterion_step(criterion, shown, symptom.value if symptom else None)}")
-    if not (episode_dir(args.runs, args.episode_id) / PRISTINE_DIR).is_dir():
+    if not pristine_dir(args.runs, args.episode_id).is_dir():
         for line in restore_episode(args.runs, args.projects, args.episode_id):
             print(line)
     return episode, criterion
@@ -656,7 +657,7 @@ def diagnose_queue(args: argparse.Namespace) -> int:
     for episode_id in queued_ids(args.runs):
         folder = episode_dir(args.runs, episode_id)
         criterion = load_criterion(args.runs, episode_id)
-        if (folder / PRISTINE_DIR).is_dir() or load_verdict(folder) is not None \
+        if pristine_dir(args.runs, episode_id).is_dir() or load_verdict(folder) is not None \
                 or read_symptom(args.runs, episode_id) is None or criterion is None or not criterion.approved:
             continue
         shown = display_id(args.runs, episode_id)

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from culprit.criterion import Criterion, criterion_step, load_criterion
-from culprit.experiment import PRISTINE_DIR, VariantOutcome, load_outcome, load_outcomes, stored_spend
+from culprit.experiment import VariantOutcome, load_outcome, load_outcomes, pristine_dir, stored_spend
 from culprit.store import (confirm_step, display_id, episode_dir, known_episode_ids, load_restore, queued_ids,
                            read_symptom)
 from culprit.verdict import BASELINE, Verdict, load_verdict
@@ -42,7 +42,7 @@ def episode_status(runs_dir: Path, episode_id: str) -> EpisodeStatus:
         ("criterion drafted", criterion is not None, lambda: criterion_step(criterion, shown, symptom_value)),
         ("criterion approved", bool(criterion and criterion.approved),
          lambda: criterion_step(criterion, shown, symptom_value)),
-        ("restored", (folder / PRISTINE_DIR).is_dir(), lambda: diagnose),
+        ("restored", pristine_dir(runs_dir, episode_id).is_dir(), lambda: diagnose),
         ("baselined", load_outcome(folder, BASELINE) is not None, lambda: diagnose),
         ("diagnosed", verdict is not None, lambda: diagnose),
     ]

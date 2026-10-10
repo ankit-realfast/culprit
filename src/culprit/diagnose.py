@@ -15,8 +15,8 @@ from pathlib import Path
 from culprit.claude import CALL_CAP_USD, ask_claude
 from culprit.criterion import Criterion
 from culprit.episodes import Episode
-from culprit.experiment import (CALLS_FILE, PRISTINE_DIR, REPLAYS_DIR, SUPERSEDED_DIR, EpisodeBudget, Progress,
-                                VariantOutcome, load_outcome, record_call_spend, run_variant)
+from culprit.experiment import (CALLS_FILE, REPLAYS_DIR, SUPERSEDED_DIR, EpisodeBudget, Progress,
+                                VariantOutcome, load_outcome, pristine_dir, record_call_spend, run_variant)
 from culprit.oracles import build_variant, combine
 from culprit.replay import ReplaySettings, settings_from_json, settings_to_json
 from culprit.store import episode_dir, read_json, write_json
@@ -67,7 +67,7 @@ def diagnose(episode: Episode, criterion: Criterion, symptom: Symptom, base: Rep
              out_dir: Path | None = None, ask=ask_claude, run=run_variant, build=build_variant,
              progress: Progress | None = None) -> Verdict:
     folder = out_dir or episode_dir(runs_dir, episode.episode_id)
-    pristine = episode_dir(runs_dir, episode.episode_id) / PRISTINE_DIR
+    pristine = pristine_dir(runs_dir, episode.episode_id)
     retire_if_criterion_changed(folder, criterion)
     outcomes: dict[str, VariantOutcome] = {}
     untested: dict[str, str] = {}

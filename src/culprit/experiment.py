@@ -25,6 +25,11 @@ SUPERSEDED_DIR = "superseded"  # runs judged against an earlier criterion, kept 
 MAX_VOID_RETRIES = 5  # extra attempts per variant when runs fail for reasons outside the agent
 
 
+def pristine_dir(runs_dir: Path, episode_id: str) -> Path:
+    """The episode's restored starting files, which every replay (selftests included) is cloned from."""
+    return episode_dir(runs_dir, episode_id) / PRISTINE_DIR
+
+
 class BudgetExhausted(RuntimeError):
     pass
 
@@ -99,7 +104,7 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
         else:
             budget.ensure_room(settings.max_budget_usd + CALL_CAP_USD)
             tell(event)
-            result = replay(settings, episode_folder / PRISTINE_DIR, run_dir, replay_workdir(episode),
+            result = replay(settings, pristine_dir(runs_dir, episode.episode_id), run_dir, replay_workdir(episode),
                             criterion.checks, original_cwd=Path(episode.cwd),
                             original_memory=episode.session_file.parent / MEMORY_DIR)
             budget.spend(result.cost_usd)  # charged before judging, so a judge failure cannot lose it

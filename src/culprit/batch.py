@@ -12,7 +12,7 @@ from pathlib import Path
 from culprit.claude import CALL_CAP_USD, ClaudeCallFailed
 from culprit.criterion import criterion_step, load_criterion
 from culprit.diagnose import diagnose
-from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget, Progress, scoped, stored_spend
+from culprit.experiment import BudgetExhausted, EpisodeBudget, Progress, pristine_dir, scoped, stored_spend
 from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
 from culprit.replay import SetupScriptFailed, baseline_settings
 from culprit.selftest import SELFTEST_DIR
@@ -52,7 +52,7 @@ def readiness_problem(runs_dir: Path, episode_id: str) -> str | None:
     criterion = load_criterion(runs_dir, episode_id)
     if criterion is None or not criterion.approved:
         return f"no approved criterion — {criterion_step(criterion, shown, symptom.value)}"
-    if not (episode_dir(runs_dir, episode_id) / PRISTINE_DIR).is_dir():
+    if not pristine_dir(runs_dir, episode_id).is_dir():
         return f"not restored — `culprit diagnose {shown}` restores it or says why it cannot"
     return None
 
