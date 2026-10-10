@@ -15,11 +15,7 @@ from culprit.signals import FailureSignals, signals_for
 INTERRUPT_WEIGHT = 5
 TOOL_ERROR_CAP = 5
 COMPACTION_WEIGHT = 2
-COMPACTION_CAP = 2
 SLOW_WEIGHT = 3
-# The human saying Claude got it wrong is the strongest evidence a log holds, so it outweighs every other
-# signal combined; those only order the corrected episodes among themselves, and the rest after them.
-CORRECTED_WEIGHT = INTERRUPT_WEIGHT + TOOL_ERROR_CAP + COMPACTION_WEIGHT * COMPACTION_CAP + SLOW_WEIGHT + 1
 SLOW_PERCENTILE = 0.9
 
 
@@ -33,23 +29,13 @@ class EpisodeSummary:
     signals: FailureSignals
 
     @classmethod
-    def from_episode(cls, episode: Episode, follow_up: str | None = None) -> EpisodeSummary:
-        return cls(episode.episode_id, str(episode.session_file), excerpt(episode.prompt_text),
-                   signals_for(episode, follow_up))
+    def from_episode(cls, episode: Episode) -> EpisodeSummary:
+        return cls(episode.episode_id, str(episode.session_file), excerpt(episode.prompt_text), signals_for(episode))
 
 
 def summarize_session(session_file: Path) -> list[EpisodeSummary]:
-    """Summarize each episode in a session with the human's next prompt as its follow-up, holding one
-    episode's records at a time."""
-    summaries = []
-    previous: Episode | None = None
-    for episode in episodes_from_session(session_file):
-        if previous is not None:
-            summaries.append(EpisodeSummary.from_episode(previous, episode.prompt_text))
-        previous = episode
-    if previous is not None:
-        summaries.append(EpisodeSummary.from_episode(previous))
-    return summaries
+    """Summarize each episode in a session, holding one episode's records at a time."""
+    return [EpisodeSummary.from_episode(episode) for episode in episodes_from_session(session_file)]
 
 
 @dataclass(frozen=True)
@@ -69,10 +55,9 @@ def percentile(values: list[float], fraction: float) -> float:
 def score(signals: FailureSignals, slow_threshold_s: float) -> int:
     """API errors are left out: they are infrastructure failures a replay would not reproduce."""
     return (
-        (CORRECTED_WEIGHT if signals.corrected else 0)
-        + (INTERRUPT_WEIGHT if signals.interrupted else 0)
+        (INTERRUPT_WEIGHT if signals.interrupted else 0)
         + min(signals.tool_errors, TOOL_ERROR_CAP)
-        + COMPACTION_WEIGHT * min(signals.compactions, COMPACTION_CAP)
+        + COMPACTION_WEIGHT * signals.compactions
         + (SLOW_WEIGHT if signals.duration_s > slow_threshold_s else 0)
     )
 

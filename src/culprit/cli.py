@@ -7,7 +7,7 @@ import json
 import os
 import shutil
 import sys
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -18,7 +18,7 @@ from culprit.claude import ClaudeCallFailed, ask_claude
 from culprit.criterion import CRITERION_FILE, Criterion, approve_criterion, criterion_step, draft_criterion, load_criterion, save_criterion
 from culprit.diagnose import diagnose, retire_if_criterion_changed
 from culprit.eligibility import project_hooks, replay_blockers
-from culprit.episodes import Episode, session_files
+from culprit.episodes import Episode, excerpt, session_files
 from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget, load_outcome, run_variant, stored_spend
 from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
 from culprit.preview import DRAFTED_CAUSES, CostPlan, batch_cost, diagnose_cost, diagnose_cost_for, plan_cost, selftest_cost
@@ -236,7 +236,7 @@ def _blockers_for(projects: Path, episode_id: str) -> list[str]:
 
 
 def _evidence(signals: FailureSignals) -> str:
-    parts = [f"corrected: {signals.corrected}"] if signals.corrected else []
+    parts = []
     if signals.interrupted:
         parts.append("interrupted")
     if signals.tool_errors:
@@ -332,6 +332,19 @@ def _walk_blockers(args: argparse.Namespace, episode_id: str) -> list[str]:
         return [str(missing)]
 
 
+def stored_signals(stored: dict) -> FailureSignals:
+    """Signals as candidates.json holds them; keys a past version wrote and this one dropped are ignored."""
+    return FailureSignals(**{f.name: stored[f.name] for f in fields(FailureSignals) if f.name in stored})
+
+
+def _next_prompt(projects: Path, episode_id: str) -> str | None:
+    """The human's next prompt after the episode, so the person can judge whether it corrected Claude."""
+    try:
+        return next(iter(follow_up_prompts(projects, episode_id, count=1)), None)
+    except EpisodeNotFound:
+        return None
+
+
 def _confirm_progress(runs_dir: Path, episode_id: str) -> tuple[bool, bool]:
     """(symptom recorded and criterion approved, starting files restored or episode already diagnosed)."""
     criterion = load_criterion(runs_dir, episode_id)
@@ -345,8 +358,10 @@ def confirm_walk_step(args: argparse.Namespace, position: int, row: dict, blocke
     summary = row["summary"]
     episode_id = summary["episode_id"]
     signals = summary.get("signals")
-    evidence = f"  [{_evidence(FailureSignals(**signals))}]" if signals else ""
+    evidence = f"  [{_evidence(stored_signals(signals))}]" if signals else ""
     print(f"\n#{position} {display_id(args.runs, episode_id)}{evidence}  {summary.get('prompt_excerpt', '')}")
+    if follow_up := _next_prompt(args.projects, episode_id):
+        print(f"    you said next: {excerpt(follow_up)}")
     for blocker in blockers:
         print(f"    not replayable: {blocker}")
     symptom = read_symptom(args.runs, episode_id)

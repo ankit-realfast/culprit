@@ -44,8 +44,7 @@ def two_queued(write_session, tmp_path):
                    human("that's wrong", "p2", session_id="s2", cwd=str(tmp_path / "gone"))], name="s2.jsonl")
     runs = tmp_path / "runs"
     runs.mkdir()
-    signals = {"interrupted": False, "tool_errors": 2, "api_errors": 0, "compactions": 0, "duration_s": 30.0,
-               "corrected": "no, still broken"}
+    signals = {"interrupted": False, "tool_errors": 2, "api_errors": 0, "compactions": 0, "duration_s": 30.0}
     (runs / "candidates.json").write_text(json.dumps([
         {"score": 9, "summary": {"episode_id": "s1:p1", "prompt_excerpt": "fix a", "signals": signals}},
         {"score": 5, "summary": {"episode_id": "s2:p1", "prompt_excerpt": "tidy b", "signals": signals}}]))
@@ -81,7 +80,8 @@ def test_the_walk_confirms_approves_and_restores_each_episode_in_queue_order(wri
     assert not (episode_dir(runs, "s2:p1") / "pristine").exists()
     out = captured.out
     assert out.index("fix a") < out.index("tidy b")
-    assert "corrected: no, still broken" in out and "2 tool errors" in out
+    assert "2 tool errors" in out
+    assert "you said next: no, still broken" in out and "you said next: that's wrong" in out
     assert "criterion [draft, not approved]: works 0" in out and "1 restored from snapshots" in out
     assert "not replayable: working directory" in out
     assert "next: culprit diagnose" in captured.err
@@ -160,3 +160,14 @@ def test_an_episode_whose_log_is_gone_keeps_its_symptom_and_the_walk_goes_on(wri
     out = capsys.readouterr().out
     assert read_symptom(runs, "s1:p1") is Symptom.WRONG_RESULT and load_criterion(runs, "s1:p1") is None
     assert "criterion not drafted" in out and "tidy b" in out and left == []
+
+
+def test_a_row_stored_with_the_retired_corrected_signal_still_shows(write_session, tmp_path, capsys, monkeypatch):
+    runs = two_queued(write_session, tmp_path)
+    rows = json.loads((runs / "candidates.json").read_text())
+    rows[0]["summary"]["signals"]["corrected"] = "no, still broken"
+    (runs / "candidates.json").write_text(json.dumps(rows))
+    drafts(monkeypatch)
+    answering(monkeypatch, "q")
+    assert cli.main(["confirm"]) == 0
+    assert "2 tool errors" in capsys.readouterr().out
