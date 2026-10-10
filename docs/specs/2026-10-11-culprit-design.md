@@ -138,6 +138,9 @@ claude -p "<episode or variant prompt>" \
   reached. An episode whose transcript used an MCP tool is therefore not replayable in v1.
 - **The working directory is an APFS clone** (`cp -cR`) of a pristine restored copy, one fresh clone
   per replay, with every git remote removed; `git push` and `gh` are also denied.
+- **Each clone sits beside the original working directory** (`<parent>/.culprit-replay-<id>`), so the
+  replay loads the same ancestor `CLAUDE.md` files the original session did. The original project's
+  auto-memory is not loaded, because the replay's working directory is new; every report says so.
 - **Permission mode:** the episode's own mode (`auto`, `acceptEdits`), except `default` becomes
   `acceptEdits`, because in the original the human approved those prompts and no human is present now.
 - **Cleanup:** after each replay culprit deletes the clone and the empty `memory/` folder Claude Code
@@ -193,6 +196,7 @@ the full set.
 - Episodes in which Claude asked the human a question cannot be replayed faithfully (no person to
   answer); they are tagged and excluded from v1.
 - Episodes already run on Fable cannot test the Model cause; reported as untestable.
+- Episodes that used an MCP tool are excluded from v1, because replays connect no MCP server.
 - v1 replays from the episode's start, not from the step where it went wrong; mid-episode branching is
   deferred until v1 proves the method.
 - Cost: about 30 replays per episode (baseline ×5 plus five variants ×5), ~25 minutes at the median turn
