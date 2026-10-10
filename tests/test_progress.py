@@ -1,7 +1,7 @@
 import io
 
+from culprit.cli import Heartbeat, ProgressPrinter, elapsed
 from culprit.diagnose import ReplayEvent
-from culprit.progress import Heartbeat, ProgressPrinter, elapsed
 
 
 class FakeHeartbeat:

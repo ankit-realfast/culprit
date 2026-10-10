@@ -4,8 +4,8 @@ import pytest
 
 import culprit.cli as cli
 from culprit.model import Criterion, save_criterion
-from culprit.trust import SelftestResult
 from culprit.store import episode_dir
+from culprit.trust import SelftestResult
 from records import human, snapshot
 
 

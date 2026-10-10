@@ -1,4 +1,4 @@
-"""The culprit command line. Each subcommand is one handler: handler(args) -> exit code."""
+"""The culprit command line, and the progress lines long-running commands print."""
 
 from __future__ import annotations
 
@@ -7,32 +7,122 @@ import json
 import os
 import shutil
 import sys
+import threading
+import time
 from dataclasses import asdict, fields
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Sequence, TextIO
 
+from culprit import logs, replay
 from culprit.diagnose import (BASELINE, DRAFTED_CAUSES, ENV_FIX_FILE, BudgetExhausted, CostPlan, EpisodeBudget,
-                              VariantOutcome, batch_cost, diagnose, diagnose_all, diagnose_cost, diagnose_cost_for,
-                              env_fix_script, load_outcome, load_verdict, numbers_line, plan_cost, pristine_dir,
-                              retire_if_criterion_changed, run_variant, stored_spend)
-from culprit.trust import (MIN_KAPPA, MIN_LABELS, UnknownRun, agreement, control_min_passes, is_control,
-                           next_unlabelled, record_label, run_id, run_selftest, run_summary, selftest_accuracy,
-                           selftest_cost)
-from culprit.model import (CRITERION_FILE, ClaudeCallFailed, Criterion, approve_criterion, ask_claude, criterion_step,
-                           draft_criterion, load_criterion, save_criterion)
+                              ReplayEvent, VariantOutcome, batch_cost, diagnose, diagnose_all, diagnose_cost,
+                              diagnose_cost_for, env_fix_script, load_outcome, load_verdict, numbers_line, plan_cost,
+                              pristine_dir, retire_if_criterion_changed, run_variant, stored_spend)
 from culprit.logs import (Episode, EpisodeNotFound, FailureSignals, excerpt, find_episode, follow_up_prompts,
                           load_snapshot, project_hooks, rank_candidates, replay_blockers, session_files, session_root,
                           summarize_session)
-from culprit import logs
-from culprit.progress import ProgressPrinter
+from culprit.model import (CRITERION_FILE, ClaudeCallFailed, Criterion, approve_criterion, ask_claude, criterion_step,
+                           draft_criterion, load_criterion, save_criterion)
 from culprit.replay import (DEFAULT_REPLAY_BUDGET_USD, OriginalModified, SetupScriptFailed, apply_episode_originals,
                             baseline_settings, check_restore, episode_originals, restore, restore_from_git)
 from culprit.report import (REPORT_FILE, STAGES, EpisodeStatus, collect, episode_status, next_step, queue_status,
                             render_report)
-from culprit import replay
 from culprit.store import (ORACLE_ORDER, RESTORE_FILE, Cause, NotReady, Symptom, UnknownEpisode, confirm_step,
                            display_id, episode_dir, queued_ids, read_symptom, record_symptom, require_queue,
                            resolve_episode_id, save_candidates, write_json)
+from culprit.trust import (MIN_KAPPA, MIN_LABELS, UnknownRun, agreement, control_min_passes, is_control,
+                           next_unlabelled, record_label, run_id, run_selftest, run_summary, selftest_accuracy,
+                           selftest_cost)
+
+
+# --- progress: What the CLI shows while replays run: one stderr line per finished replay, and a heartbeat between. ---
+
+HEARTBEAT_S = 30
+
+
+class Heartbeat:
+    """Calls beat() every interval seconds on a daemon thread until stop().
+
+    `wait(interval)` returns True to stop; the default waits on an event, so stop() wakes it at once.
+    """
+
+    def __init__(self, beat: Callable[[], None], interval: float,
+                 wait: Callable[[float], bool] | None = None):
+        self._stopped = threading.Event()
+        self._beat, self._interval = beat, interval
+        self._wait = wait or self._stopped.wait
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        while not self._wait(self._interval):
+            self._beat()
+
+    def stop(self) -> None:
+        self._stopped.set()
+        self._thread.join()
+
+
+def elapsed(seconds: float) -> str:
+    hours, rest = divmod(int(seconds), 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m{secs:02d}s"
+    return f"{minutes}m{secs:02d}s" if minutes else f"{secs}s"
+
+
+def in_scope(event: ReplayEvent, text: str) -> str:
+    """text prefixed with the event's scope (planted fault, episode) when there is one."""
+    return f"{event.scope}: {text}" if event.scope else text
+
+
+def describe(event: ReplayEvent) -> str:
+    """`baseline #2 of 5`, in its scope."""
+    return in_scope(event, f"{event.variant} #{event.index} of {event.n}")
+
+
+class ProgressPrinter:
+    """The progress callback the CLI hands to run_variant, diagnose, run_selftest and diagnose_all.
+
+    Use it as a context manager so a heartbeat never outlives the command.
+    """
+
+    def __init__(self, stream: TextIO | None = None, *, interval: float = HEARTBEAT_S,
+                 clock: Callable[[], float] = time.monotonic, heartbeat=Heartbeat):
+        self.stream = stream or sys.stderr
+        self.interval, self.clock, self.heartbeat = interval, clock, heartbeat
+        self._running = None
+
+    def __enter__(self) -> ProgressPrinter:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._running is not None:
+            self._running.stop()
+            self._running = None
+
+    def __call__(self, event: ReplayEvent) -> None:
+        self.close()  # a replay that raised never sent its finish
+        if event.kind == "start":
+            started = self.clock()
+            name = in_scope(event, event.variant)
+            self._running = self.heartbeat(
+                lambda: self.print(f"… still running {name} #{event.index}, {elapsed(self.clock() - started)}"),
+                self.interval)
+            return
+        result = "void, not counted" if event.result == "void" else event.result
+        reused = " — reused from an earlier run" if event.reused else ""
+        self.print(f"{describe(event)}: {result}, ${event.cost_usd:.2f} (episode spent ${event.spent_usd:.2f})"
+                   f"{reused}")
+
+    def print(self, line: str) -> None:
+        print(line, file=self.stream, flush=True)
+
+
+# --- cli: The culprit command line. Each subcommand is one handler: handler(args) -> exit code. ---
 
 RUNS_ENV = "CULPRIT_RUNS"
 PROJECTS_ENV = "CULPRIT_PROJECTS"

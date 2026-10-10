@@ -1,7 +1,7 @@
 import json
 
-from culprit.model import Criterion
 from culprit.diagnose import CRITERION_USED_FILE, CostPlan, criterion_key, diagnose_cost, diagnose_cost_for, plan_cost
+from culprit.model import Criterion
 from culprit.store import ORACLE_ORDER, Cause
 
 CRITERION = Criterion("works", (), (), approved=True)

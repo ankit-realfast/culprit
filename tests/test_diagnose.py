@@ -1,10 +1,10 @@
 import json
 from dataclasses import replace
 
-from culprit.model import Criterion
 from culprit.diagnose import (NOT_RUN_REASON, EpisodeBudget, VariantBuild, VariantOutcome, beats, diagnose,
                               load_verdict, reproducible)
 from culprit.logs import episodes_from_session
+from culprit.model import Criterion
 from culprit.replay import ReplaySettings
 from culprit.store import Cause, Symptom, episode_dir
 from records import human

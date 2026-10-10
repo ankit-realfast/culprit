@@ -3,8 +3,8 @@ import json
 import pytest
 
 import culprit.cli as cli
-from culprit.model import Criterion, save_criterion
 from culprit.diagnose import VariantOutcome, Verdict
+from culprit.model import Criterion, save_criterion
 from culprit.store import episode_dir
 from records import assistant, human, interrupt, snapshot
 

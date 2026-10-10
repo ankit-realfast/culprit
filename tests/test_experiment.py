@@ -2,9 +2,9 @@ import json
 
 import pytest
 
-from culprit.model import Criterion, Judgement
-from culprit.logs import episodes_from_session
 from culprit.diagnose import BudgetExhausted, EpisodeBudget, VariantOutcome, load_outcome, run_variant
+from culprit.logs import episodes_from_session
+from culprit.model import Criterion, Judgement
 from culprit.replay import ReplayResult, ReplaySettings
 from culprit.store import episode_dir
 from records import human
