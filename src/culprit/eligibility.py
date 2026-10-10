@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 from culprit.answer_host import ASK_USER_TOOL, recorded_answers
-from culprit.episodes import Episode, content_blocks, tool_uses
+from culprit.episodes import Episode, prompt_images, tool_uses
 from culprit.snapshot import Tracked
 
 PROJECT_SETTINGS = (".claude/settings.json", ".claude/settings.local.json")
@@ -31,8 +31,7 @@ def replay_blockers(episode: Episode, tracked: Tracked | None) -> list[str]:
     if tracked is None:
         blockers.append("no file-history snapshot exists for this prompt")
     names = {use.get("name", "") for use in tool_uses(episode)}
-    images = [b for b in content_blocks(episode.records[0]) if b.get("type") == "image"] if episode.records else []
-    if any(not (image.get("source") or {}).get("data") for image in images):
+    if any(not (image.get("source") or {}).get("data") for image in prompt_images(episode)):
         blockers.append("the prompt carried an image whose data the log did not keep, so a replay cannot resend it")
     if ASK_USER_TOOL in names and not recorded_answers(episode):
         blockers.append("asked the human a question whose answer the log did not keep, so a replay cannot answer it")

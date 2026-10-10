@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
-from culprit.claude import Ask, ask_claude
+from culprit.claude import Ask, as_messages, ask_claude
 from culprit.episodes import Episode
 from culprit.store import NotReady, display_id, episode_dir, read_json, write_json
 
@@ -33,7 +33,6 @@ class Criterion:
 
 
 def drafting_prompt(episode: Episode, follow_ups: list[str]) -> str:
-    reactions = "\n".join(f"<message>{text}</message>" for text in follow_ups) or "<message>(none)</message>"
     return f"""You are writing the success criterion for one request a person made to a coding agent.
 A later step will re-run the agent on this request and judge each attempt against what you write.
 
@@ -42,7 +41,7 @@ The request:
 
 What the person typed next. Their reaction reveals what they actually wanted:
 <follow_ups>
-{reactions}
+{as_messages(follow_ups)}
 </follow_ups>
 
 Working directory: {episode.cwd}

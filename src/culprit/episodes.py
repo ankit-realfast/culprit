@@ -129,6 +129,12 @@ def _episode(session_file: Path, prompt: dict, records: list[dict]) -> Episode:
     )
 
 
+def prompt_images(episode: Episode) -> list[dict]:
+    """The image blocks the human attached to the prompt."""
+    blocks = content_blocks(episode.records[0]) if episode.records else []
+    return [block for block in blocks if block.get("type") == "image"]
+
+
 def tool_uses(episode: Episode) -> list[dict]:
     """Every tool call the agent made in this episode, in order; each has a name and an input."""
     return [

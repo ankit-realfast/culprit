@@ -15,7 +15,7 @@ import sys
 from difflib import SequenceMatcher
 
 from culprit.episodes import Episode
-from culprit.mcp_stub import serve_message, serve_stdio
+from culprit.mcp_stub import serve_message, serve_stdio, text_result, tool_spec
 
 SERVER = "culprit_answers"
 TOOL = "answer"
@@ -55,11 +55,10 @@ def _similarity(a: str, b: str) -> float:
 
 def main() -> None:
     answers = json.loads(open(sys.argv[1]).read())
-    tools = [{"name": TOOL, "description": "Answers permission prompts during a culprit replay.",
-              "inputSchema": {"type": "object", "additionalProperties": True}}]
+    tools = [tool_spec(TOOL, "Answers permission prompts during a culprit replay.")]
 
     def call(name: str, arguments: dict) -> dict:
-        return {"content": [{"type": "text", "text": json.dumps(decide(arguments, answers))}]}
+        return text_result(json.dumps(decide(arguments, answers)))
 
     serve_stdio(lambda message: serve_message(message, tools, call))
 

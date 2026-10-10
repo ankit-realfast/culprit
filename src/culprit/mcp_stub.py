@@ -41,16 +41,26 @@ def recordings_from_episode(episode: Episode) -> dict[str, list[dict]]:
 def handle(message: dict, recordings: list[dict]) -> dict | None:
     """Answer one JSON-RPC message; None for a notification, which gets no reply."""
     names = list(dict.fromkeys(recording["tool"] for recording in recordings))
-    tools = [{"name": name, "description": "Replays the result recorded in the original session.",
-              "inputSchema": {"type": "object", "additionalProperties": True}} for name in names]
+    tools = [tool_spec(name, "Replays the result recorded in the original session.") for name in names]
 
     def call(name: str, arguments: dict) -> dict:
         match = next((r for r in recordings if r["tool"] == name and r["arguments"] == arguments), None)
         if match is None:
-            return {"content": [{"type": "text", "text": NOT_RECORDED}], "isError": True}
-        return {"content": [{"type": "text", "text": match["text"]}], "isError": match["is_error"]}
+            return text_result(NOT_RECORDED, is_error=True)
+        return text_result(match["text"], is_error=match["is_error"])
 
     return serve_message(message, tools, call)
+
+
+def tool_spec(name: str, description: str) -> dict:
+    """A tools/list entry that takes any arguments."""
+    return {"name": name, "description": description,
+            "inputSchema": {"type": "object", "additionalProperties": True}}
+
+
+def text_result(text: str, is_error: bool = False) -> dict:
+    """A tools/call result holding one text block."""
+    return {"content": [{"type": "text", "text": text}], "isError": is_error}
 
 
 def serve_message(message: dict, tools: list[dict], call) -> dict | None:

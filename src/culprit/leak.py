@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from culprit.claude import Ask, ask_claude
+from culprit.claude import Ask, as_messages, ask_claude
 
 LEAK_SCHEMA = {
     "type": "object",
@@ -24,7 +24,6 @@ class LeakCheck:
 
 
 def leak_prompt(drafted_text: str, original_prompt: str, follow_ups: list[str]) -> str:
-    later = "\n".join(f"<message>{text}</message>" for text in follow_ups) or "<message>(none)</message>"
     return f"""A drafted text will be given to a coding agent before it starts a task. Decide whether the draft
 leaks the answer.
 
@@ -33,7 +32,7 @@ The original request:
 
 What the person said later, after seeing the agent's attempt:
 <later>
-{later}
+{as_messages(follow_ups)}
 </later>
 
 The draft:

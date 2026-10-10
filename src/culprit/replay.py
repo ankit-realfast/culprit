@@ -21,7 +21,7 @@ from culprit.claude import NO_MCP_SERVERS
 from culprit.answer_host import PERMISSION_PROMPT_TOOL, recorded_answers
 from culprit.answer_host import SERVER as ANSWER_SERVER
 from culprit import episodes
-from culprit.episodes import Episode, content_blocks
+from culprit.episodes import Episode, prompt_images
 from culprit.mcp_stub import MCP_PREFIX, recordings_from_episode
 from culprit.sandbox import clone_tree
 
@@ -100,11 +100,9 @@ def replay_permission_mode(original: str | None) -> str:
 
 
 def baseline_settings(episode: Episode, max_budget_usd: float = DEFAULT_REPLAY_BUDGET_USD) -> ReplaySettings:
-    prompt_blocks = content_blocks(episode.records[0]) if episode.records else []
-    images = tuple(block for block in prompt_blocks if block.get("type") == "image")
     return ReplaySettings(prompt=episode.prompt_text, model=episode.model,
                           permission_mode=replay_permission_mode(episode.permission_mode),
-                          max_budget_usd=max_budget_usd, prompt_images=images,
+                          max_budget_usd=max_budget_usd, prompt_images=tuple(prompt_images(episode)),
                           mcp_recordings=recordings_from_episode(episode),
                           recorded_answers=recorded_answers(episode))
 

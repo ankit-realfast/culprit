@@ -44,10 +44,14 @@ def elapsed(seconds: float) -> str:
     return f"{minutes}m{secs:02d}s" if minutes else f"{secs}s"
 
 
+def in_scope(event: ReplayEvent, text: str) -> str:
+    """text prefixed with the event's scope (planted fault, episode) when there is one."""
+    return f"{event.scope}: {text}" if event.scope else text
+
+
 def describe(event: ReplayEvent) -> str:
-    """`baseline #2 of 5` — prefixed with the scope (planted fault, episode) when there is one."""
-    name = f"{event.variant} #{event.index} of {event.n}"
-    return f"{event.scope}: {name}" if event.scope else name
+    """`baseline #2 of 5`, in its scope."""
+    return in_scope(event, f"{event.variant} #{event.index} of {event.n}")
 
 
 class ProgressPrinter:
@@ -77,7 +81,7 @@ class ProgressPrinter:
         self.close()  # a replay that raised never sent its finish
         if event.kind == "start":
             started = self.clock()
-            name = f"{event.scope}: {event.variant}" if event.scope else event.variant
+            name = in_scope(event, event.variant)
             self._running = self.heartbeat(
                 lambda: self.print(f"… still running {name} #{event.index}, {elapsed(self.clock() - started)}"),
                 self.interval)

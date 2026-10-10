@@ -21,6 +21,11 @@ CALLS_DIR = Path.home() / ".culprit" / "calls"
 Ask = Callable[[str, dict], dict]
 
 
+def as_messages(texts: list[str]) -> str:
+    """The person's later messages, as the drafting and leak-check prompts quote them."""
+    return "\n".join(f"<message>{text}</message>" for text in texts) or "<message>(none)</message>"
+
+
 class ClaudeCallFailed(RuntimeError):
     pass
 

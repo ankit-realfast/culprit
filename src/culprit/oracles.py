@@ -48,10 +48,15 @@ class VariantBuild:
     untested_reason: str | None
 
 
+def _retry_note(rejected_evidence: str | None) -> str:
+    """Tells a redraft what the leak check rejected in the last one."""
+    if not rejected_evidence:
+        return ""
+    return f"\nA previous draft was rejected because it leaked this detail: {rejected_evidence}. Leave it out."
+
+
 def task_rewrite_prompt(episode: Episode, criterion: Criterion, rejected_evidence: str | None) -> str:
     must_not = "; ".join(criterion.must_not) or "nothing listed"
-    retry = (f"\nA previous draft was rejected because it leaked this detail: {rejected_evidence}. Leave it out."
-             if rejected_evidence else "")
     return f"""Rewrite one request a person gave a coding agent so that it states its scope and success criterion
 clearly, keeping the person's intent and voice.
 
@@ -62,20 +67,18 @@ What success means, approved by the person: {criterion.success_means}
 A correct attempt must not: {must_not}
 
 Add only what the agent could legitimately know before starting: the outcome wanted and what is out of
-scope. Do not name the fix, the cause, the file to change, or any detail learned later.{retry}
+scope. Do not name the fix, the cause, the file to change, or any detail learned later.{_retry_note(rejected_evidence)}
 Return the rewritten request as text."""
 
 
 def agent_instructions_prompt(criterion: Criterion, symptom: Symptom, rejected_evidence: str | None) -> str:
-    retry = (f"\nA previous draft was rejected because it leaked this detail: {rejected_evidence}. Leave it out."
-             if rejected_evidence else "")
     return f"""Write standing instructions for a coding agent, the kind a team keeps in CLAUDE.md, that would have
 prevented this kind of failure: {SYMPTOM_DESCRIPTIONS[symptom]}.
 
 For context only, success on the current task meant: {criterion.success_means}
 
 The instructions must be general working rules — how to scope, verify and report — true for any task in
-this repository. They must not mention this task's specifics, files, values or fix. At most 12 lines.{retry}
+this repository. They must not mention this task's specifics, files, values or fix. At most 12 lines.{_retry_note(rejected_evidence)}
 Return the instructions as text."""
 
 
