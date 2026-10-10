@@ -140,9 +140,9 @@ def test_triage_lists_unreplayable_candidates_after_every_replayable_one(write_s
     runs = tmp_path / "runs"
     assert cli.main(["triage"]) == 0
     lines = capsys.readouterr().out.splitlines()
-    rows = [line for line in lines if line.lstrip().startswith("#")]
-    assert "s1:p1" in rows[0] and rows[0].lstrip().startswith("#1 ")
-    assert "s9:p9" in rows[1] and rows[1].lstrip().startswith("#2 ")
+    rows = [line for line in lines if len(line.split()) > 2 and line.split()[0].isdigit() and ":" in line.split()[2]]
+    assert "s1:p1" in rows[0] and rows[0].split()[0] == "1"
+    assert "s9:p9" in rows[1] and rows[1].split()[0] == "2"
     assert "not replayable: working directory" in lines[lines.index(rows[1]) + 1]
-    assert cli.main(["confirm", "#1", "wasteful"]) == 0
+    assert cli.main(["confirm", "1", "wasteful"]) == 0
     assert read_symptom(runs, "s1:p1").value == "wasteful"

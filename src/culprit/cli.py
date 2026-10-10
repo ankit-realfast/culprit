@@ -113,26 +113,26 @@ COMMAND_GROUPS = {
     "trust": ("review", "selftest"),
 }
 EXAMPLE_RUN = """example run:
-  culprit triage --top 20                  rank likely failures; rows are numbered #1, #2, ...
+  culprit triage --top 20                  rank likely failures; rows are numbered 1, 2, ...
   culprit confirm                          walk the queue: say what went wrong, approve what success means
   culprit diagnose                         replay every confirmed episode, find the layer to change
   culprit report                           rank the changes across episodes
   culprit status                           where every episode stands, and what to run next
 one episode at a time (no terminal needed):
-  culprit confirm #1 wrong-result          record it and draft what success means
-  culprit status #1                        read the draft (edit runs/<episode>/criterion.json if needed)
-  culprit confirm #1 wrong-result          approve it
-  culprit diagnose #1                      restore, replay, find the layer to change
+  culprit confirm 1 wrong-result          record it and draft what success means
+  culprit status 1                        read the draft (edit runs/<episode>/criterion.json if needed)
+  culprit confirm 1 wrong-result          approve it
+  culprit diagnose 1                      restore, replay, find the layer to change
 """
 EXAMPLES = {
     "triage": "  culprit triage --top 40\n  CULPRIT_PROJECTS=~/other/projects CULPRIT_RUNS=~/work/runs culprit triage\n",
     "confirm": ("  culprit confirm                         each queued episode in turn: symptom, criterion, restore\n"
-                "  culprit confirm #1 wrong-result         record it and draft what success means\n"
-                "  culprit confirm #1 wrong-result         again, once the draft reads right: approve it\n"
+                "  culprit confirm 1 wrong-result         record it and draft what success means\n"
+                "  culprit confirm 1 wrong-result         again, once the draft reads right: approve it\n"
                 "  culprit confirm 1a2b3c4d:5e6f7a8b no-failure\n"),
-    "status": "  culprit status\n  culprit status #1\n  culprit status --json   one JSON document, for scripts\n",
-    "env-fix": "  culprit env-fix #1 fix-env.sh         run before Claude starts in the environment oracle\n",
-    "diagnose": "  culprit diagnose #1\n  culprit diagnose       every confirmed episode in the queue, then the report\n",
+    "status": "  culprit status\n  culprit status 1\n  culprit status --json   one JSON document, for scripts\n",
+    "env-fix": "  culprit env-fix 1 fix-env.sh         run before Claude starts in the environment oracle\n",
+    "diagnose": "  culprit diagnose 1\n  culprit diagnose       every confirmed episode in the queue, then the report\n",
     "review": "  culprit review        answer p(ass), f(ail), s(kip) or q(uit) for each judged replay\n",
     "selftest": "  culprit selftest #4\n",
     "report": "  culprit report\n  CULPRIT_RUNS=~/work/runs culprit report\n",
@@ -224,14 +224,14 @@ def triage_command(args: argparse.Namespace) -> int:
     id_width = max(map(len, shown), default=0)
     for name, candidate in zip(shown, candidates):
         s = candidate.summary
-        row = f"#{queue.index(s.episode_id) + 1}"
+        row = queue.index(s.episode_id) + 1
         print(f"{row:>4} {candidate.score:>3}  {name:<{id_width}}  [{_evidence(s.signals)}]  {s.prompt_excerpt}")
         if s.signals.api_errors:
             print(f"            {s.signals.api_errors} API errors — likely not reproducible")
         if blockers[s.episode_id]:
             print(f"            not replayable: {'; '.join(blockers[s.episode_id])}")
     print(f"{len(summaries)} episodes scanned; top {len(candidates)} merged into {path} ({len(queue)} queued); "
-          f"refer to an episode by its #row, short id or any unique prefix")
+          f"refer to an episode by its row number, short id or any unique prefix")
     if len(queue) > len(candidates):
         print(f"{len(queue) - len(candidates)} more queued, not in this top {len(candidates)} — see `culprit status`")
     return 0
@@ -363,7 +363,7 @@ def confirm_walk_step(args: argparse.Namespace, position: int, row: dict, blocke
     episode_id = summary["episode_id"]
     signals = summary.get("signals")
     evidence = f"  [{_evidence(stored_signals(signals))}]" if signals else ""
-    print(f"\n#{position} {display_id(args.runs, episode_id)}{evidence}  {summary.get('prompt_excerpt', '')}")
+    print(f"\n{position} {display_id(args.runs, episode_id)}{evidence}  {summary.get('prompt_excerpt', '')}")
     if follow_up := _next_prompt(args.projects, episode_id):
         print(f"    you said next: {excerpt(follow_up)}")
     for blocker in blockers:

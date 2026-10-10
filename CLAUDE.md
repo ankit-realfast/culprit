@@ -29,7 +29,7 @@ uv run culprit --help                     # commands: triage, confirm, diagnose,
 ```
 
 The CLI keeps flags to `triage --top` and `status --json`; the store and the logs come from `CULPRIT_RUNS`
-(default `runs/`) and `CULPRIT_PROJECTS` (default `~/.claude/projects`). Episodes can be named by `#row`,
+(default `runs/`) and `CULPRIT_PROJECTS` (default `~/.claude/projects`). Episodes can be named by row number (`3`; never `#3`, which shells treat as a comment),
 short id or unique prefix. Don't add flags or subcommands without the user asking.
 
 ## Architecture

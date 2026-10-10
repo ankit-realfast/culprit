@@ -12,6 +12,7 @@ from culprit.triage import Candidate
 CANDIDATES_FILE = "candidates.json"
 SYMPTOM_FILE = "symptom.json"
 RESTORE_FILE = "restore.json"  # how far the restored starting files can be trusted
+ROW_DIGITS = 4  # a bare number this long or shorter names a queue row; ids are hex, so longer digit runs are prefixes
 
 
 class UnknownEpisode(ValueError):
@@ -53,15 +54,17 @@ def known_episode_ids(runs_dir: Path) -> list[str]:
 
 
 def resolve_episode_id(runs_dir: Path, text: str) -> str:
-    """Expand `#n` (row n of the queue), a unique id prefix, or a short id to a full episode id.
+    """Expand a queue row (`3`, or `#3` when quoted), a unique id prefix, or a short id to a full episode id.
 
-    A full id passes through unchanged even when nothing in runs/ knows it yet.
+    A full id passes through unchanged even when nothing in runs/ knows it yet. Up to ROW_DIGITS digits is a
+    row, never an id prefix: shells drop an unquoted `#3`, so rows must work as plain numbers.
     """
-    if text.startswith("#") and text[1:].isdigit():
+    row = text.removeprefix("#")
+    if row.isdigit() and (len(row) <= ROW_DIGITS or text.startswith("#")):
         rows = require_queue(runs_dir)
-        if not 1 <= int(text[1:]) <= len(rows):
-            raise UnknownEpisode(f"{text} is not in the queue: it has {len(rows)} rows")
-        return rows[int(text[1:]) - 1]["summary"]["episode_id"]
+        if not 1 <= int(row) <= len(rows):
+            raise UnknownEpisode(f"row {row} is not in the queue: it has {len(rows)} rows")
+        return rows[int(row) - 1]["summary"]["episode_id"]
     known = known_episode_ids(runs_dir)
     if ":" in text:
         if text in known:
@@ -109,7 +112,7 @@ def queued_ids(runs_dir: Path) -> list[str]:
 def save_candidates(runs_dir: Path, candidates: list[Candidate]) -> Path:
     """Merge a new ranking into the stored queue by episode id, so a later triage never drops an episode
     already queued or confirmed. The new ranking comes first, in its own order, so the rows triage prints
-    are queue rows #1..#n; kept episodes it no longer shows follow, highest score first."""
+    are queue rows 1..n; kept episodes it no longer shows follow, highest score first."""
     fresh = [asdict(c) for c in candidates]
     fresh_ids = {c.summary.episode_id for c in candidates}
     kept = [row for row in candidate_rows(runs_dir) if row["summary"]["episode_id"] not in fresh_ids]

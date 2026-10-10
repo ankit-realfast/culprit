@@ -25,7 +25,7 @@ def test_top_level_help_groups_every_command_and_walks_through_a_run(capsys):
         section = text[start:bounds[bounds.index(start) + 1]]
         for command in GROUPS[group]:
             assert f"\n  {command} " in section, (group, command)
-    assert "example run:" in text and "culprit diagnose #1" in text
+    assert "example run:" in text and "culprit diagnose 1 " in text and "#1" not in text
 
 
 def test_every_command_is_in_exactly_one_group():

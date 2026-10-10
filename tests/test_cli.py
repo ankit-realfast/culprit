@@ -50,7 +50,7 @@ def test_a_second_triage_keeps_the_queue_and_says_how_many_are_queued(write_sess
     out = capsys.readouterr().out
     assert "s2:p3" in out and "s1:p2" not in out
     assert "2 queued" in out
-    assert out.lstrip().startswith("#1 ")
+    assert out.split()[0] == "1"
     assert "1 more queued, not in this top 1 — see `culprit status`" in out
     assert main(["confirm", "s1:p2", "stopped-short"]) == 1  # its log is gone, so no criterion can be drafted
     assert read_symptom(runs, "s1:p2").value == "stopped-short"
@@ -60,8 +60,8 @@ def test_triage_numbers_rows_and_commands_take_the_number(write_session, tmp_pat
     write_session([human("went wrong", "p2", session_id="s1"), interrupt("p2")])
     runs = tmp_path / "runs"
     main(["triage"])
-    assert "#1 " in capsys.readouterr().out
-    assert main(["confirm", "#1", "wasteful"]) == 0
+    assert capsys.readouterr().out.split()[0] == "1"
+    assert main(["confirm", "1", "wasteful"]) == 0
     assert read_symptom(runs, "s1:p2").value == "wasteful"
     assert main(["confirm", "s1", "stopped-short"]) == 0
     assert read_symptom(runs, "s1:p2").value == "stopped-short"
@@ -130,8 +130,8 @@ def test_triage_rows_are_numbered_contiguously_when_kept_episodes_are_not_shown(
     (tmp_path / "projects" / "-repo" / "s1.jsonl").unlink()
     capsys.readouterr()
     main(["triage", "--top", "2"])
-    rows = [line.split()[0] for line in capsys.readouterr().out.splitlines() if line.lstrip().startswith("#")]
-    assert rows == ["#1", "#2"]
-    assert main(["confirm", "#1", "wasteful"]) == 0
+    rows = [line.split()[0] for line in capsys.readouterr().out.splitlines() if len(line.split()) > 2 and line.split()[0].isdigit() and ":" in line.split()[2]]
+    assert rows == ["1", "2"]
+    assert main(["confirm", "1", "wasteful"]) == 0
     assert read_symptom(runs, "s2:p4").value == "wasteful"
 

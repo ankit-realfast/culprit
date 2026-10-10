@@ -72,8 +72,16 @@ def test_a_new_triage_keeps_queued_episodes_and_takes_the_new_score(tmp_path):
 def test_resolve_takes_a_queue_row_number(tmp_path):
     saved(tmp_path, "aaaa1111-x:p1", "bbbb2222-y:p2")
     assert resolve_episode_id(tmp_path, "#2") == "bbbb2222-y:p2"
-    with pytest.raises(UnknownEpisode, match="#3"):
+    with pytest.raises(UnknownEpisode, match="row 3"):
         resolve_episode_id(tmp_path, "#3")
+
+
+def test_resolve_takes_a_bare_row_number_because_shells_drop_an_unquoted_hash(tmp_path):
+    # `culprit diagnose #2` reaches culprit as `culprit diagnose` (# starts a comment), so rows are plain numbers.
+    saved(tmp_path, "1111aaaa-x:p1", "2222bbbb-y:p2")
+    assert resolve_episode_id(tmp_path, "2") == "2222bbbb-y:p2"
+    with pytest.raises(UnknownEpisode, match="row 3"):
+        resolve_episode_id(tmp_path, "3")
 
 
 def test_resolve_a_row_number_before_triage_is_not_ready(tmp_path):
