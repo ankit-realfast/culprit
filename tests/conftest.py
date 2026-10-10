@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -15,6 +16,22 @@ def write_session(tmp_path):
         return path
 
     return write
+
+
+@pytest.fixture(autouse=True)
+def no_real_claude(tmp_path, monkeypatch):
+    """Tests inject fakes; if one ever reaches the real `claude` binary, a stand-in first on PATH answers
+    instead, fails the call, and the test fails, so a missed fake can never spend money."""
+    stand_in = tmp_path / "no-real-claude"
+    stand_in.mkdir()
+    called = tmp_path / "real-claude-called"
+    script = stand_in / "claude"
+    script.write_text(f"#!/bin/sh\necho \"$@\" >> '{called}'\necho 'tests never run the real claude' >&2\nexit 1\n")
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{stand_in}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.delenv("CULPRIT_CLAUDE_BIN", raising=False)
+    yield
+    assert not called.exists(), "a test ran the real claude binary instead of a fake"
 
 
 @pytest.fixture(autouse=True)
