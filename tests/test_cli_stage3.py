@@ -43,3 +43,20 @@ def test_baseline_before_restore_names_restore(write_session, tmp_path, capsys):
     projects, runs = setup_episode(write_session, tmp_path, restored=False)
     assert cli.main(["baseline", "s1:p1", "--projects", str(projects), "--runs", str(runs)]) == 1
     assert "culprit restore" in capsys.readouterr().err
+
+
+def test_baseline_counts_what_the_episode_already_spent(write_session, tmp_path, monkeypatch):
+    import json
+    projects, runs = setup_episode(write_session, tmp_path)
+    old = episode_dir(runs, "s1:p1") / "replays" / "baseline" / "0"
+    old.mkdir(parents=True)
+    (old / "result.json").write_text(json.dumps({"cost_usd": 3.0}))
+    seen = {}
+
+    def fake_run_variant(variant, settings, **kwargs):
+        seen["spent"] = kwargs["budget"].spent_usd
+        return VariantOutcome(variant, 0, 1, 0.0)
+
+    monkeypatch.setattr(cli, "run_variant", fake_run_variant)
+    cli.main(["baseline", "s1:p1", "--projects", str(projects), "--runs", str(runs)])
+    assert seen["spent"] == 3.0

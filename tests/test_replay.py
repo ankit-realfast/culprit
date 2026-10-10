@@ -217,3 +217,11 @@ def test_a_timed_out_or_resultless_run_is_void(tmp_path):
                            run=FakeRun(claude_raises=subprocess.TimeoutExpired(cmd="claude", timeout=1)),
                            projects_dir=tmp_path / "p")
     assert "timed out" in timed_out.void_reason
+
+
+def test_a_run_whose_cost_is_unknown_is_charged_its_cap(tmp_path):
+    result = run_replay(settings(max_budget_usd=1.5), pristine_tree(tmp_path), tmp_path / "run0",
+                        tmp_path / ".culprit-replay-c", (),
+                        run=FakeRun(claude_raises=subprocess.TimeoutExpired(cmd="claude", timeout=1)),
+                        projects_dir=tmp_path / "p")
+    assert result.cost_usd == 1.5

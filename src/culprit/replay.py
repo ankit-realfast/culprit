@@ -183,8 +183,9 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
         (run_dir / "diff.patch").write_text(diff.stdout)
         if result_line is None:
             reason = "timed out" if exit_code == -1 else f"no result line (exit {exit_code})"
-            replay = ReplayResult(run_dir, exit_code, True, f"{reason}: {stderr[-300:]}", 0.0, 0, check_results,
-                                  void_reason=reason)
+            # the cost is unknown, so it is charged at the cap rather than as free
+            replay = ReplayResult(run_dir, exit_code, True, f"{reason}: {stderr[-300:]}", settings.max_budget_usd, 0,
+                                  check_results, void_reason=reason)
         else:
             replay = ReplayResult(run_dir, exit_code, bool(result_line.get("is_error")),
                                   str(result_line.get("result") or ""), float(result_line.get("total_cost_usd") or 0),

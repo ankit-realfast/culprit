@@ -149,3 +149,19 @@ def test_a_baseline_with_no_counted_runs_is_not_testable(write_session, tmp_path
 
     verdict = run_diagnose(write_session, tmp_path, run)
     assert verdict.cause == "unexplained" and "not testable" in verdict.evidence
+
+
+def test_drafting_calls_are_charged_to_the_episode_budget(write_session, tmp_path):
+    from culprit.experiment import stored_spend
+
+    def drafting_build(cause, base, **kwargs):
+        kwargs["ask"]("draft", {})
+        return VariantBuild(None, "untested")
+
+    (episode,) = episodes_from_session(write_session([human("fix", "p1", session_id="s1", cwd=str(tmp_path))]))
+    budget = EpisodeBudget(100.0)
+    diagnose(episode, CRITERION, Symptom.WRONG_RESULT, BASE, runs_dir=tmp_path / "runs", follow_ups=[],
+             env_script=None, n=5, budget=budget, run=scripted_run({"baseline": 0}), build=drafting_build,
+             ask=lambda prompt, schema: {})
+    assert budget.spent_usd == 5 * 0.5
+    assert stored_spend(episode_dir(tmp_path / "runs", "s1:p1")) == 5 * 0.5

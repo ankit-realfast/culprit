@@ -15,7 +15,7 @@ from culprit.criterion import Criterion, approve_criterion, draft_criterion, loa
 from culprit.diagnose import diagnose
 from culprit.eligibility import project_hooks, replay_blockers
 from culprit.episodes import Episode, episodes_from_session, session_files
-from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget, run_variant
+from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget, run_variant, stored_spend
 from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
 from culprit.replay import DEFAULT_REPLAY_BUDGET_USD, OriginalModified, SetupScriptFailed, baseline_settings
 from culprit.report import REPORT_FILE, collect, render_report
@@ -73,7 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
     baseline.add_argument("episode_id")
     _projects_and_runs(baseline)
     baseline.add_argument("--n", type=int, default=5)
-    baseline.add_argument("--budget", type=float, default=10.0, help="spend cap in USD for this command")
+    baseline.add_argument("--budget", type=float, default=10.0, help="spend cap in USD for this episode, counting what it already spent")
     baseline.add_argument("--replay-budget", type=float, default=DEFAULT_REPLAY_BUDGET_USD)
     baseline.set_defaults(handler=baseline_command)
 
@@ -87,7 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
     diagnose_parser.add_argument("episode_id")
     _projects_and_runs(diagnose_parser)
     diagnose_parser.add_argument("--n", type=int, default=5)
-    diagnose_parser.add_argument("--budget", type=float, default=40.0, help="spend cap in USD for this episode")
+    diagnose_parser.add_argument("--budget", type=float, default=40.0, help="spend cap in USD for this episode, counting what it already spent")
     diagnose_parser.add_argument("--replay-budget", type=float, default=DEFAULT_REPLAY_BUDGET_USD)
     diagnose_parser.set_defaults(handler=diagnose_command)
 
@@ -239,8 +239,9 @@ def ready_to_replay(args: argparse.Namespace) -> tuple[Episode, Criterion]:
 
 def baseline_command(args: argparse.Namespace) -> int:
     episode, criterion = ready_to_replay(args)
+    budget = EpisodeBudget(args.budget, spent_usd=stored_spend(episode_dir(args.runs, args.episode_id)))
     outcome = run_variant("baseline", baseline_settings(episode, args.replay_budget), n=args.n, episode=episode,
-                          runs_dir=args.runs, criterion=criterion, budget=EpisodeBudget(args.budget))
+                          runs_dir=args.runs, criterion=criterion, budget=budget)
     print(f"baseline: {outcome.passes} of {outcome.runs} passed, ${outcome.cost_usd:.2f} spent on replays")
     return 0
 
@@ -264,7 +265,7 @@ def diagnose_command(args: argparse.Namespace) -> int:
     verdict = diagnose(episode, criterion, symptom, baseline_settings(episode, args.replay_budget),
                        runs_dir=args.runs, follow_ups=follow_up_prompts(args.projects, args.episode_id),
                        env_script=env_script if env_script.exists() else None, n=args.n,
-                       budget=EpisodeBudget(args.budget))
+                       budget=EpisodeBudget(args.budget, spent_usd=stored_spend(episode_dir(args.runs, args.episode_id))))
     print(f"cause: {verdict.cause}\nevidence: {verdict.evidence}")
     if verdict.pair:
         print(f"together: {' + '.join(verdict.pair)}")

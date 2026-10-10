@@ -20,6 +20,7 @@ PRISTINE_DIR = "pristine"
 OUTCOME_FILE = "outcome.json"
 JUDGEMENT_FILE = "judgement.json"
 RESULT_FILE = "result.json"
+CALLS_FILE = "calls.json"
 MAX_VOID_RETRIES = 5  # extra attempts per variant when runs fail for reasons outside the agent
 
 
@@ -86,6 +87,27 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
     variant_dir.mkdir(parents=True, exist_ok=True)
     (variant_dir / OUTCOME_FILE).write_text(json.dumps(asdict(outcome), indent=2))
     return outcome
+
+
+def stored_spend(folder: Path) -> float:
+    """Everything an episode (or selftest) folder has already spent: replays, model judgements, other calls."""
+    total = 0.0
+    for run_dir in (folder / REPLAYS_DIR).glob("*/*"):
+        if (run_dir / RESULT_FILE).is_file():
+            total += float(json.loads((run_dir / RESULT_FILE).read_text()).get("cost_usd") or 0)
+        if (run_dir / JUDGEMENT_FILE).is_file() and json.loads((run_dir / JUDGEMENT_FILE).read_text()).get("by") == "model":
+            total += JUDGE_CALL_CAP_USD
+    if (folder / CALLS_FILE).is_file():
+        total += float(json.loads((folder / CALLS_FILE).read_text()).get("usd") or 0)
+    return round(total, 4)
+
+
+def record_call_spend(folder: Path, usd: float) -> None:
+    """Charge a drafting or leak-check call to the folder, at its cap (ask_claude does not report its cost)."""
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / CALLS_FILE
+    spent = float(json.loads(path.read_text()).get("usd") or 0) if path.is_file() else 0.0
+    path.write_text(json.dumps({"usd": round(spent + usd, 4)}))
 
 
 def load_outcome(folder: Path, variant: str) -> VariantOutcome | None:

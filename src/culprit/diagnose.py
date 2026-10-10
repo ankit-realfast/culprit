@@ -13,7 +13,9 @@ from pathlib import Path
 from culprit.claude import ask_claude
 from culprit.criterion import Criterion
 from culprit.episodes import Episode
-from culprit.experiment import PRISTINE_DIR, EpisodeBudget, VariantOutcome, load_outcome, run_variant
+from culprit.experiment import (PRISTINE_DIR, EpisodeBudget, VariantOutcome, load_outcome, record_call_spend,
+                                run_variant)
+from culprit.judge import JUDGE_CALL_CAP_USD
 from culprit.oracles import build_variant, combine
 from culprit.replay import ReplaySettings, settings_from_json, settings_to_json
 from culprit.store import episode_dir
@@ -33,6 +35,12 @@ def diagnose(episode: Episode, criterion: Criterion, symptom: Symptom, base: Rep
     pristine = episode_dir(runs_dir, episode.episode_id) / PRISTINE_DIR
     outcomes: dict[str, VariantOutcome] = {}
     untested: dict[str, str] = {}
+
+    def charged_ask(prompt: str, schema: dict) -> dict:
+        budget.ensure_room(JUDGE_CALL_CAP_USD)
+        budget.spend(JUDGE_CALL_CAP_USD)
+        record_call_spend(folder, JUDGE_CALL_CAP_USD)
+        return ask(prompt, schema)
 
     def measured(name: str, settings: ReplaySettings) -> VariantOutcome:
         saved = load_outcome(folder, name)
@@ -63,7 +71,7 @@ def diagnose(episode: Episode, criterion: Criterion, symptom: Symptom, base: Rep
     for position, cause in enumerate(ORACLE_ORDER):
         settings = _oracle(folder, cause, base, untested, lambda c=cause: build(
             c, base, episode=episode, follow_ups=follow_ups, criterion=criterion, symptom=symptom,
-            pristine=pristine, env_script=env_script, ask=ask))
+            pristine=pristine, env_script=env_script, ask=charged_ask))
         if settings is None:
             continue
         built[cause] = settings

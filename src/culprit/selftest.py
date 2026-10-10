@@ -13,7 +13,7 @@ from pathlib import Path
 from culprit.criterion import Criterion
 from culprit.diagnose import diagnose
 from culprit.episodes import Episode
-from culprit.experiment import EpisodeBudget, load_outcome
+from culprit.experiment import EpisodeBudget, load_outcome, stored_spend
 from culprit.replay import ReplaySettings
 from culprit.store import episode_dir
 from culprit.taxonomy import Cause, Symptom
@@ -88,10 +88,11 @@ def run_selftest(episode: Episode, criterion: Criterion, base: ReplaySettings, *
     results = []
     for fault in faults:
         planted_base, planted_criterion = plant(fault, base, criterion)
+        out_dir = selftest_dir(runs_dir, episode.episode_id, fault)
         verdict = diagnose_fn(episode, planted_criterion, Symptom.WRONG_RESULT, planted_base, runs_dir=runs_dir,
                               follow_ups=follow_ups, env_script=None, n=n,
-                              budget=EpisodeBudget(budget_per_fault),
-                              out_dir=selftest_dir(runs_dir, episode.episode_id, fault))
+                              budget=EpisodeBudget(budget_per_fault, spent_usd=stored_spend(out_dir)),
+                              out_dir=out_dir)
         results.append(SelftestResult(fault.value, EXPECTED[fault].value, verdict.cause))
     return results
 

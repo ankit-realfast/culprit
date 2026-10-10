@@ -98,3 +98,15 @@ def test_runs_already_paid_for_are_reused_after_a_stop(write_session, tmp_path):
     assert (outcome.passes, outcome.runs) == (1, 2)
     assert len(replay.calls) == 1
     assert outcome.cost_usd == 0.55
+
+
+def test_stored_spend_counts_replays_model_judgements_and_other_calls(tmp_path):
+    from culprit.experiment import record_call_spend, stored_spend
+    for i, (cost, by) in enumerate([(1.25, "model"), (0.5, "check")]):
+        run_dir = tmp_path / "replays" / "baseline" / str(i)
+        run_dir.mkdir(parents=True)
+        (run_dir / "result.json").write_text(json.dumps({"cost_usd": cost}))
+        (run_dir / "judgement.json").write_text(json.dumps({"passed": False, "reason": "r", "by": by}))
+    record_call_spend(tmp_path, 0.5)
+    record_call_spend(tmp_path, 0.5)
+    assert stored_spend(tmp_path) == 1.25 + 0.5 + 0.5 + 1.0
