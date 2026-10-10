@@ -3436,3 +3436,1160 @@ no MCP servers and the replay ran beside the original directory.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 git status --short   # must print nothing
 ```
+
+---
+
+## Stage 4 — Oracles and verdict
+
+**Goal:** `culprit diagnose <id>` builds one variant per cause, rejects any that leak the answer, replays each N times, and names the episode's cause by the spec's first-match order — including Not reproducible, Multi-cause (via the pair test) and Unexplained — with every untested cause and its reason recorded.
+
+**Architecture:** `taxonomy` gains `Cause`; the variant names *are* cause values, so one concept has one name. `stats` holds the one-sided Fisher exact test. `leak` asks one schema-checked question per drafted text. `oracles` builds each variant as the baseline settings with that cause's fields replaced, and `combine` merges variants for the pair test. `verdict` owns the decision rules and the stored verdict; `diagnose` runs the sequence, stopping at the first cause that beats the baseline and resuming from saved variants and outcomes after a budget stop.
+
+**Spec:** §1 *Cause*; §3 *The oracles, concretely* and *What "passes clearly" means*; §4 guard 1 (leak check).
+
+### Global Constraints
+
+- Cause values and order, exactly: `misjudged`, `not-reproducible`, `task`, `environment`, `agent-setup`, `harness`, `model`, `multi-cause`, `unexplained`.
+- Oracle order: task, environment, agent-setup, harness, model. Oracle model: `claude-fable-5-1`.
+- A variant beats the baseline when the one-sided Fisher exact p < 0.05. Not reproducible: baseline passes > runs / 2 (3 of 5).
+- Fields each oracle may change, and no others: task → `prompt`; environment → `setup_script`; agent-setup → `append_system_prompt`; harness → `tools`, `disallowed_tools`, `context_preamble`, `max_budget_usd`; model → `model`.
+- Harness oracle: `tools="default"`, `disallowed_tools=()` (the safety denies still apply, they live in `replay_command`), the files the episode read or edited preloaded up to 100,000 characters, double the replay cap.
+- A drafted task or agent-setup text gets at most 2 attempts; two leaks make that cause untested.
+- `diagnose` default spend cap: $40 per episode.
+
+### Review Focus
+
+1. **A budget stop in the middle of a diagnosis** must keep everything already paid for: re-running `diagnose` reuses saved variants and outcomes instead of re-drafting and re-running them. Pinned in Task 4.4 (`test_a_rerun_reuses_saved_variants_and_outcomes`).
+2. **An episode the human marked `no-failure`** must get the verdict Misjudged without a single replay. Pinned in Task 4.4 (`test_a_rejected_candidate_is_misjudged_without_replays`).
+3. **An episode that already ran on Fable** must report the Model cause as untested, not test Fable against Fable. Pinned in Task 4.3 (`test_the_model_oracle_is_untested_for_an_episode_already_on_fable`).
+4. **A leaked draft must never be replayed.** Pinned in Task 4.3 (`test_two_leaks_make_the_cause_untested`).
+5. **Only one tested oracle and it failed** — the pair test cannot run, so the verdict is Unexplained, not a crash on an empty pair list. Pinned in Task 4.4 (`test_one_tested_oracle_that_fails_is_unexplained`).
+
+### File Structure
+
+```
+src/culprit/
+├── taxonomy.py      # MODIFY: add Cause, ORACLE_ORDER
+├── stats.py         # fisher_one_sided
+├── leak.py          # LeakCheck, check_leak
+├── sandbox.py       # MODIFY: rename _target_inside → target_inside (public; oracles reuse it)
+├── replay.py        # MODIFY: add settings_to_json, settings_from_json
+├── oracles.py       # VariantBuild, build_variant, harness_context, combine
+├── verdict.py       # Verdict, beats, reproducible, first_beating, save_verdict, load_verdict
+├── diagnose.py      # diagnose()
+└── cli.py           # MODIFY: add env-fix, diagnose
+tests/
+├── test_stats.py
+├── test_leak.py
+├── test_oracles.py
+├── test_diagnose.py
+└── test_cli_stage4.py
+```
+
+---
+
+#### Task 4.1: The cause axis and the pass test
+
+**Files:**
+- Modify: `src/culprit/taxonomy.py`
+- Create: `src/culprit/stats.py`
+- Test: `tests/test_stats.py`
+
+**Interfaces:**
+- Produces:
+  - `class Cause(StrEnum)` with `MISJUDGED = "misjudged"`, `NOT_REPRODUCIBLE = "not-reproducible"`, `TASK = "task"`, `ENVIRONMENT = "environment"`, `AGENT_SETUP = "agent-setup"`, `HARNESS = "harness"`, `MODEL = "model"`, `MULTI_CAUSE = "multi-cause"`, `UNEXPLAINED = "unexplained"`.
+  - `ORACLE_ORDER: tuple[Cause, ...] = (Cause.TASK, Cause.ENVIRONMENT, Cause.AGENT_SETUP, Cause.HARNESS, Cause.MODEL)`
+  - `fisher_one_sided(variant_passes: int, variant_runs: int, baseline_passes: int, baseline_runs: int) -> float`
+
+- [ ] **Step 1: Write the failing tests**
+
+`tests/test_stats.py`:
+
+```python
+import math
+
+import pytest
+
+from culprit.stats import fisher_one_sided
+from culprit.taxonomy import ORACLE_ORDER, Cause
+
+
+def test_causes_are_the_spec_values_in_order():
+    assert [c.value for c in Cause] == ["misjudged", "not-reproducible", "task", "environment", "agent-setup",
+                                         "harness", "model", "multi-cause", "unexplained"]
+    assert [c.value for c in ORACLE_ORDER] == ["task", "environment", "agent-setup", "harness", "model"]
+
+
+@pytest.mark.parametrize("variant, baseline, expected", [
+    (4, 0, 6 / 252),    # the spec's example: 4/5 against 0/5 clears p < 0.05
+    (3, 0, 21 / 252),   # 3/5 against 0/5 does not
+    (5, 0, 1 / 252),
+    (5, 1, 6 / 252),
+    (0, 0, 1.0),
+])
+def test_fisher_one_sided_matches_the_hypergeometric_tail(variant, baseline, expected):
+    assert fisher_one_sided(variant, 5, baseline, 5) == pytest.approx(expected)
+
+
+def test_fisher_one_sided_for_equal_rates_is_large():
+    expected = sum(math.comb(4, k) * math.comb(6, 5 - k) for k in range(2, 5)) / math.comb(10, 5)
+    assert fisher_one_sided(2, 5, 2, 5) == pytest.approx(expected)
+    assert expected > 0.5
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `uv run pytest tests/test_stats.py -v`
+Expected: FAIL — `ImportError: cannot import name 'ORACLE_ORDER' from 'culprit.taxonomy'`
+
+- [ ] **Step 3: Write the implementation**
+
+Append to `src/culprit/taxonomy.py`:
+
+```python
+class Cause(StrEnum):
+    """The cause axis: what to change, cheapest fix first; the first cause proven wins."""
+
+    MISJUDGED = "misjudged"
+    NOT_REPRODUCIBLE = "not-reproducible"
+    TASK = "task"
+    ENVIRONMENT = "environment"
+    AGENT_SETUP = "agent-setup"
+    HARNESS = "harness"
+    MODEL = "model"
+    MULTI_CAUSE = "multi-cause"
+    UNEXPLAINED = "unexplained"
+
+
+ORACLE_ORDER = (Cause.TASK, Cause.ENVIRONMENT, Cause.AGENT_SETUP, Cause.HARNESS, Cause.MODEL)
+```
+
+`src/culprit/stats.py`:
+
+```python
+"""The test that decides whether a variant passes clearly more often than the baseline."""
+
+from __future__ import annotations
+
+from math import comb
+
+
+def fisher_one_sided(variant_passes: int, variant_runs: int, baseline_passes: int, baseline_runs: int) -> float:
+    """P(the variant passes at least this often | both pass at the same rate): the hypergeometric upper tail."""
+    total_passes = variant_passes + baseline_passes
+    total_runs = variant_runs + baseline_runs
+    tail = sum(
+        comb(total_passes, k) * comb(total_runs - total_passes, variant_runs - k)
+        for k in range(variant_passes, min(total_passes, variant_runs) + 1)
+    )
+    return tail / comb(total_runs, variant_runs)
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `uv run pytest -v`
+Expected: 82 passed (75 plus 7: one taxonomy test, five parametrised cases, one equal-rates test).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/culprit/taxonomy.py src/culprit/stats.py tests/test_stats.py
+git commit -m "Add the cause axis in the spec's order and the one-sided Fisher exact test
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git status --short   # must print nothing
+```
+
+---
+
+#### Task 4.2: Reject a drafted text that leaks the answer
+
+**Files:**
+- Create: `src/culprit/leak.py`
+- Test: `tests/test_leak.py`
+
+**Interfaces:**
+- Consumes: `Ask`, `ask_claude` (claude).
+- Produces:
+  - `LEAK_SCHEMA: dict`
+  - `@dataclass(frozen=True) class LeakCheck` with `leaks: bool`, `evidence: str`.
+  - `leak_prompt(drafted_text: str, original_prompt: str, follow_ups: list[str]) -> str`
+  - `check_leak(drafted_text: str, original_prompt: str, follow_ups: list[str], ask: Ask = ask_claude) -> LeakCheck`
+
+- [ ] **Step 1: Write the failing tests**
+
+`tests/test_leak.py`:
+
+```python
+from culprit.leak import LeakCheck, check_leak, leak_prompt
+from fakes import FakeAsk
+
+
+def test_the_prompt_carries_the_draft_the_original_and_the_later_messages():
+    prompt = leak_prompt("Fix login; empty passwords must be rejected.", "fix login",
+                         ["no — the bug is in validate() in auth.py"])
+    for expected in ["Fix login; empty passwords must be rejected.", "fix login", "validate() in auth.py",
+                     "Stating the outcome the person wanted is allowed"]:
+        assert expected in prompt
+
+
+def test_the_answer_becomes_a_leak_check():
+    ask = FakeAsk({"leaks": True, "evidence": "names validate() in auth.py"})
+    assert check_leak("Fix validate() in auth.py", "fix login", ["it's validate() in auth.py"], ask=ask) == \
+        LeakCheck(True, "names validate() in auth.py")
+    assert ask.calls[0][1]["required"] == ["leaks", "evidence"]
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `uv run pytest tests/test_leak.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'culprit.leak'`
+
+- [ ] **Step 3: Write the implementation**
+
+`src/culprit/leak.py`:
+
+```python
+"""The leak check: an oracle may add only what its actor could have known before starting.
+
+A drafted task or instruction that carries a detail found only in the person's later messages would
+make the replay pass for the wrong reason, so it is rejected before it runs.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from culprit.claude import Ask, ask_claude
+
+LEAK_SCHEMA = {
+    "type": "object",
+    "properties": {"leaks": {"type": "boolean"}, "evidence": {"type": "string"}},
+    "required": ["leaks", "evidence"],
+}
+
+
+@dataclass(frozen=True)
+class LeakCheck:
+    leaks: bool
+    evidence: str
+
+
+def leak_prompt(drafted_text: str, original_prompt: str, follow_ups: list[str]) -> str:
+    later = "\n".join(f"<message>{text}</message>" for text in follow_ups) or "<message>(none)</message>"
+    return f"""A drafted text will be given to a coding agent before it starts a task. Decide whether the draft
+leaks the answer.
+
+The original request:
+<request>{original_prompt}</request>
+
+What the person said later, after seeing the agent's attempt:
+<later>
+{later}
+</later>
+
+The draft:
+<draft>{drafted_text}</draft>
+
+leaks is true if the draft contains a specific detail that appears only in the later messages and that
+the agent could not have known from the original request: a named fix, root cause, file, function,
+value or command. Stating the outcome the person wanted is allowed. evidence quotes the leaked detail,
+or says "none"."""
+
+
+def check_leak(drafted_text: str, original_prompt: str, follow_ups: list[str], ask: Ask = ask_claude) -> LeakCheck:
+    answer = ask(leak_prompt(drafted_text, original_prompt, follow_ups), LEAK_SCHEMA)
+    return LeakCheck(bool(answer["leaks"]), str(answer["evidence"]))
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `uv run pytest -v`
+Expected: 84 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/culprit/leak.py tests/test_leak.py
+git commit -m "Reject an oracle draft that carries a detail found only in the person's later messages
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git status --short   # must print nothing
+```
+
+---
+
+#### Task 4.3: Build each oracle variant
+
+**Files:**
+- Modify: `src/culprit/sandbox.py` (rename `_target_inside` → `target_inside` at its definition and its two call sites), `src/culprit/replay.py` (append `settings_to_json`, `settings_from_json`)
+- Create: `src/culprit/oracles.py`
+- Test: `tests/test_oracles.py`
+
+**Interfaces:**
+- Consumes: `Episode`, `tool_uses` (episodes); `Criterion` (criterion); `ReplaySettings` (replay); `target_inside` (sandbox); `check_leak` (leak); `Ask`, `ask_claude` (claude); `Cause`, `Symptom` (taxonomy).
+- Produces:
+  - In `replay.py`: `settings_to_json(settings: ReplaySettings) -> dict` and `settings_from_json(data: dict) -> ReplaySettings` (`setup_script` stored as a string or null; tuples as lists).
+  - `ORACLE_MODEL = "claude-fable-5-1"`, `MAX_CONTEXT_CHARS = 100_000`, `MAX_DRAFT_ATTEMPTS = 2`, `FILE_TOOLS: tuple[str, ...]`, `REWRITE_SCHEMA: dict`
+  - `VARIANT_FIELDS: dict[Cause, tuple[str, ...]]`
+  - `@dataclass(frozen=True) class VariantBuild` with `settings: ReplaySettings | None`, `untested_reason: str | None`.
+  - `task_rewrite_prompt(episode: Episode, criterion: Criterion, rejected_evidence: str | None) -> str`
+  - `agent_instructions_prompt(criterion: Criterion, symptom: Symptom, rejected_evidence: str | None) -> str`
+  - `harness_context(episode: Episode, pristine: Path) -> str`
+  - `build_variant(cause: Cause, base: ReplaySettings, *, episode: Episode, follow_ups: list[str], criterion: Criterion, symptom: Symptom, pristine: Path, env_script: Path | None, ask: Ask = ask_claude) -> VariantBuild`
+  - `combine(base: ReplaySettings, variants: dict[Cause, ReplaySettings]) -> ReplaySettings`
+
+- [ ] **Step 1: Rename the sandbox helper**
+
+In `src/culprit/sandbox.py`, rename `_target_inside` to `target_inside` (definition plus the calls in `restore` and `check_restore`).
+
+Run: `uv run pytest tests/test_sandbox.py -v`
+Expected: 6 passed (behaviour unchanged).
+
+- [ ] **Step 2: Write the failing tests**
+
+`tests/test_oracles.py`:
+
+```python
+from dataclasses import replace
+from pathlib import Path
+
+from culprit.criterion import Criterion
+from culprit.episodes import episodes_from_session
+from culprit.oracles import (MAX_CONTEXT_CHARS, ORACLE_MODEL, VariantBuild, build_variant, combine,
+                             harness_context)
+from culprit.replay import ReplaySettings, settings_from_json, settings_to_json
+from culprit.taxonomy import Cause, Symptom
+from fakes import FakeAsk
+from records import human, tool_use
+
+CRITERION = Criterion("empty passwords are rejected with a message", (), ("weaken validation",), approved=True)
+BASE = ReplaySettings(prompt="fix login", model="claude-opus-5", permission_mode="auto", max_budget_usd=2.0)
+
+
+def episode_with(write_session, repo, *uses):
+    (episode,) = episodes_from_session(write_session([human("fix login", "p1", cwd=str(repo)), *uses]))
+    return episode
+
+
+def build(cause, episode, tmp_path, ask=None, env_script=None, base=BASE):
+    return build_variant(cause, base, episode=episode, follow_ups=["still lets empty passwords in"],
+                         criterion=CRITERION, symptom=Symptom.WRONG_RESULT, pristine=tmp_path / "pristine",
+                         env_script=env_script, ask=ask or FakeAsk())
+
+
+def test_settings_round_trip_through_json(tmp_path):
+    settings = replace(BASE, disallowed_tools=("WebFetch",), setup_script=tmp_path / "fix.sh")
+    assert settings_from_json(settings_to_json(settings)) == settings
+
+
+def test_the_task_oracle_rewrites_only_the_prompt_after_a_clean_leak_check(write_session, tmp_path):
+    ask = FakeAsk({"text": "Fix login so empty passwords are rejected with a message."},
+                  {"leaks": False, "evidence": "none"})
+    built = build(Cause.TASK, episode_with(write_session, tmp_path), tmp_path, ask=ask)
+    assert built == VariantBuild(replace(BASE, prompt="Fix login so empty passwords are rejected with a message."), None)
+    assert "empty passwords are rejected" in ask.calls[0][0]
+    assert "still lets empty passwords in" in ask.calls[1][0]
+
+
+def test_a_leaked_draft_is_redrafted_with_the_evidence(write_session, tmp_path):
+    ask = FakeAsk({"text": "Fix validate() in auth.py"}, {"leaks": True, "evidence": "names validate()"},
+                  {"text": "Fix login so empty passwords are rejected."}, {"leaks": False, "evidence": "none"})
+    built = build(Cause.TASK, episode_with(write_session, tmp_path), tmp_path, ask=ask)
+    assert built.settings.prompt == "Fix login so empty passwords are rejected."
+    assert "names validate()" in ask.calls[2][0]
+
+
+def test_two_leaks_make_the_cause_untested(write_session, tmp_path):
+    ask = FakeAsk({"text": "a"}, {"leaks": True, "evidence": "x"}, {"text": "b"}, {"leaks": True, "evidence": "y"})
+    built = build(Cause.AGENT_SETUP, episode_with(write_session, tmp_path), tmp_path, ask=ask)
+    assert built.settings is None
+    assert "leak" in built.untested_reason
+
+
+def test_the_agent_setup_oracle_replaces_only_the_appended_instructions(write_session, tmp_path):
+    ask = FakeAsk({"text": "Verify every change against its stated outcome before reporting done."},
+                  {"leaks": False, "evidence": "none"})
+    built = build(Cause.AGENT_SETUP, episode_with(write_session, tmp_path), tmp_path, ask=ask)
+    assert built.settings == replace(BASE, append_system_prompt="Verify every change against its stated outcome before reporting done.")
+    assert "CLAUDE.md" in ask.calls[0][0]
+
+
+def test_the_environment_oracle_needs_a_human_script(write_session, tmp_path):
+    episode = episode_with(write_session, tmp_path)
+    assert build(Cause.ENVIRONMENT, episode, tmp_path).untested_reason.startswith("no environment fix")
+    script = tmp_path / "env-fix.sh"
+    script.write_text("true\n")
+    assert build(Cause.ENVIRONMENT, episode, tmp_path, env_script=script).settings == replace(BASE, setup_script=script)
+
+
+def test_the_model_oracle_swaps_in_fable(write_session, tmp_path):
+    assert build(Cause.MODEL, episode_with(write_session, tmp_path), tmp_path).settings == replace(BASE, model=ORACLE_MODEL)
+
+
+def test_the_model_oracle_is_untested_for_an_episode_already_on_fable(write_session, tmp_path):
+    built = build(Cause.MODEL, episode_with(write_session, tmp_path), tmp_path, base=replace(BASE, model="claude-fable-5"))
+    assert built.settings is None
+    assert "already ran on Fable" in built.untested_reason
+
+
+def test_the_harness_oracle_lifts_restrictions_preloads_files_and_doubles_the_cap(write_session, tmp_path):
+    repo = tmp_path / "repo"
+    pristine = tmp_path / "pristine"
+    (pristine / "src").mkdir(parents=True)
+    (pristine / "src" / "auth.py").write_text("def validate(): ...\n")
+    episode = episode_with(write_session, repo, tool_use("Read", file_path=str(repo / "src" / "auth.py")),
+                           tool_use("Edit", file_path="src/auth.py"), tool_use("Read", file_path="/etc/hosts"))
+    base = replace(BASE, tools="Read", disallowed_tools=("Edit",))
+    built = build_variant(Cause.HARNESS, base, episode=episode, follow_ups=[], criterion=CRITERION,
+                          symptom=Symptom.WRONG_RESULT, pristine=pristine, env_script=None, ask=FakeAsk())
+    s = built.settings
+    assert (s.tools, s.disallowed_tools, s.max_budget_usd, s.prompt) == ("default", (), 4.0, "fix login")
+    assert s.context_preamble.count("=== src/auth.py ===") == 1
+    assert "def validate()" in s.context_preamble
+    assert "hosts" not in s.context_preamble
+
+
+def test_harness_context_stops_at_the_cap(write_session, tmp_path):
+    repo = tmp_path / "repo"
+    pristine = tmp_path / "pristine"
+    pristine.mkdir()
+    (pristine / "big.txt").write_text("y" * (MAX_CONTEXT_CHARS + 10))
+    (pristine / "small.txt").write_text("small\n")
+    episode = episode_with(write_session, repo, tool_use("Read", file_path="big.txt"),
+                           tool_use("Read", file_path="small.txt"))
+    context = harness_context(episode, pristine)
+    assert "big.txt" not in context and "small.txt" in context
+
+
+def test_combine_takes_each_causes_fields_from_its_variant():
+    combined = combine(BASE, {Cause.TASK: replace(BASE, prompt="clear"), Cause.MODEL: replace(BASE, model=ORACLE_MODEL),
+                              Cause.HARNESS: replace(BASE, tools="default", context_preamble="FILES", max_budget_usd=4.0)})
+    assert (combined.prompt, combined.model, combined.tools, combined.context_preamble, combined.max_budget_usd) == \
+        ("clear", ORACLE_MODEL, "default", "FILES", 4.0)
+    assert combined.append_system_prompt is None
+```
+
+- [ ] **Step 3: Run the tests to verify they fail**
+
+Run: `uv run pytest tests/test_oracles.py -v`
+Expected: FAIL — `ImportError: cannot import name 'settings_from_json' from 'culprit.replay'`
+
+- [ ] **Step 4: Write the implementation**
+
+Append to `src/culprit/replay.py`:
+
+```python
+def settings_to_json(settings: ReplaySettings) -> dict:
+    data = asdict(settings)
+    data["setup_script"] = str(settings.setup_script) if settings.setup_script else None
+    data["disallowed_tools"] = list(settings.disallowed_tools)
+    return data
+
+
+def settings_from_json(data: dict) -> ReplaySettings:
+    fields = dict(data)
+    fields["setup_script"] = Path(fields["setup_script"]) if fields.get("setup_script") else None
+    fields["disallowed_tools"] = tuple(fields.get("disallowed_tools") or ())
+    return ReplaySettings(**fields)
+```
+
+`src/culprit/oracles.py`:
+
+```python
+"""The oracles: for each cause, the baseline with only that cause's fields made as good as they can be.
+
+A variant that passes where the baseline failed proves its cause. Each oracle changes only the fields
+VARIANT_FIELDS names for it, and a drafted text runs only after the leak check clears it.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from pathlib import Path
+
+from culprit.claude import Ask, ask_claude
+from culprit.criterion import Criterion
+from culprit.episodes import Episode, tool_uses
+from culprit.leak import check_leak
+from culprit.replay import ReplaySettings
+from culprit.sandbox import target_inside
+from culprit.taxonomy import Cause, Symptom
+
+ORACLE_MODEL = "claude-fable-5-1"
+FABLE_PREFIX = "claude-fable"
+MAX_CONTEXT_CHARS = 100_000
+MAX_DRAFT_ATTEMPTS = 2
+HARNESS_BUDGET_MULTIPLIER = 2
+FILE_TOOLS = ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit")
+REWRITE_SCHEMA = {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}
+
+VARIANT_FIELDS: dict[Cause, tuple[str, ...]] = {
+    Cause.TASK: ("prompt",),
+    Cause.ENVIRONMENT: ("setup_script",),
+    Cause.AGENT_SETUP: ("append_system_prompt",),
+    Cause.HARNESS: ("tools", "disallowed_tools", "context_preamble", "max_budget_usd"),
+    Cause.MODEL: ("model",),
+}
+
+SYMPTOM_DESCRIPTIONS = {
+    Symptom.STOPPED_SHORT: "the agent stopped before delivering what was asked",
+    Symptom.WRONG_RESULT: "the agent delivered a result that was wrong",
+    Symptom.IGNORED_INSTRUCTIONS: "the agent broke a rule or instruction it had been given",
+    Symptom.WASTEFUL: "the agent reached the result but wasted time, tokens or effort getting there",
+}
+
+
+@dataclass(frozen=True)
+class VariantBuild:
+    settings: ReplaySettings | None
+    untested_reason: str | None
+
+
+def task_rewrite_prompt(episode: Episode, criterion: Criterion, rejected_evidence: str | None) -> str:
+    must_not = "; ".join(criterion.must_not) or "nothing listed"
+    retry = (f"\nA previous draft was rejected because it leaked this detail: {rejected_evidence}. Leave it out."
+             if rejected_evidence else "")
+    return f"""Rewrite one request a person gave a coding agent so that it states its scope and success criterion
+clearly, keeping the person's intent and voice.
+
+The original request:
+<request>{episode.prompt_text}</request>
+
+What success means, approved by the person: {criterion.success_means}
+A correct attempt must not: {must_not}
+
+Add only what the agent could legitimately know before starting: the outcome wanted and what is out of
+scope. Do not name the fix, the cause, the file to change, or any detail learned later.{retry}
+Return the rewritten request as text."""
+
+
+def agent_instructions_prompt(criterion: Criterion, symptom: Symptom, rejected_evidence: str | None) -> str:
+    retry = (f"\nA previous draft was rejected because it leaked this detail: {rejected_evidence}. Leave it out."
+             if rejected_evidence else "")
+    return f"""Write standing instructions for a coding agent, the kind a team keeps in CLAUDE.md, that would have
+prevented this kind of failure: {SYMPTOM_DESCRIPTIONS[symptom]}.
+
+For context only, success on the current task meant: {criterion.success_means}
+
+The instructions must be general working rules — how to scope, verify and report — true for any task in
+this repository. They must not mention this task's specifics, files, values or fix. At most 12 lines.{retry}
+Return the instructions as text."""
+
+
+def harness_context(episode: Episode, pristine: Path) -> str:
+    cwd = Path(episode.cwd)
+    seen: list[str] = []
+    for use in tool_uses(episode):
+        if use.get("name") in FILE_TOOLS:
+            path = (use.get("input") or {}).get("file_path") or (use.get("input") or {}).get("notebook_path")
+            if path and path not in seen:
+                seen.append(path)
+    blocks: list[str] = []
+    used = 0
+    shown: set[Path] = set()
+    for path in seen:
+        target = target_inside(cwd, pristine, path)
+        if target is None or target in shown or not target.is_file():
+            continue
+        try:
+            text = target.read_text()
+        except UnicodeDecodeError:
+            continue  # binary files are not context
+        block = f"=== {target.relative_to(pristine.resolve())} ===\n{text}\n"
+        if used + len(block) > MAX_CONTEXT_CHARS:
+            continue
+        shown.add(target)
+        blocks.append(block)
+        used += len(block)
+    if not blocks:
+        return ""
+    return "These files from the working directory are relevant to the request below:\n\n" + "".join(blocks)
+
+
+def build_variant(cause: Cause, base: ReplaySettings, *, episode: Episode, follow_ups: list[str],
+                  criterion: Criterion, symptom: Symptom, pristine: Path, env_script: Path | None,
+                  ask: Ask = ask_claude) -> VariantBuild:
+    if cause is Cause.TASK:
+        return _drafted(base, "prompt", lambda evidence: task_rewrite_prompt(episode, criterion, evidence),
+                        episode, follow_ups, ask)
+    if cause is Cause.AGENT_SETUP:
+        return _drafted(base, "append_system_prompt",
+                        lambda evidence: agent_instructions_prompt(criterion, symptom, evidence),
+                        episode, follow_ups, ask)
+    if cause is Cause.ENVIRONMENT:
+        if env_script is None:
+            return VariantBuild(None, "no environment fix supplied (culprit env-fix)")
+        return VariantBuild(replace(base, setup_script=env_script), None)
+    if cause is Cause.HARNESS:
+        context = harness_context(episode, pristine) or None
+        return VariantBuild(replace(base, tools="default", disallowed_tools=(), context_preamble=context,
+                                    max_budget_usd=base.max_budget_usd * HARNESS_BUDGET_MULTIPLIER), None)
+    if cause is Cause.MODEL:
+        if (base.model or "").startswith(FABLE_PREFIX):
+            return VariantBuild(None, "the episode already ran on Fable, the strongest model")
+        return VariantBuild(replace(base, model=ORACLE_MODEL), None)
+    raise ValueError(f"{cause} has no oracle")
+
+
+def combine(base: ReplaySettings, variants: dict[Cause, ReplaySettings]) -> ReplaySettings:
+    changes = {field: getattr(settings, field) for cause, settings in variants.items() for field in VARIANT_FIELDS[cause]}
+    return replace(base, **changes)
+
+
+def _drafted(base: ReplaySettings, field: str, prompt_for, episode: Episode, follow_ups: list[str],
+             ask: Ask) -> VariantBuild:
+    evidence = None
+    for _ in range(MAX_DRAFT_ATTEMPTS):
+        text = str(ask(prompt_for(evidence), REWRITE_SCHEMA)["text"]).strip()
+        verdict = check_leak(text, episode.prompt_text, follow_ups, ask=ask)
+        if not verdict.leaks:
+            return VariantBuild(replace(base, **{field: text}), None)
+        evidence = verdict.evidence
+    return VariantBuild(None, f"the leak check rejected {MAX_DRAFT_ATTEMPTS} drafts (last: {evidence})")
+```
+
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run: `uv run pytest -v`
+Expected: 95 passed.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/culprit/sandbox.py src/culprit/replay.py src/culprit/oracles.py tests/test_oracles.py
+git commit -m "Build one oracle variant per cause, each changing only its own fields
+
+Task and agent-setup drafts run only after the leak check clears them (two
+attempts); environment needs a human script; harness lifts restrictions,
+preloads the files the episode touched and doubles the cap; model swaps in
+Fable unless the episode already ran on it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git status --short   # must print nothing
+```
+
+---
+
+#### Task 4.4: Decide the cause — first match, pair test, resumable
+
+**Files:**
+- Create: `src/culprit/verdict.py`, `src/culprit/diagnose.py`
+- Test: `tests/test_diagnose.py`
+
+**Interfaces:**
+- Consumes: `VariantOutcome`, `run_variant`, `load_outcome`, `EpisodeBudget`, `PRISTINE_DIR` (experiment); `ReplaySettings`, `settings_to_json`, `settings_from_json` (replay); `VariantBuild`, `build_variant`, `combine` (oracles); `fisher_one_sided` (stats); `Cause`, `ORACLE_ORDER`, `Symptom` (taxonomy); `episode_dir` (store).
+- Produces:
+  - In `verdict.py`: `SIGNIFICANCE = 0.05`, `VERDICT_FILE = "verdict.json"`; `beats(variant: VariantOutcome, baseline: VariantOutcome) -> bool`; `reproducible(baseline: VariantOutcome) -> bool`; `@dataclass(frozen=True) class Verdict` with `episode_id: str`, `symptom: str`, `cause: str`, `evidence: str`, `outcomes: dict[str, dict]`, `untested: dict[str, str]`, `pair: tuple[str, ...] = ()`; `save_verdict(folder: Path, verdict: Verdict) -> Path`; `load_verdict(folder: Path) -> Verdict | None`.
+  - In `diagnose.py`: `VARIANTS_DIR = "variants"`, `NOT_RUN_REASON: str`, `COMBINED = "combined"`; `diagnose(episode, criterion, symptom, base, *, runs_dir, follow_ups, env_script, n, budget, out_dir=None, ask=ask_claude, run=run_variant, build=build_variant) -> Verdict`.
+
+- [ ] **Step 1: Write the failing tests**
+
+`tests/test_diagnose.py`:
+
+```python
+import json
+from dataclasses import replace
+
+from culprit.criterion import Criterion
+from culprit.diagnose import NOT_RUN_REASON, diagnose
+from culprit.episodes import episodes_from_session
+from culprit.experiment import EpisodeBudget, VariantOutcome
+from culprit.oracles import VariantBuild
+from culprit.replay import ReplaySettings
+from culprit.store import episode_dir
+from culprit.taxonomy import Cause, Symptom
+from culprit.verdict import beats, load_verdict, reproducible
+from records import human
+
+CRITERION = Criterion("works", (), (), approved=True)
+BASE = ReplaySettings(prompt="fix", model="claude-opus-5", permission_mode="auto")
+
+
+def outcome(name, passes, runs=5):
+    return VariantOutcome(name, passes, runs, 1.0)
+
+
+def scripted_run(passes_by_name):
+    calls = []
+
+    def run(name, settings, **kwargs):
+        calls.append((name, settings))
+        return outcome(name, passes_by_name[name])
+
+    run.calls = calls
+    return run
+
+
+def build_all_tested(untested=()):
+    def build(cause, base, **kwargs):
+        if cause in untested:
+            return VariantBuild(None, f"{cause.value} untested")
+        return VariantBuild(replace(base, prompt=f"{cause.value} prompt") if cause is Cause.TASK else
+                            replace(base, model=f"{cause.value}-model"), None)
+    return build
+
+
+def run_diagnose(write_session, tmp_path, run, build=None, symptom=Symptom.WRONG_RESULT):
+    (episode,) = episodes_from_session(write_session([human("fix", "p1", session_id="s1", cwd=str(tmp_path))]))
+    return diagnose(episode, CRITERION, symptom, BASE, runs_dir=tmp_path / "runs", follow_ups=[], env_script=None,
+                    n=5, budget=EpisodeBudget(100.0), run=run, build=build or build_all_tested())
+
+
+def test_beats_and_reproducible_follow_the_spec():
+    assert beats(outcome("task", 4), outcome("baseline", 0)) is True
+    assert beats(outcome("task", 3), outcome("baseline", 0)) is False
+    assert reproducible(outcome("baseline", 2)) is True
+    assert reproducible(outcome("baseline", 3)) is False
+
+
+def test_a_rejected_candidate_is_misjudged_without_replays(write_session, tmp_path):
+    run = scripted_run({})
+    verdict = run_diagnose(write_session, tmp_path, run, symptom=Symptom.NO_FAILURE)
+    assert verdict.cause == "misjudged"
+    assert run.calls == []
+
+
+def test_a_baseline_that_passes_is_not_reproducible_and_runs_no_oracle(write_session, tmp_path):
+    run = scripted_run({"baseline": 3})
+    verdict = run_diagnose(write_session, tmp_path, run)
+    assert verdict.cause == "not-reproducible"
+    assert [name for name, _ in run.calls] == ["baseline"]
+
+
+def test_the_first_cause_that_beats_the_baseline_wins_and_later_ones_are_not_run(write_session, tmp_path):
+    run = scripted_run({"baseline": 0, "task": 1, "environment": 0, "agent-setup": 5})
+    verdict = run_diagnose(write_session, tmp_path, run)
+    assert verdict.cause == "agent-setup"
+    assert [name for name, _ in run.calls] == ["baseline", "task", "environment", "agent-setup"]
+    assert verdict.untested == {"harness": NOT_RUN_REASON, "model": NOT_RUN_REASON}
+    assert "5/5" in verdict.evidence and "0/5" in verdict.evidence
+    assert load_verdict(episode_dir(tmp_path / "runs", "s1:p1")) == verdict
+
+
+def test_untested_causes_are_skipped_and_recorded(write_session, tmp_path):
+    run = scripted_run({"baseline": 0, "task": 0, "agent-setup": 0, "harness": 0, "model": 4})
+    verdict = run_diagnose(write_session, tmp_path, run, build=build_all_tested(untested=(Cause.ENVIRONMENT,)))
+    assert verdict.cause == "model"
+    assert verdict.untested["environment"] == "environment untested"
+
+
+def test_nothing_alone_but_a_pair_is_multi_cause(write_session, tmp_path):
+    run = scripted_run({"baseline": 0, "task": 0, "environment": 0, "agent-setup": 0, "harness": 0, "model": 0,
+                        "combined": 5, "task+environment": 0, "task+agent-setup": 4})
+    verdict = run_diagnose(write_session, tmp_path, run)
+    assert (verdict.cause, verdict.pair) == ("multi-cause", ("task", "agent-setup"))
+
+
+def test_combined_passes_but_no_pair_is_multi_cause_with_the_full_set(write_session, tmp_path):
+    singles = {name: 0 for name in ["task", "environment", "agent-setup", "harness", "model"]}
+    run = scripted_run({"baseline": 0, "combined": 5} | singles | {name: 0 for name in [
+        "task+environment", "task+agent-setup", "task+harness", "task+model", "environment+agent-setup",
+        "environment+harness", "environment+model", "agent-setup+harness", "agent-setup+model", "harness+model"]})
+    verdict = run_diagnose(write_session, tmp_path, run)
+    assert verdict.cause == "multi-cause"
+    assert verdict.pair == ("task", "environment", "agent-setup", "harness", "model")
+
+
+def test_nothing_passes_even_combined_is_unexplained(write_session, tmp_path):
+    run = scripted_run({"baseline": 0, "task": 0, "environment": 0, "agent-setup": 0, "harness": 0, "model": 0,
+                        "combined": 1})
+    assert run_diagnose(write_session, tmp_path, run).cause == "unexplained"
+
+
+def test_one_tested_oracle_that_fails_is_unexplained(write_session, tmp_path):
+    run = scripted_run({"baseline": 0, "harness": 0})
+    only_harness = build_all_tested(untested=(Cause.TASK, Cause.ENVIRONMENT, Cause.AGENT_SETUP, Cause.MODEL))
+    verdict = run_diagnose(write_session, tmp_path, run, build=only_harness)
+    assert verdict.cause == "unexplained"
+    assert [name for name, _ in run.calls] == ["baseline", "harness"]
+
+
+def test_a_rerun_reuses_saved_variants_and_outcomes(write_session, tmp_path):
+    first = scripted_run({"baseline": 0, "task": 0, "environment": 0, "agent-setup": 0, "harness": 0, "model": 5})
+    run_diagnose(write_session, tmp_path, first)
+    folder = episode_dir(tmp_path / "runs", "s1:p1")
+    for name in ["baseline", "task", "environment", "agent-setup", "harness", "model"]:
+        (folder / "replays" / name).mkdir(parents=True, exist_ok=True)
+        (folder / "replays" / name / "outcome.json").write_text(
+            json.dumps({"variant": name, "passes": 5 if name == "model" else 0, "runs": 5, "cost_usd": 1.0}))
+    builds = []
+
+    def counting_build(cause, base, **kwargs):
+        builds.append(cause)
+        return build_all_tested()(cause, base)
+
+    second = scripted_run({})
+    verdict = run_diagnose(write_session, tmp_path, second, build=counting_build)
+    assert verdict.cause == "model"
+    assert second.calls == [] and builds == []
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `uv run pytest tests/test_diagnose.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'culprit.diagnose'`
+
+- [ ] **Step 3: Write the implementation**
+
+`src/culprit/verdict.py`:
+
+```python
+"""The decision rules and the stored verdict: one cause per episode, with the pass rates that prove it."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+from culprit.experiment import VariantOutcome
+from culprit.stats import fisher_one_sided
+
+SIGNIFICANCE = 0.05
+VERDICT_FILE = "verdict.json"
+
+
+@dataclass(frozen=True)
+class Verdict:
+    episode_id: str
+    symptom: str
+    cause: str
+    evidence: str
+    outcomes: dict[str, dict]
+    untested: dict[str, str]
+    pair: tuple[str, ...] = ()
+
+
+def beats(variant: VariantOutcome, baseline: VariantOutcome) -> bool:
+    return fisher_one_sided(variant.passes, variant.runs, baseline.passes, baseline.runs) < SIGNIFICANCE
+
+
+def reproducible(baseline: VariantOutcome) -> bool:
+    """The failure reproduces unless the unchanged replay passes most of the time."""
+    return baseline.passes * 2 <= baseline.runs
+
+
+def save_verdict(folder: Path, verdict: Verdict) -> Path:
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / VERDICT_FILE
+    path.write_text(json.dumps(asdict(verdict), indent=2))
+    return path
+
+
+def load_verdict(folder: Path) -> Verdict | None:
+    path = folder / VERDICT_FILE
+    if not path.exists():
+        return None
+    data = json.loads(path.read_text())
+    data["pair"] = tuple(data.get("pair") or ())
+    return Verdict(**data)
+```
+
+`src/culprit/diagnose.py`:
+
+```python
+"""Diagnose one episode: baseline, then each oracle in cause order until one beats the baseline,
+then the pair test. Every built variant and every outcome is saved, so a run stopped by the budget
+resumes where it stopped instead of paying again.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import asdict
+from itertools import combinations
+from pathlib import Path
+
+from culprit.claude import ask_claude
+from culprit.criterion import Criterion
+from culprit.episodes import Episode
+from culprit.experiment import PRISTINE_DIR, EpisodeBudget, VariantOutcome, load_outcome, run_variant
+from culprit.oracles import build_variant, combine
+from culprit.replay import ReplaySettings, settings_from_json, settings_to_json
+from culprit.store import episode_dir
+from culprit.taxonomy import ORACLE_ORDER, Cause, Symptom
+from culprit.verdict import Verdict, beats, reproducible, save_verdict
+
+VARIANTS_DIR = "variants"
+BASELINE = "baseline"
+COMBINED = "combined"
+NOT_RUN_REASON = "not run: an earlier cause already explained the failure"
+
+
+def diagnose(episode: Episode, criterion: Criterion, symptom: Symptom, base: ReplaySettings, *, runs_dir: Path,
+             follow_ups: list[str], env_script: Path | None, n: int, budget: EpisodeBudget,
+             out_dir: Path | None = None, ask=ask_claude, run=run_variant, build=build_variant) -> Verdict:
+    folder = out_dir or episode_dir(runs_dir, episode.episode_id)
+    pristine = episode_dir(runs_dir, episode.episode_id) / PRISTINE_DIR
+    outcomes: dict[str, VariantOutcome] = {}
+    untested: dict[str, str] = {}
+
+    def measured(name: str, settings: ReplaySettings) -> VariantOutcome:
+        saved = load_outcome(folder, name)
+        result = saved or run(name, settings, n=n, episode=episode, runs_dir=runs_dir, criterion=criterion,
+                              budget=budget, out_dir=out_dir)
+        outcomes[name] = result
+        return result
+
+    def finish(cause: Cause, evidence: str, pair: tuple[str, ...] = ()) -> Verdict:
+        verdict = Verdict(episode.episode_id, symptom.value, cause.value, evidence,
+                          {name: asdict(o) for name, o in outcomes.items()}, untested, pair)
+        save_verdict(folder, verdict)
+        return verdict
+
+    if symptom is Symptom.NO_FAILURE:
+        return finish(Cause.MISJUDGED, "the human confirmed this candidate was not a failure")
+
+    baseline = measured(BASELINE, base)
+    if not reproducible(baseline):
+        return finish(Cause.NOT_REPRODUCIBLE, f"the unchanged replay passed {_rate(baseline)}")
+
+    built: dict[Cause, ReplaySettings] = {}
+    for position, cause in enumerate(ORACLE_ORDER):
+        settings = _oracle(folder, cause, base, untested, lambda c=cause: build(
+            c, base, episode=episode, follow_ups=follow_ups, criterion=criterion, symptom=symptom,
+            pristine=pristine, env_script=env_script, ask=ask))
+        if settings is None:
+            continue
+        built[cause] = settings
+        result = measured(cause.value, settings)
+        if beats(result, baseline):
+            for later in ORACLE_ORDER[position + 1:]:
+                untested.setdefault(later.value, NOT_RUN_REASON)
+            return finish(cause, f"{cause.value} passed {_rate(result)} against the baseline's {_rate(baseline)}")
+
+    if len(built) < 2:
+        return finish(Cause.UNEXPLAINED, "no single change made it pass, and fewer than two changes could be tested")
+    together = measured(COMBINED, combine(base, built))
+    if not beats(together, baseline):
+        return finish(Cause.UNEXPLAINED, f"even every change together passed only {_rate(together)}")
+    for first, second in combinations(list(built), 2):
+        name = f"{first.value}+{second.value}"
+        result = measured(name, combine(base, {first: built[first], second: built[second]}))
+        if beats(result, baseline):
+            return finish(Cause.MULTI_CAUSE, f"{name} passed {_rate(result)} against the baseline's {_rate(baseline)}",
+                          (first.value, second.value))
+    return finish(Cause.MULTI_CAUSE, f"only every change together passed ({_rate(together)})",
+                  tuple(c.value for c in built))
+
+
+def _oracle(folder: Path, cause: Cause, base: ReplaySettings, untested: dict[str, str], make) -> ReplaySettings | None:
+    path = folder / VARIANTS_DIR / f"{cause.value}.json"
+    if path.exists():
+        data = json.loads(path.read_text())
+    else:
+        made = make()
+        data = {"untested": made.untested_reason} if made.settings is None else settings_to_json(made.settings)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2))
+    if "untested" in data:
+        untested[cause.value] = data["untested"]
+        return None
+    return settings_from_json(data)
+
+
+def _rate(outcome: VariantOutcome) -> str:
+    return f"{outcome.passes}/{outcome.runs}"
+```
+
+Note on the resume test: the first run saved every variant's settings under `variants/`, and the test then writes every outcome, so the second run neither builds nor replays anything and reaches the same verdict.
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `uv run pytest -v`
+Expected: 105 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/culprit/verdict.py src/culprit/diagnose.py tests/test_diagnose.py
+git commit -m "Decide each episode's cause: first oracle to beat the baseline, then the pair test
+
+Misjudged needs no replay; a mostly passing baseline is Not reproducible;
+later oracles are not run once one wins; combined-then-pairs separates
+Multi-cause from Unexplained. Built variants and outcomes are saved, so a
+budget stop resumes without paying twice.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git status --short   # must print nothing
+```
+
+---
+
+#### Task 4.5: `culprit env-fix` and `culprit diagnose`, proven on a real episode
+
+**Files:**
+- Modify: `src/culprit/cli.py`
+- Test: `tests/test_cli_stage4.py`
+
+**Interfaces:**
+- Consumes: Stage 3's CLI (`ready_to_replay`); `read_symptom` (store); `follow_up_prompts` (locate); `baseline_settings` (replay); `EpisodeBudget` (experiment); `diagnose` (diagnose).
+- Produces: subcommands `env-fix <episode_id> <script>` (copies the script to `runs/<episode>/env-fix.sh`) and `diagnose <episode_id> [--n 5] [--budget 40] [--replay-budget 2.0]`.
+
+- [ ] **Step 1: Write the failing tests**
+
+`tests/test_cli_stage4.py`:
+
+```python
+import culprit.cli as cli
+from culprit.criterion import Criterion, save_criterion
+from culprit.store import episode_dir
+from culprit.verdict import Verdict
+from records import human, snapshot
+
+
+def ready(write_session, tmp_path, confirm=True):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_session([snapshot("u-p1", {}), human("fix a", "p1", session_id="s1", cwd=str(repo)),
+                   human("still wrong", "p2", session_id="s1", cwd=str(repo))], name="s1.jsonl")
+    runs = tmp_path / "runs"
+    save_criterion(runs, "s1:p1", Criterion("works", (), (), approved=True))
+    (episode_dir(runs, "s1:p1") / "pristine").mkdir(parents=True)
+    if confirm:
+        (episode_dir(runs, "s1:p1") / "symptom.json").write_text('{"episode_id": "s1:p1", "symptom": "wrong-result"}')
+    return tmp_path / "projects", runs
+
+
+def test_env_fix_stores_the_script_for_the_environment_oracle(write_session, tmp_path):
+    projects, runs = ready(write_session, tmp_path)
+    script = tmp_path / "fix.sh"
+    script.write_text("export FLAKY=0\n")
+    assert cli.main(["env-fix", "s1:p1", str(script), "--runs", str(runs)]) == 0
+    assert (episode_dir(runs, "s1:p1") / "env-fix.sh").read_text() == "export FLAKY=0\n"
+
+
+def test_diagnose_passes_everything_through_and_prints_the_verdict(write_session, tmp_path, capsys, monkeypatch):
+    projects, runs = ready(write_session, tmp_path)
+    seen = {}
+
+    def fake_diagnose(episode, criterion, symptom, base, **kwargs):
+        seen.update(symptom=symptom.value, follow_ups=kwargs["follow_ups"], cap=kwargs["budget"].cap_usd,
+                    env=kwargs["env_script"], n=kwargs["n"])
+        return Verdict("s1:p1", "wrong-result", "harness", "harness passed 4/5 against the baseline's 0/5",
+                       {}, {"environment": "no environment fix supplied (culprit env-fix)"})
+
+    monkeypatch.setattr(cli, "diagnose", fake_diagnose)
+    assert cli.main(["diagnose", "s1:p1", "--projects", str(projects), "--runs", str(runs)]) == 0
+    out = capsys.readouterr().out
+    assert seen == {"symptom": "wrong-result", "follow_ups": ["still wrong"], "cap": 40.0, "env": None, "n": 5}
+    assert "cause: harness" in out and "4/5" in out and "environment untested" in out
+
+
+def test_diagnose_before_confirm_names_confirm(write_session, tmp_path, capsys):
+    projects, runs = ready(write_session, tmp_path, confirm=False)
+    assert cli.main(["diagnose", "s1:p1", "--projects", str(projects), "--runs", str(runs)]) == 1
+    assert "culprit confirm" in capsys.readouterr().err
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `uv run pytest tests/test_cli_stage4.py -v`
+Expected: FAIL — `invalid choice: 'env-fix'` (SystemExit 2).
+
+- [ ] **Step 3: Add the subcommands**
+
+In `src/culprit/cli.py`, add to the imports:
+
+```python
+import shutil
+
+from culprit.diagnose import diagnose
+from culprit.store import read_symptom
+```
+
+Add before `return parser` in `build_parser`:
+
+```python
+    env_fix = commands.add_parser("env-fix", help="supply a script that fixes the environment for the environment oracle")
+    env_fix.add_argument("episode_id")
+    env_fix.add_argument("script", type=Path)
+    env_fix.add_argument("--runs", type=Path, default=DEFAULT_RUNS)
+    env_fix.set_defaults(handler=env_fix_command)
+
+    diagnose_parser = commands.add_parser("diagnose", help="find what to change: run the oracles and decide the cause")
+    diagnose_parser.add_argument("episode_id")
+    _projects_and_runs(diagnose_parser)
+    diagnose_parser.add_argument("--n", type=int, default=5)
+    diagnose_parser.add_argument("--budget", type=float, default=40.0, help="spend cap in USD for this episode")
+    diagnose_parser.add_argument("--replay-budget", type=float, default=DEFAULT_REPLAY_BUDGET_USD)
+    diagnose_parser.set_defaults(handler=diagnose_command)
+```
+
+Add at the end of the file:
+
+```python
+ENV_FIX_FILE = "env-fix.sh"
+
+
+def env_fix_command(args: argparse.Namespace) -> int:
+    destination = episode_dir(args.runs, args.episode_id) / ENV_FIX_FILE
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(args.script, destination)
+    print(f"stored {destination}; the environment oracle runs it in each replay's clone before Claude starts")
+    return 0
+
+
+def diagnose_command(args: argparse.Namespace) -> int:
+    episode, criterion = ready_to_replay(args)
+    symptom = read_symptom(args.runs, args.episode_id)
+    if symptom is None:
+        raise FileNotFoundError(f"{args.episode_id} has no confirmed symptom — run `culprit confirm {args.episode_id} <symptom>` first")
+    env_script = episode_dir(args.runs, args.episode_id) / ENV_FIX_FILE
+    verdict = diagnose(episode, criterion, symptom, baseline_settings(episode, args.replay_budget),
+                       runs_dir=args.runs, follow_ups=follow_up_prompts(args.projects, args.episode_id),
+                       env_script=env_script if env_script.exists() else None, n=args.n,
+                       budget=EpisodeBudget(args.budget))
+    print(f"cause: {verdict.cause}\nevidence: {verdict.evidence}")
+    if verdict.pair:
+        print(f"together: {' + '.join(verdict.pair)}")
+    for cause, reason in verdict.untested.items():
+        print(f"{cause} untested: {reason}")
+    return 0
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `uv run pytest -v`
+Expected: 108 passed.
+
+- [ ] **Step 5: Prove it on a real episode**
+
+Use an episode whose Stage 3 baseline passed at most 2 of 5 (a reproducible failure). Its saved baseline (out of 5) is reused. Start with N = 2 for the oracles to prove the wiring for little money:
+
+```bash
+uv run culprit diagnose <ID> --n 2 --budget 15
+```
+
+Expected: a `cause:` line, an `evidence:` line naming two pass rates, and one `untested:` line per skipped cause. Read what it actually wrote:
+
+```bash
+F=runs/<ID with : as __>
+ls $F/variants $F/replays
+cat $F/variants/task.json $F/variants/agent-setup.json     # drafted texts: read them for leaks yourself
+cat $F/verdict.json
+```
+
+Expected: the task and agent-setup texts contain no detail from your follow-up messages beyond the outcome you wanted. If one does, the leak check missed it: record it, tighten `leak_prompt`, delete that variant file, and rerun.
+
+Then the real diagnosis. Delete the N = 2 outcomes (their pass counts are out of 2, not 5) but keep the drafted variants, so the same texts are measured:
+
+```bash
+rm -r $F/replays/{task,environment,agent-setup,harness,model,combined} 2>/dev/null; rm -f $F/verdict.json
+uv run culprit diagnose <ID>
+```
+
+Expected: a verdict whose evidence quotes rates out of 5. Record the episode, cause, evidence, total spend (sum of `cost_usd` in `$F/replays/*/outcome.json`) and wall time in the commit message.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/culprit/cli.py tests/test_cli_stage4.py
+git commit -m "Add culprit env-fix and culprit diagnose
+
+Proven on <ID>: cause <cause> — <evidence>; \$<spend> over <wall time>.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git status --short   # must print nothing
+```
