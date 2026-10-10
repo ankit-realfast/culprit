@@ -1,9 +1,4 @@
-"""The report: what to change, ranked by how many failed episodes each change would have fixed.
-
-Built from stored verdicts only. What to fix first (single-layer fixes ranked by how many episodes each
-covers), then causes that only work together, the episodes left for review, the symptom × cause grid, how far
-the verdicts can be trusted, every verdict with its evidence, and what culprit could not see.
-"""
+"""What culprit tells you: the report across every diagnosed episode, and where each episode stands."""
 
 from __future__ import annotations
 
@@ -11,8 +6,17 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
-from culprit.store import SELFTEST_DIR, Cause, Symptom, load_restore
-from culprit.diagnose import load_verdict, numbers_line
+from culprit.diagnose import (BASELINE, VariantOutcome, Verdict, load_outcome, load_outcomes, load_verdict,
+                              numbers_line, pristine_dir, stored_spend)
+from culprit.model import Criterion, criterion_step, load_criterion
+from culprit.store import (SELFTEST_DIR, Cause, Symptom, confirm_step, display_id, episode_dir, known_episode_ids,
+                           load_restore, queued_ids, read_symptom)
+
+
+# --- report: The report: what to change, ranked by how many failed episodes each change would have fixed. ---
+# Built from stored verdicts only. What to fix first (single-layer fixes ranked by how many episodes each
+# covers), then causes that only work together, the episodes left for review, the symptom × cause grid, how far
+# the verdicts can be trusted, every verdict with its evidence, and what culprit could not see.
 
 REPORT_FILE = "report.md"
 # what to change for each cause a single layer explains; the other causes are not fixes: unexplained is listed
@@ -152,3 +156,62 @@ def render_report(rows: list[Row], trust: list[str]) -> str:
                          f"{r['checked']} files; {r['unknown']} unknown, {r['missing_backups']} missing")
     lines += ["", "## Known limits", "", *[f"- {limit}" for limit in KNOWN_LIMITS]]
     return "\n".join(lines) + "\n"
+
+
+# --- status: Where each episode stands, read from the files in runs/, and the command that moves it on. ---
+
+STAGES = ("not queued", "queued", "confirmed", "criterion drafted", "criterion approved", "restored", "baselined",
+          "diagnosed")
+
+
+@dataclass(frozen=True)
+class EpisodeStatus:
+    episode_id: str
+    stage: str  # one of STAGES
+    next_step: str  # what to run next, in words, naming the command
+    symptom: str | None = None
+    criterion: Criterion | None = None
+    restore: dict | None = None  # restore's trust numbers (restore.json)
+    outcomes: tuple[VariantOutcome, ...] = ()  # every variant measured so far
+    spent_usd: float = 0.0
+    verdict: Verdict | None = None
+
+
+def episode_status(runs_dir: Path, episode_id: str) -> EpisodeStatus:
+    folder = episode_dir(runs_dir, episode_id)
+    queued = episode_id in queued_ids(runs_dir)
+    symptom = read_symptom(runs_dir, episode_id)
+    criterion = load_criterion(runs_dir, episode_id)
+    verdict = load_verdict(folder)
+    shown = display_id(runs_dir, episode_id)
+    symptom_value = symptom.value if symptom else None
+    diagnose = f"run `culprit diagnose {shown}`"  # it restores and runs the baseline before the oracles
+    steps = [  # (stage reached once done, done?, what to run when it is not)
+        ("confirmed", symptom is not None, lambda: confirm_step(runs_dir, episode_id)),
+        ("criterion drafted", criterion is not None, lambda: criterion_step(criterion, shown, symptom_value)),
+        ("criterion approved", bool(criterion and criterion.approved),
+         lambda: criterion_step(criterion, shown, symptom_value)),
+        ("restored", pristine_dir(runs_dir, episode_id).is_dir(), lambda: diagnose),
+        ("baselined", load_outcome(folder, BASELINE) is not None, lambda: diagnose),
+        ("diagnosed", verdict is not None, lambda: diagnose),
+    ]
+    stage, hint = ("queued" if queued else "not queued"), None
+    if verdict is not None:  # a verdict can come without a baseline (no-failure), so it settles the stage alone
+        stage = "diagnosed"
+    else:
+        for reached, done, step in steps:
+            if not done:
+                hint = step()
+                break
+            stage = reached
+    return EpisodeStatus(episode_id, stage, hint or "run `culprit report`", symptom_value,
+                         criterion, load_restore(folder), load_outcomes(folder), stored_spend(folder), verdict)
+
+
+def next_step(runs_dir: Path, episode_id: str) -> str:
+    return episode_status(runs_dir, episode_id).next_step
+
+
+def queue_status(runs_dir: Path) -> list[EpisodeStatus]:
+    """Every episode in the triage queue (queue order), then every other episode with a folder."""
+    return [episode_status(runs_dir, episode_id) for episode_id in known_episode_ids(runs_dir)]

@@ -32,7 +32,7 @@ def test_confirm_names_the_approval_next_then_diagnose(write_session, tmp_path, 
 
 
 def test_a_symptom_without_a_criterion_names_confirm_to_draft_it(write_session, tmp_path, capsys):
-    from culprit.status import next_step
+    from culprit.report import next_step
     _, runs = queued(write_session, tmp_path)
     (episode_dir(runs, "s1:p1")).mkdir()
     (episode_dir(runs, "s1:p1") / "symptom.json").write_text('{"episode_id": "s1:p1", "symptom": "wasteful"}')
