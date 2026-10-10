@@ -20,19 +20,19 @@ from culprit.eligibility import project_hooks, replay_blockers
 from culprit.episodes import Episode, session_files
 from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget, load_outcome, run_variant, stored_spend
 from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
-from culprit.preview import CostPlan, batch_cost, diagnose_cost_for, plan_cost, selftest_cost
+from culprit.preview import DRAFTED_CAUSES, CostPlan, batch_cost, diagnose_cost, diagnose_cost_for, plan_cost, selftest_cost
 from culprit.progress import ProgressPrinter
 from culprit.replay import DEFAULT_REPLAY_BUDGET_USD, OriginalModified, SetupScriptFailed, baseline_settings
 from culprit.report import REPORT_FILE, RESTORE_FILE, collect, render_report
 from culprit import sandbox
 from culprit.sandbox import apply_episode_originals, check_restore, episode_originals, restore, restore_from_git
-from culprit.selftest import CONTROL_MIN_PASSES, run_selftest, selftest_accuracy
+from culprit.selftest import control_min_passes, is_control, run_selftest, selftest_accuracy
 from culprit.signals import FailureSignals
 from culprit.snapshot import load_snapshot, session_root
 from culprit.status import STAGES, EpisodeStatus, episode_status, next_step, queue_status
 from culprit.store import (CANDIDATES_FILE, NotReady, UnknownEpisode, candidate_rows, confirm_step, display_id,
                            episode_dir, read_symptom, record_symptom, resolve_episode_id, save_candidates)
-from culprit.taxonomy import Symptom
+from culprit.taxonomy import ORACLE_ORDER, Cause, Symptom
 from culprit.verdict import load_verdict, numbers_line
 from culprit.triage import rank_candidates, summarize_session
 
@@ -43,13 +43,25 @@ EXIT_REFUSED = 1
 EXIT_NOT_READY = 3
 EXIT_BUDGET = 4
 EXIT_INTERRUPTED = 130
-RUNS_PER_VARIANT = 5  # N: the baseline and each variant are replayed this many times
-# Built-in spend caps; each counts what the episode (or, for the total, every episode in runs/) already spent.
+RUNS_PER_VARIANT = 10  # N: the baseline and each variant are replayed this many times
+# Built-in spend caps, a safety net rather than a limit: each counts what the episode (or, for the total, every
+# episode in runs/) already spent, and is the worst case preview works out at N, rounded up to $50, so a full
+# diagnose is never stopped by its default cap.
 REPLAY_BUDGET_USD = DEFAULT_REPLAY_BUDGET_USD  # one replay
-EPISODE_CAP_USD = 40.0  # one episode's baseline and oracles
-FAULT_CAP_USD = 40.0  # one planted fault in selftest
-TOTAL_CAP_USD = 400.0  # every episode `diagnose` with no id takes on
+CAP_ROUNDING_USD = 50
+QUEUE_EPISODES = 20  # the batch total covers this many episodes at their worst case
 
+
+def _worst_case_cap(oracles) -> float:
+    worst = diagnose_cost(REPLAY_BUDGET_USD, oracles, n=RUNS_PER_VARIANT, spent_usd=0.0, cap_usd=float("inf"),
+                          drafts=sum(c in DRAFTED_CAUSES for c in oracles)).max_usd
+    return float(-(-worst // CAP_ROUNDING_USD) * CAP_ROUNDING_USD)
+
+
+EPISODE_CAP_USD = _worst_case_cap(ORACLE_ORDER)  # one episode's baseline and every oracle ($850 at N = 10)
+# a planted fault never has an environment fix to run ($650 at N = 10)
+FAULT_CAP_USD = _worst_case_cap([c for c in ORACLE_ORDER if c is not Cause.ENVIRONMENT])
+TOTAL_CAP_USD = QUEUE_EPISODES * EPISODE_CAP_USD  # every episode `diagnose` with no id takes on ($17,000)
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
@@ -491,9 +503,10 @@ def selftest_command(args: argparse.Namespace) -> int:
     baseline = load_outcome(episode_dir(args.runs, args.episode_id), "baseline")
     if baseline is None:
         baseline = run_baseline(args, episode, criterion)
-    if baseline.passes < CONTROL_MIN_PASSES:
+    if not is_control(args.runs, args.episode_id, RUNS_PER_VARIANT):
         print(f"culprit: {display_id(args.runs, args.episode_id)} is not a control — its baseline passed "
-              f"{baseline.passes} of {baseline.runs}, and a control must pass at least {CONTROL_MIN_PASSES} of 5",
+              f"{baseline.passes} of {baseline.runs}, and a control must pass at least "
+              f"{control_min_passes(RUNS_PER_VARIANT)} of {RUNS_PER_VARIANT}",
               file=sys.stderr)
         return EXIT_REFUSED
     show_plan(selftest_cost(args.runs, args.episode_id, criterion, baseline_settings(episode, REPLAY_BUDGET_USD),

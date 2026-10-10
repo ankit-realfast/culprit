@@ -5,7 +5,7 @@ from culprit.criterion import Criterion
 from culprit.episodes import episodes_from_session
 from culprit.replay import ReplaySettings
 from culprit.selftest import (EXPECTED, IMPOSSIBLE, MISLEADING_INSTRUCTION_TEXT, PlantedFault, SelftestResult,
-                              is_control, plant, run_selftest, selftest_accuracy, selftest_dir)
+                              control_min_passes, is_control, plant, run_selftest, selftest_accuracy, selftest_dir)
 from culprit.store import episode_dir
 from culprit.verdict import Verdict, save_verdict
 from records import human
@@ -32,14 +32,18 @@ def test_every_fault_has_its_expected_cause():
     assert IMPOSSIBLE.checks and all("false" in check for check in IMPOSSIBLE.checks)
 
 
-def test_a_control_needs_four_of_five_baseline_passes(tmp_path):
+def test_a_control_needs_four_in_five_of_the_n_baseline_runs_to_pass(tmp_path):
+    assert [control_min_passes(n) for n in (5, 10, 7)] == [4, 8, 6]
     folder = episode_dir(tmp_path, "s1:p1") / "replays" / "baseline"
     folder.mkdir(parents=True)
-    (folder / "outcome.json").write_text(json.dumps({"variant": "baseline", "passes": 3, "runs": 5, "cost_usd": 1}))
-    assert is_control(tmp_path, "s1:p1") is False
-    (folder / "outcome.json").write_text(json.dumps({"variant": "baseline", "passes": 4, "runs": 5, "cost_usd": 1}))
-    assert is_control(tmp_path, "s1:p1") is True
-    assert is_control(tmp_path, "s9:p9") is False
+    (folder / "outcome.json").write_text(json.dumps({"variant": "baseline", "passes": 7, "runs": 10, "cost_usd": 1}))
+    assert is_control(tmp_path, "s1:p1", 10) is False
+    (folder / "outcome.json").write_text(json.dumps({"variant": "baseline", "passes": 8, "runs": 10, "cost_usd": 1}))
+    assert is_control(tmp_path, "s1:p1", 10) is True
+    (folder / "outcome.json").write_text(json.dumps({"variant": "baseline", "passes": 5, "runs": 5, "cost_usd": 1}))
+    assert is_control(tmp_path, "s1:p1", 10) is False  # 5 of 5 runs is short of 8 of 10
+    assert is_control(tmp_path, "s1:p1", 5) is True
+    assert is_control(tmp_path, "s9:p9", 10) is False
 
 
 def test_selftest_reports_each_fault_and_the_accuracy(write_session, tmp_path):

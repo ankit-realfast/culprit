@@ -1,7 +1,7 @@
 """culprit tested on itself: break one layer of a control episode on purpose and check diagnose names it.
 
-A control episode is one whose unchanged replay passes at least 4 of 5, so any new failure comes from
-the planted fault. The share of faults named correctly is culprit's accuracy.
+A control episode is one whose unchanged replay passes at least 4 in 5 of the N runs (8 of 10 at N = 10),
+so any new failure comes from the planted fault. The share of faults named correctly is culprit's accuracy.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from culprit.taxonomy import Cause, Symptom
 from culprit.verdict import load_verdict
 
 SELFTEST_DIR = "selftest"
-CONTROL_MIN_PASSES = 4
+CONTROL_MIN_SHARE = (4, 5)  # a control's baseline passes at least 4 in 5 of the N runs
 WEAK_MODEL_ID = "claude-haiku-5-5"
 TRUNCATED_WORDS = 6
 READ_ONLY_TOOLS = "Read,Grep,Glob"
@@ -73,9 +73,15 @@ def plant(fault: PlantedFault, base: ReplaySettings, criterion: Criterion) -> tu
     return base, IMPOSSIBLE
 
 
-def is_control(runs_dir: Path, episode_id: str) -> bool:
+def control_min_passes(n: int) -> int:
+    """How many of n baseline runs must pass for the episode to be a control (rounded up)."""
+    share, of = CONTROL_MIN_SHARE
+    return -(-n * share // of)
+
+
+def is_control(runs_dir: Path, episode_id: str, n: int) -> bool:
     baseline = load_outcome(episode_dir(runs_dir, episode_id), "baseline")
-    return baseline is not None and baseline.passes >= CONTROL_MIN_PASSES
+    return baseline is not None and baseline.passes >= control_min_passes(n)
 
 
 def selftest_dir(runs_dir: Path, episode_id: str, fault: PlantedFault) -> Path:

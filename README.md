@@ -5,7 +5,7 @@ agent setup (CLAUDE.md, rules, skills), the harness (tools, MCP, settings, conte
 re-running the task with one of those changed at a time and seeing which change makes it pass.
 
 It does not ask a model to guess the cause. A cause is proven only when the changed run passes clearly
-more often than the unchanged one (one-sided Fisher exact test, p < 0.05 over 5 runs each).
+more often than the unchanged one (one-sided Fisher exact test, p < 0.05 over 10 runs each).
 
 ## How a diagnosis works
 
@@ -22,7 +22,7 @@ more often than the unchanged one (one-sided Fisher exact test, p < 0.05 over 5 
    edit `runs/<episode>/criterion.json` if it is wrong, then run the same `confirm` again to approve it.
    A criterion is never redrafted over; to change one, edit its file.
 3. `diagnose` rebuilds the files the episode started from in a throwaway copy (once), then replays the
-   episode unchanged 5 times. Passing 3+ times means the failure was luck.
+   episode unchanged 10 times. Passing 6+ times means the failure was luck.
 4. Otherwise it replays it with one layer improved at a time, cheapest fix first:
 
    | Change | Verdict if it now passes |
@@ -98,10 +98,12 @@ flight is killed and its copy deleted; finished replays are kept, so rerunning t
 
 ## Cost
 
-Each replay is capped at $2; a full diagnosis is about 30 replays, capped at $40 per episode
-(selftest: $40 per planted fault; `diagnose` with no id: $400 in total). Judge and drafting calls are capped at
+Each replay runs 10 times per variant and is capped at $2. A typical diagnosis is about 60 replays (the
+baseline and the first few oracles); the caps are a safety net sized so the worst case never hits them:
+$850 per episode (every oracle, combined and every pair, all void retries), $650 per selftest planted fault,
+and $17,000 in total for `diagnose` with no id (20 episodes at worst case). Judge and drafting calls are capped at
 $0.50 each and charged at that cap. Caps are built in and count everything already spent, so resuming
-never doubles them; the $400 total covers every batch in `runs/`.
+never doubles them; the total covers every batch in `runs/`.
 Runs that fail for reasons outside the agent (API errors, culprit's own cap, timeouts) are not counted
 and are retried. If no result could beat the baseline at N runs, culprit stops before the oracles and
 says "not testable".

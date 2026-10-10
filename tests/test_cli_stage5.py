@@ -89,10 +89,10 @@ def test_selftest_refuses_an_episode_that_is_not_a_control(write_session, tmp_pa
     monkeypatch.setattr(cli, "run_selftest", must_not_run)
     outcome = episode_dir(runs, "s1:p1") / "replays" / "baseline" / "outcome.json"
     outcome.parent.mkdir(parents=True)
-    outcome.write_text('{"variant": "baseline", "passes": 1, "runs": 5, "cost_usd": 1.0}')
+    outcome.write_text('{"variant": "baseline", "passes": 7, "runs": 10, "cost_usd": 1.0}')
     assert cli.main(["selftest", "s1:p1"]) == 1
     err = capsys.readouterr().err
-    assert "control" in err and "1 of 5" in err
+    assert "control" in err and "passed 7 of 10" in err and "at least 8 of 10" in err
 
 
 def test_selftest_prints_each_fault_and_the_accuracy(write_session, tmp_path, capsys, monkeypatch):
@@ -104,7 +104,7 @@ def test_selftest_prints_each_fault_and_the_accuracy(write_session, tmp_path, ca
     (episode_dir(runs, "s1:p1") / "pristine").mkdir(parents=True)
     baseline = episode_dir(runs, "s1:p1") / "replays" / "baseline"
     baseline.mkdir(parents=True)
-    (baseline / "outcome.json").write_text(json.dumps({"variant": "baseline", "passes": 5, "runs": 5, "cost_usd": 1}))
+    (baseline / "outcome.json").write_text(json.dumps({"variant": "baseline", "passes": 10, "runs": 10, "cost_usd": 1}))
     monkeypatch.setattr(cli, "run_selftest", lambda *a, **k: [SelftestResult("weak-model", "model", "model"),
                                                               SelftestResult("truncated-prompt", "task", "harness")])
     assert cli.main(["selftest", "s1:p1"]) == 0

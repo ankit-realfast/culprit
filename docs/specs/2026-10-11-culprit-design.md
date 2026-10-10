@@ -37,7 +37,7 @@ Claude Code did until the next human prompt, identified by the log's `promptId`.
 | # | Cause | Proven when | You change |
 |---|---|---|---|
 | 1 | Misjudged | The human (or an independent check) says it was not a failure | Your label |
-| 2 | Not reproducible | The unchanged replay already passes most of the time (at least 3 of 5; §3) | Nothing — it was luck |
+| 2 | Not reproducible | The unchanged replay already passes most of the time (at least 6 of 10; §3) | Nothing — it was luck |
 | 3 | Task | Only the request is restated clearly, and it passes | How you ask |
 | 4 | Environment | Only the outside world is fixed (flaky test, network, broken repo state), and it passes | Repo or infrastructure |
 | 5 | Agent setup | Same model and tools, better instructions or role, and it passes | CLAUDE.md, rules, skills, subagent definitions |
@@ -182,9 +182,10 @@ asked has a recorded answer; and any image it carried was kept in the log. `tria
 
 ### What "passes clearly" means
 
-Each variant and the baseline run **N = 5** times. A variant beats the baseline when a one-sided Fisher
-exact test on their pass counts gives p < 0.05 (for example 4/5 against 0/5). **Not reproducible** means
-the baseline itself passed at least 3 of 5. The pair test first runs every tested variant combined: if
+Each variant and the baseline run **N = 10** times (raised from 5 so smaller improvements show: 4/10
+against 0/10 is significant, where at N = 5 it took 4/5 against 0/5). A variant beats the baseline when a
+one-sided Fisher exact test on their pass counts gives p < 0.05.
+**Not reproducible** means the baseline itself passed more than half its runs (at least 6 of 10). The pair test first runs every tested variant combined: if
 that fails, the cause is **Unexplained**; if it passes, pairs are tried in cause order and the first pair
 that beats the baseline is the **Multi-cause** verdict; if no pair does, the verdict is Multi-cause with
 the full set.
@@ -204,8 +205,8 @@ Every verdict states the numbers behind it — the baseline's pass count, the wi
    before any verdict counts; its agreement is reported with every result.
 3. **Baseline before variants.** Every episode is replayed unchanged N times first; that baseline is
    what makes "Not reproducible" detectable.
-4. **Planted-fault accuracy.** selftest takes a control episode (one whose baseline passes at least 4 of
-   5), breaks one layer on purpose, and checks culprit names it: a truncated prompt (expect Task), a
+4. **Planted-fault accuracy.** selftest takes a control episode (one whose baseline passes at least 4 in 5
+   of the N runs, 8 of 10), breaks one layer on purpose, and checks culprit names it: a truncated prompt (expect Task), a
    misleading appended instruction (expect Agent setup), the edit tools removed (expect Harness), a weak
    model (expect Model), and an impossible success criterion (expect Unexplained, the outcome a broken
    check produces — catching that case is what judge calibration is for). The share named correctly is
@@ -225,8 +226,9 @@ Every verdict states the numbers behind it — the baseline's pass count, the wi
   deferred until v1 proves the method.
 - A Harness verdict cannot say whether the fix is yours (configuration) or the vendor's (a Claude Code
   bug): an intervention shows what made it pass, not who must change it. The human reads the evidence.
-- Cost: about 30 replays per episode (baseline ×5 plus five variants ×5), ~25 minutes at the median turn
-  length. v1 is capped at 10–20 episodes.
+- Cost: about 60 replays per episode (baseline ×10 plus five variants ×10), ~50 minutes at the median turn
+  length. Built-in caps are a safety net sized from the worst case at N = 10 (every oracle, combined and
+  every pair, all void retries): $850 per episode, $650 per planted fault, $17,000 per queue. v1 is capped at 10–20 episodes.
 - The logs are client work; everything runs locally and only the model calls Claude Code already makes
   leave the machine.
 
