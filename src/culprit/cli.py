@@ -153,8 +153,7 @@ def build_parser() -> argparse.ArgumentParser:
     env_fix.add_argument("script", type=Path)
     env_fix.set_defaults(handler=env_fix_command)
 
-    diagnose_parser = add("diagnose", "find what to change: restore, replay and decide the cause; "
-                                      "with no id, every confirmed episode in the queue, then the report")
+    diagnose_parser = add("diagnose", "restore, replay and find what to change (no id: the whole queue, then report)")
     diagnose_parser.add_argument("episode_id", nargs="?")
     diagnose_parser.set_defaults(handler=diagnose_command)
 
