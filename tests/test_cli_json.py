@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 import culprit.cli as cli
 from culprit.criterion import Criterion, save_criterion
 from culprit.experiment import VariantOutcome
@@ -24,16 +26,11 @@ def ready(write_session, tmp_path):
     return []
 
 
-def test_triage_json(write_session, tmp_path, capsys):
-    write_session([human("clean prompt", "p1", session_id="s1"), assistant(),
-                   human("went wrong", "p2", session_id="s1"), assistant(), interrupt("p2")])
-    runs = tmp_path / "runs"
-    assert cli.main(["triage", "--json"]) == 0
-    data = only_json(capsys)
-    assert data["scanned"] == 2 and data["queued"] == 1
-    [row] = data["candidates"]
-    assert row["row"] == 1 and row["episode_id"] == "s1:p2" and row["short_id"] == "s1:p2"
-    assert row["signals"]["interrupted"] is True and row["prompt_excerpt"] == "went wrong"
+@pytest.mark.parametrize("argv", [["triage", "--json"], ["diagnose", "--json"], ["diagnose", "s1:p1", "--json"]])
+def test_only_status_takes_json(argv, capsys):
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(argv)
+    assert stopped.value.code == 2
 
 
 def test_status_json_for_the_queue_and_for_one_episode(write_session, tmp_path, capsys):
@@ -45,16 +42,6 @@ def test_status_json_for_the_queue_and_for_one_episode(write_session, tmp_path, 
     assert cli.main(["status", "s1:p1", "--json"]) == 0
     one = only_json(capsys)
     assert one["criterion"]["approved"] is True and one["symptom"] == "wrong-result" and one["verdict"] is None
-
-
-def test_diagnose_json(write_session, tmp_path, capsys, monkeypatch):
-    flags = ready(write_session, tmp_path)
-    monkeypatch.setattr(cli, "diagnose", lambda *a, **k: Verdict("s1:p1", "wrong-result", "harness", "4/5", {},
-                                                                  {"environment": "no fix"}))
-    assert cli.main(["diagnose", "s1:p1", *flags, "--json"]) == 0
-    data = only_json(capsys)
-    assert data["verdict"]["cause"] == "harness" and data["verdict"]["untested"] == {"environment": "no fix"}
-    assert data["judge"]["calibrated"] is False and data["selftest"] == {"correct": 0, "total": 0}
 
 
 def test_status_json_carries_the_judge_agreement_and_selftest_accuracy(tmp_path, capsys):

@@ -26,13 +26,12 @@ from culprit.replay import DEFAULT_REPLAY_BUDGET_USD, OriginalModified, SetupScr
 from culprit.report import REPORT_FILE, RESTORE_FILE, collect, render_report
 from culprit import sandbox
 from culprit.sandbox import apply_episode_originals, check_restore, episode_originals, restore, restore_from_git
-from culprit.selftest import CONTROL_MIN_PASSES, is_control, run_selftest, selftest_accuracy
+from culprit.selftest import CONTROL_MIN_PASSES, run_selftest, selftest_accuracy
 from culprit.signals import FailureSignals
 from culprit.snapshot import load_snapshot, session_root
 from culprit.status import STAGES, EpisodeStatus, episode_status, next_step, queue_status
-from culprit.store import (CANDIDATES_FILE, NotReady, UnknownEpisode, candidate_rows, confirm_step, display_id, episode_dir, read_symptom,
-                           record_symptom,
-                           resolve_episode_id, save_candidates, short_id)
+from culprit.store import (CANDIDATES_FILE, NotReady, UnknownEpisode, candidate_rows, confirm_step, display_id,
+                           episode_dir, read_symptom, record_symptom, resolve_episode_id, save_candidates)
 from culprit.taxonomy import Symptom
 from culprit.verdict import load_verdict
 from culprit.triage import rank_candidates, summarize_session
@@ -114,7 +113,7 @@ EXAMPLES = {
     "confirm": ("  culprit confirm #1 wrong-result         record it and draft what success means\n"
                 "  culprit confirm #1 wrong-result         again, once the draft reads right: approve it\n"
                 "  culprit confirm 1a2b3c4d:5e6f7a8b no-failure\n"),
-    "status": "  culprit status\n  culprit status #1\n",
+    "status": "  culprit status\n  culprit status #1\n  culprit status --json   one JSON document, for scripts\n",
     "env-fix": "  culprit env-fix #1 fix-env.sh         run before Claude starts in the environment oracle\n",
     "diagnose": "  culprit diagnose #1\n  culprit diagnose       every confirmed episode in the queue, then the report\n",
     "review": "  culprit review        answer p(ass), f(ail), s(kip) or q(uit) for each judged replay\n",
@@ -137,7 +136,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     triage = add("triage", "rank episodes most likely to have failed")
     triage.add_argument("--top", type=int, default=20)
-    _json_flag(triage)
     triage.set_defaults(handler=triage_command)
 
     confirm = add("confirm", "record what went wrong, then draft (or, run again, approve) what success means")
@@ -147,7 +145,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = add("status", "where each episode stands and the command that moves it on")
     status.add_argument("episode_id", nargs="?")
-    _json_flag(status)
+    status.add_argument("--json", action="store_true", help="print one JSON document on stdout instead of text")
     status.set_defaults(handler=status_command, needs_store=True)
 
     env_fix = add("env-fix", "supply a script that fixes the environment for the environment oracle")
@@ -158,7 +156,6 @@ def build_parser() -> argparse.ArgumentParser:
     diagnose_parser = add("diagnose", "find what to change: restore, replay and decide the cause; "
                                       "with no id, every confirmed episode in the queue, then the report")
     diagnose_parser.add_argument("episode_id", nargs="?")
-    _json_flag(diagnose_parser)
     diagnose_parser.set_defaults(handler=diagnose_command)
 
     review = add("review", "label judged replays pass or fail, one after another, to calibrate the judge")
@@ -178,12 +175,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _json_flag(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--json", action="store_true", help="print one JSON document on stdout instead of text")
-
-
 def emit(data: dict) -> None:
-    """The whole of stdout under --json: one document, so scripts can parse it."""
+    """The whole of stdout under `status --json`: one document, so scripts can parse it."""
     print(json.dumps(data, indent=2, default=str))
 
 
@@ -205,13 +198,6 @@ def triage_command(args: argparse.Namespace) -> int:
     candidates = sorted(ranked, key=lambda c: bool(blockers[c.summary.episode_id]))
     path = save_candidates(args.runs, candidates)
     queue = [row["summary"]["episode_id"] for row in candidate_rows(args.runs)]
-    if args.json:
-        emit({"scanned": len(summaries), "queued": len(queue), "path": path, "candidates": [
-            {"row": queue.index(c.summary.episode_id) + 1, "episode_id": c.summary.episode_id,
-             "short_id": short_id(c.summary.episode_id), "score": c.score, "signals": asdict(c.summary.signals),
-             "prompt_excerpt": c.summary.prompt_excerpt, "session_file": c.summary.session_file,
-             "replay_blockers": blockers[c.summary.episode_id]} for c in candidates]})
-        return 0
     shown = [display_id(args.runs, c.summary.episode_id) for c in candidates]
     id_width = max(map(len, shown), default=0)
     for name, candidate in zip(shown, candidates):
@@ -394,9 +380,8 @@ def ready_to_replay(args: argparse.Namespace) -> tuple[Episode, Criterion]:
         raise NotReady(f"no approved criterion for {shown} — "
                        f"{criterion_step(criterion, shown, symptom.value if symptom else None)}")
     if not (episode_dir(args.runs, args.episode_id) / PRISTINE_DIR).is_dir():
-        out = sys.stderr if getattr(args, "json", False) else sys.stdout  # under --json stdout holds only JSON
         for line in restore_episode(args.runs, args.projects, args.episode_id):
-            print(line, file=out)
+            print(line)
     return episode, criterion
 
 
@@ -444,12 +429,6 @@ def diagnose_command(args: argparse.Namespace) -> int:
                            runs_dir=args.runs, follow_ups=follow_up_prompts(args.projects, args.episode_id),
                            env_script=env_script if env_script.exists() else None, n=RUNS_PER_VARIANT, budget=budget,
                            progress=progress)
-    if args.json:
-        correct, total = selftest_accuracy(args.runs)
-        emit({"verdict": asdict(verdict), "judge": agreement_json(agreement(args.runs)),
-              "selftest": {"correct": correct, "total": total}, "next": next_step(args.runs, args.episode_id)})
-        print_next(args.runs, args.episode_id)
-        return 0
     print(f"cause: {verdict.cause}\nevidence: {verdict.evidence}")
     if verdict.pair:
         print(f"together: {' + '.join(verdict.pair)}")

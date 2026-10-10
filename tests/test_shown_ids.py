@@ -82,7 +82,7 @@ def test_status_rows_line_up_whatever_the_id_lengths(tmp_path, capsys):
     assert rows[0].startswith(A) and rows[2].startswith("s1:p1 ") and rows[3].startswith("cccccccc:dddddddd ")
 
 
-def test_triage_rows_show_the_short_id_and_json_keeps_the_full_id(write_session, tmp_path, capsys):
+def test_triage_rows_show_the_short_id_and_the_queue_keeps_the_full_id(write_session, tmp_path, capsys):
     from records import interrupt
     session, prompt = A.split(":")
     write_session([human("went wrong", prompt, session_id=session), interrupt(prompt)], name=f"{session}.jsonl")
@@ -90,9 +90,8 @@ def test_triage_rows_show_the_short_id_and_json_keeps_the_full_id(write_session,
     assert cli.main(argv) == 0
     out = capsys.readouterr().out
     assert "aaaaaaaa:bbbbbbbb" in out and A not in out
-    assert cli.main([*argv, "--json"]) == 0
-    (row,) = json.loads(capsys.readouterr().out)["candidates"]
-    assert row["episode_id"] == A and row["short_id"] == "aaaaaaaa:bbbbbbbb"
+    (row,) = json.loads((tmp_path / "runs" / "candidates.json").read_text())
+    assert row["summary"]["episode_id"] == A
 
 
 def test_triage_rows_fall_back_to_the_full_id_when_the_short_id_is_ambiguous(write_session, tmp_path, capsys):

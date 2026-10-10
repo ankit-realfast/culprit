@@ -61,8 +61,8 @@ uv run culprit status [<episode-id>]            # where each episode stands and 
 `culprit --help` lists the commands by group (workflow, human review, trust) with this run-through;
 `culprit <command> --help` ends with examples.
 
-For scripts, `triage`, `status` and `diagnose` take `--json`: stdout is then
-one JSON document and nothing else (progress, `next:` lines and questions stay on stderr).
+For scripts, `status --json` prints one JSON document on stdout and nothing else: every episode's stage,
+criterion, runs, spend, verdict and next step, plus the judge agreement and selftest accuracy.
 
 `diagnose` and `selftest` print a line on stderr as each replay finishes:
 its result, its cost and what the episode has spent so far. While a replay runs, a
@@ -74,7 +74,7 @@ Each command that changes an episode ends with a `next:` line (on stderr) naming
 `<episode-id>` can be the full id, the queue row triage prints (`#3`), the short id it prints
 (`1a2b3c4d:5e6f7a8b`) or any prefix that matches one episode in the queue or in `runs/`. Suggested
 commands (`next:` lines, `status`, refusals) and triage rows use the short id whenever it matches that one
-episode alone; `--json` output always carries the full id.
+episode alone; `status --json` and `runs/candidates.json` always carry the full id.
 
 Everything is stored in `runs/` in the current folder; set `CULPRIT_RUNS=/path/to/runs` to use another.
 Session logs are read from `~/.claude/projects`; set `CULPRIT_PROJECTS=/path/to/projects` to read others.
