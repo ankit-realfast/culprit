@@ -214,7 +214,13 @@ def _evidence(signals: FailureSignals) -> str:
 def confirm_command(args: argparse.Namespace) -> int:
     path = record_symptom(args.runs, args.episode_id, Symptom(args.symptom))
     print(f"recorded {args.symptom} for {args.episode_id} in {path}")
+    print_next(args.runs, args.episode_id)
     return 0
+
+
+def print_next(runs_dir: Path, episode_id: str) -> None:
+    """Every state-changing command ends by naming the step that follows, as `culprit status` would."""
+    print(f"next: {next_step(runs_dir, episode_id)}", file=sys.stderr)
 
 
 def status_command(args: argparse.Namespace) -> int:
@@ -260,11 +266,13 @@ def criterion_command(args: argparse.Namespace) -> int:
         episode = find_episode(args.projects, args.episode_id)
         follow_ups = follow_up_prompts(args.projects, args.episode_id)
         path = save_criterion(args.runs, args.episode_id, draft_criterion(episode, follow_ups, ask=ask_claude))
-        print(f"drafted {path} — edit it if needed, then run `culprit criterion approve {args.episode_id}`")
+        print(f"drafted {path} — edit it if needed before approving")
+        print_next(args.runs, args.episode_id)
         return 0
     if args.action == "approve":
         approve_criterion(args.runs, args.episode_id)
         print(f"approved the criterion for {args.episode_id}")
+        print_next(args.runs, args.episode_id)
         return 0
     criterion = load_criterion(args.runs, args.episode_id)
     if criterion is None:
@@ -316,6 +324,7 @@ def restore_command(args: argparse.Namespace) -> int:
     (episode_dir(args.runs, args.episode_id) / RESTORE_FILE).write_text(json.dumps(trust, indent=2))
     hooks = project_hooks(Path(episode.cwd))
     print("project hooks that will run in every replay: " + "; ".join(hooks) if hooks else "no project hooks")
+    print_next(args.runs, args.episode_id)
     return 0
 
 
@@ -338,6 +347,7 @@ def baseline_command(args: argparse.Namespace) -> int:
     outcome = run_variant("baseline", baseline_settings(episode, args.replay_budget), n=args.n, episode=episode,
                           runs_dir=args.runs, criterion=criterion, budget=budget)
     print(f"baseline: {outcome.passes} of {outcome.runs} passed, ${outcome.cost_usd:.2f} spent on replays")
+    print_next(args.runs, args.episode_id)
     return 0
 
 
@@ -348,6 +358,7 @@ def env_fix_command(args: argparse.Namespace) -> int:
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(args.script, destination)
     print(f"stored {destination}; the environment oracle runs it in each replay's clone before Claude starts")
+    print_next(args.runs, args.episode_id)
     return 0
 
 
@@ -368,6 +379,7 @@ def diagnose_command(args: argparse.Namespace) -> int:
         print(f"{cause} untested: {reason}")
     for line in trust_lines(args.runs):
         print(line)
+    print_next(args.runs, args.episode_id)
     return 0
 
 
@@ -393,6 +405,8 @@ def review_command(args: argparse.Namespace) -> int:
 def label_command(args: argparse.Namespace) -> int:
     record_label(args.runs, args.run, args.verdict == "pass")
     print(f"labelled {args.run} {args.verdict}")
+    more = next_unlabelled(args.runs) is not None
+    print(f"next: run `culprit {'review' if more else 'calibration'}`", file=sys.stderr)
     return 0
 
 
