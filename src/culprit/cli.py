@@ -17,7 +17,7 @@ from culprit.eligibility import project_hooks, replay_blockers
 from culprit.episodes import Episode, episodes_from_session, session_files
 from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget, run_variant
 from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
-from culprit.replay import DEFAULT_REPLAY_BUDGET_USD, SetupScriptFailed, baseline_settings
+from culprit.replay import DEFAULT_REPLAY_BUDGET_USD, OriginalModified, SetupScriptFailed, baseline_settings
 from culprit.report import REPORT_FILE, collect, render_report
 from culprit.sandbox import DEFAULT_FILE_HISTORY, apply_episode_originals, check_restore, restore
 from culprit.selftest import CONTROL_MIN_PASSES, is_control, run_selftest, selftest_accuracy
@@ -36,7 +36,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.handler(args)
     except (UnknownEpisode, EpisodeNotFound, FileNotFoundError, ClaudeCallFailed, BudgetExhausted,
-            SetupScriptFailed, UnknownRun) as refusal:
+            SetupScriptFailed, UnknownRun, OriginalModified) as refusal:
         print(f"culprit: {refusal}", file=sys.stderr)
         return 1
 

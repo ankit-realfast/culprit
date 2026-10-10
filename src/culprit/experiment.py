@@ -58,7 +58,8 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
     for i in range(n):
         budget.ensure_room(settings.max_budget_usd + JUDGE_CALL_CAP_USD)
         run_dir = variant_dir / str(i)
-        result = replay(settings, episode_folder / PRISTINE_DIR, run_dir, replay_workdir(episode), criterion.checks)
+        result = replay(settings, episode_folder / PRISTINE_DIR, run_dir, replay_workdir(episode), criterion.checks,
+                        original_cwd=Path(episode.cwd))
         judgement = judge(criterion, result)
         spent = result.cost_usd + (JUDGE_CALL_CAP_USD if judgement.by == "model" else 0.0)
         budget.spend(spent)

@@ -171,3 +171,29 @@ def test_git_in_a_replay_cannot_reach_a_repository_above_the_clone(tmp_path):
     run_replay(settings(), pristine_tree(tmp_path), tmp_path / "run0", parent_repo / ".culprit-replay-git", (),
                run=run, projects_dir=tmp_path / "p")
     assert seen["found_repo"] is False
+
+
+def test_paths_into_the_original_project_point_at_the_clone_and_edits_there_are_denied(tmp_path):
+    original = tmp_path / "proj"
+    workdir = tmp_path / ".culprit-replay-x"
+    command = replay_command(settings(prompt=f"fix {original}/a.py", context_preamble=f"=== {original}/b.py ==="),
+                             original_cwd=original, workdir=workdir)
+    assert command[2] == f"=== {workdir}/b.py ===\n\nfix {workdir}/a.py"
+    denied = command[command.index("--disallowedTools") + 1:]
+    for tool in ("Edit", "Write", "NotebookEdit"):
+        assert f"{tool}(/{original}/**)" in denied
+
+
+def test_a_replay_that_changes_the_original_project_is_stopped_loudly(tmp_path):
+    from culprit.replay import OriginalModified
+    original = tmp_path / "proj"
+    original.mkdir()
+    (original / "a.py").write_text("untouched\n")
+
+    def claude_escapes(cwd):
+        (original / "a.py").write_text("written by the replay\n")
+
+    with pytest.raises(OriginalModified, match="a.py"):
+        run_replay(settings(), pristine_tree(tmp_path), tmp_path / "run0", tmp_path / ".culprit-replay-esc", (),
+                   run=FakeRun(claude_stdout=RESULT, on_claude=claude_escapes), projects_dir=tmp_path / "p",
+                   original_cwd=original)

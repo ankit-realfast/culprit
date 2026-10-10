@@ -22,7 +22,7 @@ def episode_at(write_session, tmp_path):
 def fake_replay(cost=0.25):
     calls = []
 
-    def replay(settings, pristine, run_dir, workdir, checks):
+    def replay(settings, pristine, run_dir, workdir, checks, **kwargs):
         calls.append((settings, pristine, run_dir, workdir, checks))
         run_dir.mkdir(parents=True, exist_ok=True)
         return ReplayResult(run_dir, 0, False, "done", cost, 3, ())

@@ -27,6 +27,8 @@ DEFAULT_REPLAY_BUDGET_USD = 2.0
 DEFAULT_PROJECTS = Path.home() / ".claude" / "projects"
 OUTPUT_TAIL_CHARS = 2000
 REPLAY_DIR_PREFIX = ".culprit-replay-"
+WRITE_TOOLS = ("Edit", "Write", "NotebookEdit")
+GIT_STATE_FILES = ("HEAD", "index")
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,10 @@ class SetupScriptFailed(RuntimeError):
     pass
 
 
+class OriginalModified(RuntimeError):
+    """A replay changed the user's original project: stop everything and tell the human."""
+
+
 def replay_permission_mode(original: str | None) -> str:
     # auto and acceptEdits replay as recorded. Every other mode becomes acceptEdits: in default and manual
     # the human approved prompts and nobody is present now; plan makes no edits; bypassPermissions is
@@ -83,9 +89,15 @@ def full_prompt(settings: ReplaySettings) -> str:
     return settings.prompt
 
 
-def replay_command(settings: ReplaySettings) -> list[str]:
+def replay_command(settings: ReplaySettings, original_cwd: Path | None = None,
+                   workdir: Path | None = None) -> list[str]:
+    prompt, appended = full_prompt(settings), settings.append_system_prompt
+    if original_cwd and workdir:
+        # the human's text often names files by absolute path in the original project: point it at the copy
+        prompt = _point_at_clone(prompt, original_cwd, workdir)
+        appended = _point_at_clone(appended, original_cwd, workdir) if appended else appended
     command = [
-        "claude", "-p", full_prompt(settings),
+        "claude", "-p", prompt,
         "--output-format", "stream-json", "--verbose",
         "--strict-mcp-config", "--mcp-config", NO_MCP_SERVERS,
         "--permission-prompts", "none",
@@ -97,10 +109,35 @@ def replay_command(settings: ReplaySettings) -> list[str]:
         command += ["--model", settings.model]
     if settings.tools is not None:
         command += ["--tools", settings.tools]
-    if settings.append_system_prompt:
-        command += ["--append-system-prompt", settings.append_system_prompt]
-    command += ["--disallowedTools", *SAFETY_DENIED_TOOLS, *settings.disallowed_tools]
+    if appended:
+        command += ["--append-system-prompt", appended]
+    denied = [*SAFETY_DENIED_TOOLS, *settings.disallowed_tools]
+    if original_cwd:
+        # "//" makes a permission path absolute: file tools may not touch the original project
+        denied += [f"{tool}(/{original_cwd}/**)" for tool in WRITE_TOOLS]
+    command += ["--disallowedTools", *denied]
     return command
+
+
+def _point_at_clone(text: str, original_cwd: Path, workdir: Path) -> str:
+    return re.sub(re.escape(str(original_cwd)) + r"(?![\w.-])", lambda _: str(workdir), text)
+
+
+def tree_fingerprint(root: Path) -> dict[str, tuple[int, int]]:
+    """Size and modification time of every file in a project (git's HEAD and index included)."""
+    fingerprint: dict[str, tuple[int, int]] = {}
+    for directory, subdirectories, files in os.walk(root):
+        subdirectories[:] = [d for d in subdirectories if d != ".git"]
+        for name in files:
+            path = Path(directory) / name
+            stat = path.lstat()
+            fingerprint[str(path.relative_to(root))] = (stat.st_size, stat.st_mtime_ns)
+    for name in GIT_STATE_FILES:
+        path = root / ".git" / name
+        if path.is_file():
+            stat = path.stat()
+            fingerprint[f".git/{name}"] = (stat.st_size, stat.st_mtime_ns)
+    return fingerprint
 
 
 def replay_workdir(episode: Episode) -> Path:
@@ -113,13 +150,16 @@ def project_folder_name(path: Path) -> str:
 
 
 def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir: Path, checks: tuple[str, ...],
-               run=subprocess.run, projects_dir: Path = DEFAULT_PROJECTS) -> ReplayResult:
+               run=subprocess.run, projects_dir: Path = DEFAULT_PROJECTS,
+               original_cwd: Path | None = None) -> ReplayResult:
     run_dir.mkdir(parents=True, exist_ok=True)
     clone_tree(pristine, workdir)
     project_folder = projects_dir / project_folder_name(workdir.resolve())
     # git must not climb out of the clone: beside a project inside a real repository it would find that
     # repository and a replay's `git commit` would land in it
     env = {**os.environ, "GIT_CEILING_DIRECTORIES": str(workdir.parent.resolve())}
+    watched = original_cwd if original_cwd and original_cwd.is_dir() else None
+    before = tree_fingerprint(watched) if watched else None
     try:
         if settings.setup_script:
             # resolved first: the script path is usually relative to culprit's folder, and the clone is elsewhere
@@ -128,8 +168,8 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
             if setup.returncode != 0:
                 raise SetupScriptFailed(f"{settings.setup_script} exited {setup.returncode}: {setup.stderr[-500:]}")
         try:
-            completed = run(replay_command(settings), cwd=workdir, capture_output=True, text=True,
-                            timeout=REPLAY_TIMEOUT_S, env=env)
+            completed = run(replay_command(settings, original_cwd, workdir), cwd=workdir, capture_output=True,
+                            text=True, timeout=REPLAY_TIMEOUT_S, env=env)
             stdout, stderr, exit_code = completed.stdout, completed.stderr, completed.returncode
         except subprocess.TimeoutExpired:
             stdout, stderr, exit_code = "", f"timed out after {REPLAY_TIMEOUT_S}s", -1
@@ -147,6 +187,12 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
                                   str(result_line.get("result") or ""), float(result_line.get("total_cost_usd") or 0),
                                   int(result_line.get("num_turns") or 0), check_results)
         (run_dir / "result.json").write_text(json.dumps(asdict(replay), default=str, indent=2))
+        if watched:
+            after = tree_fingerprint(watched)
+            changed = sorted(path for path in before.keys() | after.keys() if before.get(path) != after.get(path))
+            if changed:
+                raise OriginalModified(f"files in {watched} changed during a replay: {', '.join(changed[:5])}"
+                                       f"{' …' if len(changed) > 5 else ''} — check them before running anything else")
         return replay
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
