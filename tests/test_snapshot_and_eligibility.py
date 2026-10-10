@@ -41,7 +41,7 @@ def test_every_blocker_is_named(write_session, tmp_path):
     blockers = replay_blockers(episode, None)
     assert any("no longer exists" in b for b in blockers)
     assert any("snapshot" in b for b in blockers)
-    assert any("MCP" in b for b in blockers)
+    assert not any("MCP" in b for b in blockers)  # MCP calls are replayed from recordings, never sent
     assert any("asked the human" in b for b in blockers)
 
 

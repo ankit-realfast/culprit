@@ -13,11 +13,13 @@ import shutil
 import signal
 import subprocess
 import uuid
-from dataclasses import asdict, dataclass
+import sys
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from culprit.claude import NO_MCP_SERVERS
 from culprit.episodes import Episode, content_blocks
+from culprit.mcp_stub import MCP_PREFIX, recordings_from_episode
 from culprit.sandbox import clone_tree
 
 SAFETY_DENIED_TOOLS = ("Bash(git push *)", "Bash(gh *)")
@@ -52,6 +54,7 @@ class ReplaySettings:
     setup_script: Path | None = None
     max_budget_usd: float = DEFAULT_REPLAY_BUDGET_USD
     prompt_images: tuple[dict, ...] = ()  # image blocks the human attached, resent with the prompt
+    mcp_recordings: dict = field(default_factory=dict)  # per MCP server, the calls the episode made and their results
 
 
 @dataclass(frozen=True)
@@ -93,7 +96,8 @@ def baseline_settings(episode: Episode, max_budget_usd: float = DEFAULT_REPLAY_B
     images = tuple(block for block in prompt_blocks if block.get("type") == "image")
     return ReplaySettings(prompt=episode.prompt_text, model=episode.model,
                           permission_mode=replay_permission_mode(episode.permission_mode),
-                          max_budget_usd=max_budget_usd, prompt_images=images)
+                          max_budget_usd=max_budget_usd, prompt_images=images,
+                          mcp_recordings=recordings_from_episode(episode))
 
 
 def full_prompt(settings: ReplaySettings) -> str:
@@ -112,14 +116,15 @@ def replay_prompt(settings: ReplaySettings, original_cwd: Path | None = None, wo
 
 
 def replay_command(settings: ReplaySettings, original_cwd: Path | None = None,
-                   workdir: Path | None = None, memory_dir: Path | None = None) -> list[str]:
+                   workdir: Path | None = None, memory_dir: Path | None = None,
+                   recordings_file: Path | None = None) -> list[str]:
     appended = settings.append_system_prompt
     if appended and original_cwd and workdir:
         appended = _point_at_clone(appended, original_cwd, workdir)
     command = [
         "claude", "-p",
         "--output-format", "stream-json", "--verbose",
-        "--strict-mcp-config", "--mcp-config", NO_MCP_SERVERS,
+        "--strict-mcp-config", "--mcp-config", _mcp_config(settings, recordings_file),
         "--permission-prompts", "none",
         "--permission-mode", settings.permission_mode,
         "--no-session-persistence",
@@ -138,8 +143,20 @@ def replay_command(settings: ReplaySettings, original_cwd: Path | None = None,
     if original_cwd:
         # "//" makes a permission path absolute: file tools may not touch the original project
         denied += [f"{tool}(/{original_cwd}/**)" for tool in WRITE_TOOLS]
+    if settings.mcp_recordings:
+        # the stand-in reaches nothing real, so its tools need no approval
+        command += ["--allowedTools", *(f"{MCP_PREFIX}{server}" for server in settings.mcp_recordings)]
     command += ["--disallowedTools", *denied]
     return command
+
+
+def _mcp_config(settings: ReplaySettings, recordings_file: Path | None) -> str:
+    """No MCP server at all, or for an episode that used some, the stand-in in place of each one."""
+    if not settings.mcp_recordings or recordings_file is None:
+        return NO_MCP_SERVERS
+    servers = {server: {"command": sys.executable, "args": ["-m", "culprit.mcp_stub", str(recordings_file), server]}
+               for server in settings.mcp_recordings}
+    return json.dumps({"mcpServers": servers})
 
 
 def _applied_settings(memory_dir: Path | None) -> dict:
@@ -206,6 +223,10 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
         memory_dir = (run_dir / "memory").resolve()
         shutil.rmtree(memory_dir, ignore_errors=True)
         shutil.copytree(original_memory, memory_dir)
+    recordings_file = None
+    if settings.mcp_recordings:
+        recordings_file = (run_dir / "mcp-recordings.json").resolve()
+        recordings_file.write_text(json.dumps(settings.mcp_recordings))
     clone_tree(pristine, workdir)
     project_folder = projects_dir / project_folder_name(workdir.resolve())
     # git must not climb out of the clone: beside a project inside a real repository it would find that
@@ -221,7 +242,8 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
             if setup.returncode != 0:
                 raise SetupScriptFailed(f"{settings.setup_script} exited {setup.returncode}: {setup.stderr[-500:]}")
         try:
-            completed = run(replay_command(settings, original_cwd, workdir, memory_dir), cwd=workdir, capture_output=True,
+            completed = run(replay_command(settings, original_cwd, workdir, memory_dir, recordings_file), cwd=workdir,
+                            capture_output=True,
                             text=True, timeout=REPLAY_TIMEOUT_S, env=env,
                             input=_stdin_for(settings, replay_prompt(settings, original_cwd, workdir)))
             stdout, stderr, exit_code = completed.stdout, completed.stderr, completed.returncode
@@ -326,4 +348,5 @@ def settings_from_json(data: dict) -> ReplaySettings:
     fields["setup_script"] = Path(fields["setup_script"]) if fields.get("setup_script") else None
     fields["disallowed_tools"] = tuple(fields.get("disallowed_tools") or ())
     fields["prompt_images"] = tuple(fields.get("prompt_images") or ())
+    fields["mcp_recordings"] = dict(fields.get("mcp_recordings") or {})
     return ReplaySettings(**fields)

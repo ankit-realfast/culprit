@@ -306,3 +306,29 @@ def test_settings_with_images_round_trip_through_json():
     from culprit.replay import settings_from_json, settings_to_json
     with_images = settings(prompt_images=(IMAGE_BLOCK,))
     assert settings_from_json(json.loads(json.dumps(settings_to_json(with_images)))) == with_images
+
+
+NOTES = {"notes": [{"tool": "get_note", "arguments": {"id": "1"}, "text": "ZEBRA", "is_error": False}]}
+
+
+def test_baseline_settings_carry_the_episodes_mcp_recordings(write_session):
+    call = {"type": "assistant", "message": {"role": "assistant", "model": "claude-opus-5", "content": [
+        {"type": "tool_use", "id": "t1", "name": "mcp__notes__get_note", "input": {"id": "1"}}]}}
+    result = {"type": "user", "promptId": "p1", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": "ZEBRA"}]}}
+    (episode,) = episodes_from_session(write_session([human("check", "p1"), call, result]))
+    assert baseline_settings(episode).mcp_recordings == NOTES
+
+
+def test_recorded_mcp_servers_are_replaced_by_the_stand_in(tmp_path):
+    import sys
+    run = FakeRun(claude_stdout=RESULT)
+    run_replay(settings(mcp_recordings=NOTES), pristine_tree(tmp_path), tmp_path / "run0",
+               tmp_path / ".culprit-replay-mcp", (), run=run, projects_dir=tmp_path / "p")
+    command = next(c for c, _ in run.calls if c[0] == "claude")
+    config = json.loads(command[command.index("--mcp-config") + 1])
+    stub = config["mcpServers"]["notes"]
+    assert stub["command"] == sys.executable and stub["args"][:2] == ["-m", "culprit.mcp_stub"]
+    assert json.loads(Path(stub["args"][2]).read_text()) == NOTES
+    assert "--strict-mcp-config" in command
+    assert "mcp__notes" in command[command.index("--allowedTools") + 1:]

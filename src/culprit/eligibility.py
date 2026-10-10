@@ -10,7 +10,6 @@ from culprit.episodes import Episode, content_blocks, tool_uses
 from culprit.snapshot import Tracked
 
 ASK_USER_TOOL = "AskUserQuestion"
-MCP_TOOL_PREFIX = "mcp__"
 PROJECT_SETTINGS = (".claude/settings.json", ".claude/settings.local.json")
 
 
@@ -32,8 +31,6 @@ def replay_blockers(episode: Episode, tracked: Tracked | None) -> list[str]:
     if tracked is None:
         blockers.append("no file-history snapshot exists for this prompt")
     names = {use.get("name", "") for use in tool_uses(episode)}
-    if any(name.startswith(MCP_TOOL_PREFIX) for name in names):
-        blockers.append("used an MCP tool, and v1 replays connect no MCP server")
     images = [b for b in content_blocks(episode.records[0]) if b.get("type") == "image"] if episode.records else []
     if any(not (image.get("source") or {}).get("data") for image in images):
         blockers.append("the prompt carried an image whose data the log did not keep, so a replay cannot resend it")
