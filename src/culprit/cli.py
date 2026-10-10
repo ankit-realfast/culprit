@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from pathlib import Path
 
 from culprit.claude import ClaudeCallFailed, ask_claude
 from culprit.criterion import Criterion, approve_criterion, draft_criterion, load_criterion, save_criterion
+from culprit.diagnose import diagnose
 from culprit.eligibility import project_hooks, replay_blockers
 from culprit.episodes import Episode, episodes_from_session, session_files
 from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget, run_variant
@@ -16,7 +18,7 @@ from culprit.replay import DEFAULT_REPLAY_BUDGET_USD, SetupScriptFailed, baselin
 from culprit.sandbox import DEFAULT_FILE_HISTORY, apply_episode_originals, check_restore, restore
 from culprit.signals import FailureSignals
 from culprit.snapshot import load_snapshot, session_root
-from culprit.store import UnknownEpisode, episode_dir, record_symptom, save_candidates
+from culprit.store import UnknownEpisode, episode_dir, read_symptom, record_symptom, save_candidates
 from culprit.taxonomy import Symptom
 from culprit.triage import EpisodeSummary, rank_candidates
 DEFAULT_PROJECTS = Path.home() / ".claude" / "projects"
@@ -68,6 +70,20 @@ def build_parser() -> argparse.ArgumentParser:
     baseline.add_argument("--budget", type=float, default=10.0, help="spend cap in USD for this command")
     baseline.add_argument("--replay-budget", type=float, default=DEFAULT_REPLAY_BUDGET_USD)
     baseline.set_defaults(handler=baseline_command)
+
+    env_fix = commands.add_parser("env-fix", help="supply a script that fixes the environment for the environment oracle")
+    env_fix.add_argument("episode_id")
+    env_fix.add_argument("script", type=Path)
+    env_fix.add_argument("--runs", type=Path, default=DEFAULT_RUNS)
+    env_fix.set_defaults(handler=env_fix_command)
+
+    diagnose_parser = commands.add_parser("diagnose", help="find what to change: run the oracles and decide the cause")
+    diagnose_parser.add_argument("episode_id")
+    _projects_and_runs(diagnose_parser)
+    diagnose_parser.add_argument("--n", type=int, default=5)
+    diagnose_parser.add_argument("--budget", type=float, default=40.0, help="spend cap in USD for this episode")
+    diagnose_parser.add_argument("--replay-budget", type=float, default=DEFAULT_REPLAY_BUDGET_USD)
+    diagnose_parser.set_defaults(handler=diagnose_command)
     return parser
 
 
@@ -186,4 +202,33 @@ def baseline_command(args: argparse.Namespace) -> int:
     outcome = run_variant("baseline", baseline_settings(episode, args.replay_budget), n=args.n, episode=episode,
                           runs_dir=args.runs, criterion=criterion, budget=EpisodeBudget(args.budget))
     print(f"baseline: {outcome.passes} of {outcome.runs} passed, ${outcome.cost_usd:.2f} spent on replays")
+    return 0
+
+
+ENV_FIX_FILE = "env-fix.sh"
+
+
+def env_fix_command(args: argparse.Namespace) -> int:
+    destination = episode_dir(args.runs, args.episode_id) / ENV_FIX_FILE
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(args.script, destination)
+    print(f"stored {destination}; the environment oracle runs it in each replay's clone before Claude starts")
+    return 0
+
+
+def diagnose_command(args: argparse.Namespace) -> int:
+    episode, criterion = ready_to_replay(args)
+    symptom = read_symptom(args.runs, args.episode_id)
+    if symptom is None:
+        raise FileNotFoundError(f"{args.episode_id} has no confirmed symptom — run `culprit confirm {args.episode_id} <symptom>` first")
+    env_script = episode_dir(args.runs, args.episode_id) / ENV_FIX_FILE
+    verdict = diagnose(episode, criterion, symptom, baseline_settings(episode, args.replay_budget),
+                       runs_dir=args.runs, follow_ups=follow_up_prompts(args.projects, args.episode_id),
+                       env_script=env_script if env_script.exists() else None, n=args.n,
+                       budget=EpisodeBudget(args.budget))
+    print(f"cause: {verdict.cause}\nevidence: {verdict.evidence}")
+    if verdict.pair:
+        print(f"together: {' + '.join(verdict.pair)}")
+    for cause, reason in verdict.untested.items():
+        print(f"{cause} untested: {reason}")
     return 0
