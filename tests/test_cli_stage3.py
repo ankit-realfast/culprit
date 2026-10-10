@@ -73,3 +73,23 @@ def test_baseline_over_budget_exits_4(write_session, tmp_path, capsys, monkeypat
     monkeypatch.setattr(cli, "run_variant", over)
     assert cli.main(["baseline", "s1:p1", "--projects", str(projects), "--runs", str(runs)]) == 4
     assert "$3.20" in capsys.readouterr().err
+
+
+def test_baseline_prints_a_line_on_stderr_for_each_finished_replay(write_session, tmp_path, capsys, monkeypatch):
+    from culprit.experiment import ReplayEvent
+    projects, runs = setup_episode(write_session, tmp_path)
+
+    def fake_run_variant(variant, settings, **kwargs):
+        progress = kwargs["progress"]
+        progress(ReplayEvent("start", variant, attempt=0, index=1, n=2, spent_usd=0.0))
+        progress(ReplayEvent("finish", variant, attempt=0, index=1, n=2, result="pass", cost_usd=0.84,
+                             spent_usd=1.34))
+        progress(ReplayEvent("finish", variant, attempt=1, index=2, n=2, result="void", cost_usd=2.0,
+                             spent_usd=3.84))
+        return VariantOutcome(variant, 1, 1, 2.84)
+
+    monkeypatch.setattr(cli, "run_variant", fake_run_variant)
+    cli.main(["baseline", "s1:p1", "--projects", str(projects), "--runs", str(runs), "--n", "2"])
+    err = capsys.readouterr().err.splitlines()
+    assert "baseline #1 of 2: pass, $0.84 (episode spent $1.34)" in err
+    assert "baseline #2 of 2: void, not counted, $2.00 (episode spent $3.84)" in err

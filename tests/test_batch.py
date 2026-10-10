@@ -150,3 +150,21 @@ def test_readiness_with_no_criterion_names_draft(tmp_path):
     prepare(tmp_path, "a:1")
     (episode_dir(tmp_path, "a:1") / "criterion.json").unlink()
     assert "culprit criterion draft a:1" in readiness_problem(tmp_path, "a:1")
+
+
+def test_batch_progress_names_the_episode(tmp_path):
+    from culprit.experiment import ReplayEvent
+    queue(tmp_path, "aaaaaaaaaaaa:bbbbbbbbbbbb")
+    prepare(tmp_path, "aaaaaaaaaaaa:bbbbbbbbbbbb")
+    events = []
+
+    def fake(episode, criterion, symptom, base, **kwargs):
+        kwargs["progress"](ReplayEvent("start", "baseline", attempt=0, index=1, n=5))
+        verdict = Verdict(episode.episode_id, symptom.value, "harness", "e", {}, {})
+        save_verdict(episode_dir(kwargs["runs_dir"], episode.episode_id), verdict)
+        return verdict
+
+    diagnose_all(tmp_path, tmp_path / "projects", n=5, per_episode_usd=40.0, total_usd=400.0, replay_budget_usd=2.0,
+                 diagnose_fn=fake, find=lambda projects, episode_id: FakeEpisode(episode_id),
+                 follow=lambda projects, episode_id: [], progress=events.append)
+    assert [e.scope for e in events] == ["aaaaaaaa:bbbbbbbb"]

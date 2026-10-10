@@ -13,12 +13,12 @@ from pathlib import Path
 from culprit.claude import ClaudeCallFailed
 from culprit.criterion import criterion_step, load_criterion
 from culprit.diagnose import diagnose
-from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget, stored_spend
+from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget, Progress, scoped, stored_spend
 from culprit.judge import JUDGE_CALL_CAP_USD
 from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
 from culprit.replay import SetupScriptFailed, baseline_settings
 from culprit.selftest import SELFTEST_DIR
-from culprit.store import CANDIDATES_FILE, episode_dir, read_symptom
+from culprit.store import CANDIDATES_FILE, episode_dir, read_symptom, short_id
 from culprit.verdict import load_verdict
 
 ENV_FIX_FILE = "env-fix.sh"
@@ -46,7 +46,7 @@ def readiness_problem(runs_dir: Path, episode_id: str) -> str | None:
 
 def diagnose_all(runs_dir: Path, projects_dir: Path, *, n: int, per_episode_usd: float, total_usd: float,
                  replay_budget_usd: float, diagnose_fn=diagnose, find=find_episode,
-                 follow=follow_up_prompts) -> BatchSummary:
+                 follow=follow_up_prompts, progress: Progress | None = None) -> BatchSummary:
     summary = BatchSummary()
     smallest_useful_usd = replay_budget_usd + JUDGE_CALL_CAP_USD  # one replay and its judgement
     queued = [row["summary"]["episode_id"] for row in json.loads((runs_dir / CANDIDATES_FILE).read_text())]
@@ -75,7 +75,8 @@ def diagnose_all(runs_dir: Path, projects_dir: Path, *, n: int, per_episode_usd:
             diagnose_fn(episode, load_criterion(runs_dir, episode_id), read_symptom(runs_dir, episode_id),
                         baseline_settings(episode, replay_budget_usd), runs_dir=runs_dir,
                         follow_ups=follow(projects_dir, episode_id),
-                        env_script=env_script if env_script.exists() else None, n=n, budget=budget)
+                        env_script=env_script if env_script.exists() else None, n=n, budget=budget,
+                        progress=scoped(progress, short_id(episode_id)))
             summary.diagnosed.append(episode_id)
         except BudgetExhausted:
             if cap < per_episode_usd:  # the total ran out, not this episode's own cap

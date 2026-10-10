@@ -15,8 +15,8 @@ from pathlib import Path
 from culprit.claude import ask_claude
 from culprit.criterion import Criterion
 from culprit.episodes import Episode
-from culprit.experiment import (CALLS_FILE, PRISTINE_DIR, REPLAYS_DIR, SUPERSEDED_DIR, EpisodeBudget, VariantOutcome,
-                                load_outcome, record_call_spend, run_variant)
+from culprit.experiment import (CALLS_FILE, PRISTINE_DIR, REPLAYS_DIR, SUPERSEDED_DIR, EpisodeBudget, Progress,
+                                VariantOutcome, load_outcome, record_call_spend, run_variant)
 from culprit.judge import JUDGE_CALL_CAP_USD
 from culprit.oracles import build_variant, combine
 from culprit.replay import ReplaySettings, settings_from_json, settings_to_json
@@ -59,7 +59,8 @@ def retire_if_criterion_changed(folder: Path, criterion: Criterion) -> bool:
 
 def diagnose(episode: Episode, criterion: Criterion, symptom: Symptom, base: ReplaySettings, *, runs_dir: Path,
              follow_ups: list[str], env_script: Path | None, n: int, budget: EpisodeBudget,
-             out_dir: Path | None = None, ask=ask_claude, run=run_variant, build=build_variant) -> Verdict:
+             out_dir: Path | None = None, ask=ask_claude, run=run_variant, build=build_variant,
+             progress: Progress | None = None) -> Verdict:
     folder = out_dir or episode_dir(runs_dir, episode.episode_id)
     pristine = episode_dir(runs_dir, episode.episode_id) / PRISTINE_DIR
     retire_if_criterion_changed(folder, criterion)
@@ -75,7 +76,7 @@ def diagnose(episode: Episode, criterion: Criterion, symptom: Symptom, base: Rep
     def measured(name: str, settings: ReplaySettings) -> VariantOutcome:
         saved = load_outcome(folder, name)
         result = saved or run(name, settings, n=n, episode=episode, runs_dir=runs_dir, criterion=criterion,
-                              budget=budget, out_dir=out_dir)
+                              budget=budget, out_dir=out_dir, progress=progress)
         outcomes[name] = result
         return result
 

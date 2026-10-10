@@ -55,6 +55,9 @@ uv run culprit report                           # writes runs/report.md
 uv run culprit status [<episode-id>]            # where each episode stands and what to run next
 ```
 
+`baseline`, `diagnose`, `selftest` and `diagnose-all` print a line on stderr as each replay finishes:
+its result, its cost and what the episode has spent so far.
+
 Each command that changes an episode ends with a `next:` line (on stderr) naming the step that follows;
 `culprit status` shows the same for every queued episode.
 

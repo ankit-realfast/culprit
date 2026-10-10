@@ -185,3 +185,19 @@ def test_runs_judged_against_an_older_criterion_are_set_aside_but_still_counted(
     assert verdict.cause == "not-reproducible"
     assert (folder / "superseded" / "1" / "replays" / "baseline" / "0" / "result.json").exists()
     assert stored_spend(folder) == 2.0
+
+
+def test_progress_reaches_every_variant_run(write_session, tmp_path):
+    seen = []
+
+    def run(name, settings, **kwargs):
+        seen.append((name, kwargs["progress"]))
+        return outcome(name, {"baseline": 0}.get(name, 5))
+
+    (episode,) = episodes_from_session(write_session([human("fix", "p1", session_id="s1", cwd=str(tmp_path))]))
+    listener = []
+    diagnose(episode, CRITERION, Symptom.WRONG_RESULT, BASE, runs_dir=tmp_path / "runs", follow_ups=[],
+             env_script=None, n=5, budget=EpisodeBudget(100.0), run=run, build=build_all_tested(),
+             progress=listener.append)
+    assert [name for name, _ in seen] == ["baseline", "task"]
+    assert all(p == listener.append for _, p in seen)

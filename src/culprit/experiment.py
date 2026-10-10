@@ -6,8 +6,9 @@ The outcome — passes out of runs — is what the verdict compares across varia
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+from typing import Callable
 
 from culprit.criterion import Criterion
 from culprit.episodes import Episode
@@ -52,34 +53,67 @@ class VariantOutcome:
     void: int = 0
 
 
+@dataclass(frozen=True)
+class ReplayEvent:
+    """What run_variant tells its progress callback: "start" before a replay, "finish" once it is judged."""
+    kind: str  # "start" or "finish"
+    variant: str
+    attempt: int  # the run folder's number; void runs are retried under the next one
+    index: int  # which of the n counted runs this attempt is for, from 1
+    n: int
+    result: str | None = None  # finish: "pass", "fail" or "void"
+    cost_usd: float = 0.0  # finish: what this replay cost
+    spent_usd: float = 0.0  # the episode's spend so far, this run and its judgement included
+    reused: bool = False  # finish: paid for before a stop and read back from disk
+    scope: str = ""  # who is running it when that is not obvious: a planted fault, an episode's short id
+
+
+Progress = Callable[[ReplayEvent], None]
+
+
+def scoped(progress: Progress | None, scope: str) -> Progress | None:
+    """The same callback, with every event marked as belonging to `scope`."""
+    if progress is None:
+        return None
+    return lambda event: progress(replace(event, scope=f"{scope} / {event.scope}" if event.scope else scope))
+
+
 def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Episode, runs_dir: Path,
                 criterion: Criterion, budget: EpisodeBudget, replay=run_replay, judge=judge_replay,
-                out_dir: Path | None = None) -> VariantOutcome:
+                out_dir: Path | None = None, progress: Progress | None = None) -> VariantOutcome:
     episode_folder = episode_dir(runs_dir, episode.episode_id)
     folder = out_dir or episode_folder
     variant_dir = folder / REPLAYS_DIR / variant
     passes = counted = void = 0
     cost = 0.0
     attempt = 0
+    tell = progress or (lambda event: None)
     while counted < n and attempt < n + MAX_VOID_RETRIES:
         run_dir = variant_dir / str(attempt)
+        event = ReplayEvent("start", variant, attempt, counted + 1, n, spent_usd=round(budget.spent_usd, 4))
         attempt += 1
-        if (run_dir / RESULT_FILE).is_file() and (run_dir / JUDGEMENT_FILE).is_file():
+        reused = (run_dir / RESULT_FILE).is_file() and (run_dir / JUDGEMENT_FILE).is_file()
+        if reused:
             # paid for before a stop: reuse it rather than pay again
-            cost += float(json.loads((run_dir / RESULT_FILE).read_text()).get("cost_usd") or 0)
+            run_cost = float(json.loads((run_dir / RESULT_FILE).read_text()).get("cost_usd") or 0)
             judgement = Judgement(**json.loads((run_dir / JUDGEMENT_FILE).read_text()))
         else:
             budget.ensure_room(settings.max_budget_usd + JUDGE_CALL_CAP_USD)
+            tell(event)
             result = replay(settings, episode_folder / PRISTINE_DIR, run_dir, replay_workdir(episode),
                             criterion.checks, original_cwd=Path(episode.cwd),
                             original_memory=episode.session_file.parent / "memory")
             budget.spend(result.cost_usd)  # charged before judging, so a judge failure cannot lose it
-            cost += result.cost_usd
+            run_cost = result.cost_usd
             judgement = judge(criterion, result)
             if judgement.by == "model":
                 budget.spend(JUDGE_CALL_CAP_USD)
             run_dir.mkdir(parents=True, exist_ok=True)
             (run_dir / JUDGEMENT_FILE).write_text(json.dumps(asdict(judgement), indent=2))
+        cost += run_cost
+        verdict = "void" if judgement.by == "void" else "pass" if judgement.passed else "fail"
+        tell(replace(event, kind="finish", result=verdict, cost_usd=run_cost, spent_usd=round(budget.spent_usd, 4),
+                     reused=reused))
         if judgement.by == "void":
             void += 1
             continue

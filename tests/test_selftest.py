@@ -65,3 +65,19 @@ def test_selftest_reports_each_fault_and_the_accuracy(write_session, tmp_path):
     assert calls[3][1].model == "claude-haiku-5-5"
     assert selftest_dir(runs, "s1:p1", PlantedFault.WEAK_MODEL) == runs / "selftest" / "s1__p1" / "weak-model"
     assert selftest_accuracy(runs) == (4, 5)
+
+
+def test_selftest_progress_names_the_planted_fault(write_session, tmp_path):
+    from culprit.experiment import ReplayEvent
+    (episode,) = episodes_from_session(write_session([human("fix", "p1", session_id="s1", cwd=str(tmp_path))]))
+    events = []
+
+    def fake_diagnose(episode, criterion, symptom, base, **kwargs):
+        kwargs["progress"](ReplayEvent("start", "baseline", attempt=0, index=1, n=5))
+        verdict = Verdict(episode.episode_id, symptom.value, "task", "e", {}, {})
+        save_verdict(kwargs["out_dir"], verdict)
+        return verdict
+
+    run_selftest(episode, CRITERION, BASE, runs_dir=tmp_path / "runs", follow_ups=[], n=5, budget_per_fault=30.0,
+                 faults=(PlantedFault.WEAK_MODEL,), diagnose_fn=fake_diagnose, progress=events.append)
+    assert [e.scope for e in events] == ["weak-model"]

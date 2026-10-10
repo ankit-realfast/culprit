@@ -13,7 +13,7 @@ from pathlib import Path
 from culprit.criterion import Criterion
 from culprit.diagnose import diagnose
 from culprit.episodes import Episode
-from culprit.experiment import EpisodeBudget, load_outcome, stored_spend
+from culprit.experiment import EpisodeBudget, Progress, load_outcome, scoped, stored_spend
 from culprit.replay import ReplaySettings
 from culprit.store import episode_dir
 from culprit.taxonomy import Cause, Symptom
@@ -84,7 +84,8 @@ def selftest_dir(runs_dir: Path, episode_id: str, fault: PlantedFault) -> Path:
 
 def run_selftest(episode: Episode, criterion: Criterion, base: ReplaySettings, *, runs_dir: Path,
                  follow_ups: list[str], n: int, budget_per_fault: float,
-                 faults: tuple[PlantedFault, ...] = tuple(PlantedFault), diagnose_fn=diagnose) -> list[SelftestResult]:
+                 faults: tuple[PlantedFault, ...] = tuple(PlantedFault), diagnose_fn=diagnose,
+                 progress: Progress | None = None) -> list[SelftestResult]:
     results = []
     for fault in faults:
         planted_base, planted_criterion = plant(fault, base, criterion)
@@ -92,7 +93,7 @@ def run_selftest(episode: Episode, criterion: Criterion, base: ReplaySettings, *
         verdict = diagnose_fn(episode, planted_criterion, Symptom.WRONG_RESULT, planted_base, runs_dir=runs_dir,
                               follow_ups=follow_ups, env_script=None, n=n,
                               budget=EpisodeBudget(budget_per_fault, spent_usd=stored_spend(out_dir)),
-                              out_dir=out_dir)
+                              out_dir=out_dir, progress=scoped(progress, fault.value))
         results.append(SelftestResult(fault.value, EXPECTED[fault].value, verdict.cause))
     return results
 

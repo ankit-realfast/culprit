@@ -19,6 +19,7 @@ from culprit.eligibility import project_hooks, replay_blockers
 from culprit.episodes import Episode, episodes_from_session, session_files
 from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget, load_outcome, run_variant, stored_spend
 from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
+from culprit.progress import ProgressPrinter
 from culprit.replay import DEFAULT_REPLAY_BUDGET_USD, OriginalModified, SetupScriptFailed, baseline_settings
 from culprit.report import REPORT_FILE, RESTORE_FILE, collect, render_report
 from culprit.sandbox import (DEFAULT_FILE_HISTORY, apply_episode_originals, check_restore, episode_originals, restore,
@@ -345,7 +346,7 @@ def baseline_command(args: argparse.Namespace) -> int:
         print("the criterion changed since the last runs: they were moved to superseded/ and will not be reused")
     budget = EpisodeBudget(args.budget, spent_usd=stored_spend(episode_dir(args.runs, args.episode_id)))
     outcome = run_variant("baseline", baseline_settings(episode, args.replay_budget), n=args.n, episode=episode,
-                          runs_dir=args.runs, criterion=criterion, budget=budget)
+                          runs_dir=args.runs, criterion=criterion, budget=budget, progress=ProgressPrinter())
     print(f"baseline: {outcome.passes} of {outcome.runs} passed, ${outcome.cost_usd:.2f} spent on replays")
     print_next(args.runs, args.episode_id)
     return 0
@@ -371,7 +372,8 @@ def diagnose_command(args: argparse.Namespace) -> int:
     verdict = diagnose(episode, criterion, symptom, baseline_settings(episode, args.replay_budget),
                        runs_dir=args.runs, follow_ups=follow_up_prompts(args.projects, args.episode_id),
                        env_script=env_script if env_script.exists() else None, n=args.n,
-                       budget=EpisodeBudget(args.budget, spent_usd=stored_spend(episode_dir(args.runs, args.episode_id))))
+                       budget=EpisodeBudget(args.budget, spent_usd=stored_spend(episode_dir(args.runs, args.episode_id))),
+                       progress=ProgressPrinter())
     print(f"cause: {verdict.cause}\nevidence: {verdict.evidence}")
     if verdict.pair:
         print(f"together: {' + '.join(verdict.pair)}")
@@ -430,7 +432,7 @@ def selftest_command(args: argparse.Namespace) -> int:
         return EXIT_REFUSED
     results = run_selftest(episode, criterion, baseline_settings(episode, args.replay_budget), runs_dir=args.runs,
                            follow_ups=follow_up_prompts(args.projects, args.episode_id), n=args.n,
-                           budget_per_fault=args.budget_per_fault)
+                           budget_per_fault=args.budget_per_fault, progress=ProgressPrinter())
     for result in results:
         print(f"{result.fault}: expected {result.expected}, got {result.got} {'✓' if result.correct else '✗'}")
     print(f"{sum(r.correct for r in results)} of {len(results)} planted faults named correctly")
@@ -451,7 +453,7 @@ def report_command(args: argparse.Namespace) -> int:
 
 def diagnose_all_command(args: argparse.Namespace) -> int:
     summary = diagnose_all(args.runs, args.projects, n=args.n, per_episode_usd=args.per_episode,
-                           total_usd=args.total, replay_budget_usd=args.replay_budget)
+                           total_usd=args.total, replay_budget_usd=args.replay_budget, progress=ProgressPrinter())
     print(f"diagnosed {len(summary.diagnosed)}: {', '.join(summary.diagnosed) or 'none'}")
     for episode_id, reason in summary.skipped.items():
         print(f"{episode_id} skipped: {reason}")

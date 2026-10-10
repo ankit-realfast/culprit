@@ -110,3 +110,26 @@ def test_stored_spend_counts_replays_model_judgements_and_other_calls(tmp_path):
     record_call_spend(tmp_path, 0.5)
     record_call_spend(tmp_path, 0.5)
     assert stored_spend(tmp_path) == 1.25 + 0.5 + 0.5 + 1.0
+
+
+def test_progress_hears_each_replay_start_and_finish_with_the_spend_so_far(write_session, tmp_path):
+    from culprit.experiment import ReplayEvent
+    episode = episode_at(write_session, tmp_path)
+    runs = tmp_path / "runs"
+    done = episode_dir(runs, episode.episode_id) / "replays" / "baseline" / "0"
+    done.mkdir(parents=True)
+    (done / "result.json").write_text(json.dumps({"cost_usd": 0.3}))
+    (done / "judgement.json").write_text(json.dumps({"passed": True, "reason": "r", "by": "model"}))
+    verdicts = [Judgement(False, "x", "void"), Judgement(False, "r", "model")]
+    events = []
+    run_variant("baseline", SETTINGS, n=2, episode=episode, runs_dir=runs, criterion=CRITERION,
+                budget=EpisodeBudget(10.0, spent_usd=0.8), replay=fake_replay(cost=0.25),
+                judge=lambda c, r: verdicts.pop(0), progress=events.append)
+    assert events == [
+        ReplayEvent("finish", "baseline", attempt=0, index=1, n=2, result="pass", cost_usd=0.3, spent_usd=0.8,
+                    reused=True),
+        ReplayEvent("start", "baseline", attempt=1, index=2, n=2, spent_usd=0.8),
+        ReplayEvent("finish", "baseline", attempt=1, index=2, n=2, result="void", cost_usd=0.25, spent_usd=1.05),
+        ReplayEvent("start", "baseline", attempt=2, index=2, n=2, spent_usd=1.05),
+        ReplayEvent("finish", "baseline", attempt=2, index=2, n=2, result="fail", cost_usd=0.25, spent_usd=1.8),
+    ]
