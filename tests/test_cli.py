@@ -1,6 +1,6 @@
 from culprit.cli import main
 from culprit.store import read_symptom
-from records import assistant, human, interrupt
+from records import assistant, human, interrupt, system
 
 
 def test_triage_prints_and_saves_the_ranked_queue(write_session, tmp_path, capsys):
@@ -78,3 +78,9 @@ def test_read_only_commands_refuse_a_missing_store_without_creating_it(tmp_path,
         err = capsys.readouterr().err
         assert f"no culprit store at {missing.resolve()}" in err and "CULPRIT_RUNS" in err
     assert not missing.exists()
+
+
+def test_triage_marks_rows_with_api_errors_as_likely_not_reproducible(write_session, tmp_path, capsys):
+    write_session([human("went wrong", "p2", session_id="s1"), system("api_error"), interrupt("p2")])
+    main(["triage", "--projects", str(tmp_path / "projects"), "--runs", str(tmp_path / "runs")])
+    assert "API errors — likely not reproducible" in capsys.readouterr().out

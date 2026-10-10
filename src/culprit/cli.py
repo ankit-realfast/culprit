@@ -176,6 +176,8 @@ def triage_command(args: argparse.Namespace) -> int:
         row = f"#{queue.index(s.episode_id) + 1}"
         print(f"{row:>4} {candidate.score:>3}  {short_id(s.episode_id)}  {s.episode_id}  "
               f"[{_evidence(s.signals)}]  {s.prompt_excerpt}")
+        if s.signals.api_errors:
+            print(f"            {s.signals.api_errors} API errors — likely not reproducible")
         blockers = _blockers_for(args.projects, s.episode_id)
         if blockers:
             print(f"            not replayable: {'; '.join(blockers)}")

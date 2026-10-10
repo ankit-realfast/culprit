@@ -22,7 +22,7 @@ def test_score_weights_each_signal():
     assert score(CLEAN, slow_threshold_s=60) == 0
     assert score(FailureSignals(True, 0, 0, 0, 0.0), 60) == 5
     assert score(FailureSignals(False, 9, 0, 0, 0.0), 60) == 5  # tool errors capped
-    assert score(FailureSignals(False, 0, 2, 1, 0.0), 60) == 4
+    assert score(FailureSignals(False, 0, 2, 1, 0.0), 60) == 2  # API errors do not count
     assert score(FailureSignals(False, 0, 0, 0, 61.0), 60) == 3
 
 
@@ -36,3 +36,8 @@ def test_rank_orders_by_score_drops_clean_episodes_and_keeps_top():
     ranked = rank_candidates(summaries, top=2)
     assert [c.summary.episode_id for c in ranked] == ["both", "interrupted"]
     assert [c.score for c in ranked] == [7, 5]
+
+
+def test_an_episode_whose_only_signal_is_api_errors_is_not_a_candidate():
+    ranked = rank_candidates([summary("api", FailureSignals(False, 0, 3, 0, 10.0)), summary("clean", CLEAN)], top=5)
+    assert ranked == []

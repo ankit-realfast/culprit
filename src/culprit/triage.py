@@ -52,10 +52,10 @@ def percentile(values: list[float], fraction: float) -> float:
 
 
 def score(signals: FailureSignals, slow_threshold_s: float) -> int:
+    """API errors are left out: they are infrastructure failures a replay would not reproduce."""
     return (
         (INTERRUPT_WEIGHT if signals.interrupted else 0)
         + min(signals.tool_errors, TOOL_ERROR_CAP)
-        + signals.api_errors
         + COMPACTION_WEIGHT * signals.compactions
         + (SLOW_WEIGHT if signals.duration_s > slow_threshold_s else 0)
     )

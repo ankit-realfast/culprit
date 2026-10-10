@@ -62,7 +62,7 @@ unchanged baseline's over N replays — the exact test is in §3, *What "passes 
 |---|---|---|
 | Main session files | 345 (plus 129 subagent logs), 623 MB | Data volume |
 | Episodes (`promptId`) | 5,522 | The unit of analysis exists already |
-| Interrupts / tool errors / compactions / API errors | 386 / 1,021 / 36 / 25 | Failure-candidate signals |
+| Interrupts / tool errors / compactions / API errors | 386 / 1,021 / 36 / 25 | Failure-candidate signals (API errors are flagged, not scored) |
 | Turn duration p50 / p90 / p99 | 52 s / 241 s / 967 s | Wasteful budget, replay cost |
 | `file-history-snapshot` records | 4,853 of 4,933 prompts have one keyed by the prompt record's `uuid` | Restoring the episode's starting state (see below) |
 | Tracked file backups | 35,238 entries: 28,370 backup present in `~/.claude/file-history/<sessionId>/`, 6,239 `backupFileName: null`, 629 missing | Overlay onto a copy of the working directory |
@@ -120,7 +120,7 @@ state; v1 uses `claude -p` in a throwaway directory and revisits Harbor if isola
 | # | Unit | One job | Input → output |
 |---|---|---|---|
 | 1 | episodes | Split sessions into episodes | `.jsonl` → `Episode{prompt, transcript, model, cwd, branch, snapshot ref, signals}` |
-| 2 | triage | Rank failure candidates for the human to confirm | Episodes → confirmed episodes, each with a Symptom (human-confirmed; this is the Misjudged check) |
+| 2 | triage | Rank failure candidates for the human to confirm, from interrupts, tool errors, compactions and slow turns; API errors are infrastructure failures, so they add nothing to the score and a row that has them is marked likely not reproducible | Episodes → confirmed episodes, each with a Symptom (human-confirmed; this is the Misjudged check) |
 | 3 | criterion | Draft what success means, from the human's follow-up messages | Episode → success criterion the human approves |
 | 4 | sandbox | Restore the episode's starting state in a throwaway directory | Episode → directory |
 | 5 | oracles | Build one variant per cause | Episode → variants: task, environment, agent setup, harness, model |
