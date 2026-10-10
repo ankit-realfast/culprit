@@ -165,3 +165,23 @@ def test_drafting_calls_are_charged_to_the_episode_budget(write_session, tmp_pat
              ask=lambda prompt, schema: {})
     assert budget.spent_usd == 5 * 0.5
     assert stored_spend(episode_dir(tmp_path / "runs", "s1:p1")) == 5 * 0.5
+
+
+def test_runs_judged_against_an_older_criterion_are_set_aside_but_still_counted(write_session, tmp_path):
+    from culprit.diagnose import retire_if_criterion_changed
+    from culprit.experiment import stored_spend
+    (episode,) = episodes_from_session(write_session([human("fix", "p1", session_id="s1", cwd=str(tmp_path))]))
+    folder = episode_dir(tmp_path / "runs", "s1:p1")
+    old_criterion = Criterion("the old definition", (), (), approved=True)
+    assert retire_if_criterion_changed(folder, old_criterion) is False
+    old_run = folder / "replays" / "baseline" / "0"
+    old_run.mkdir(parents=True)
+    (old_run / "result.json").write_text(json.dumps({"cost_usd": 2.0}))
+    (folder / "replays" / "baseline" / "outcome.json").write_text(
+        json.dumps({"variant": "baseline", "passes": 0, "runs": 5, "cost_usd": 2.0}))
+    run = scripted_run({"baseline": 3})
+    verdict = run_diagnose(write_session, tmp_path, run)  # CRITERION differs from old_criterion
+    assert [name for name, _ in run.calls] == ["baseline"]  # not reused
+    assert verdict.cause == "not-reproducible"
+    assert (folder / "superseded" / "1" / "replays" / "baseline" / "0" / "result.json").exists()
+    assert stored_spend(folder) == 2.0

@@ -12,7 +12,7 @@ from culprit.calibration import (MIN_KAPPA, MIN_LABELS, UnknownRun, agreement, n
                                  run_id, run_summary)
 from culprit.claude import ClaudeCallFailed, ask_claude
 from culprit.criterion import Criterion, approve_criterion, draft_criterion, load_criterion, save_criterion
-from culprit.diagnose import diagnose
+from culprit.diagnose import diagnose, retire_if_criterion_changed
 from culprit.eligibility import project_hooks, replay_blockers
 from culprit.episodes import Episode, episodes_from_session, session_files
 from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget, run_variant, stored_spend
@@ -239,6 +239,8 @@ def ready_to_replay(args: argparse.Namespace) -> tuple[Episode, Criterion]:
 
 def baseline_command(args: argparse.Namespace) -> int:
     episode, criterion = ready_to_replay(args)
+    if retire_if_criterion_changed(episode_dir(args.runs, args.episode_id), criterion):
+        print("the criterion changed since the last runs: they were moved to superseded/ and will not be reused")
     budget = EpisodeBudget(args.budget, spent_usd=stored_spend(episode_dir(args.runs, args.episode_id)))
     outcome = run_variant("baseline", baseline_settings(episode, args.replay_budget), n=args.n, episode=episode,
                           runs_dir=args.runs, criterion=criterion, budget=budget)

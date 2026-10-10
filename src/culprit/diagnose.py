@@ -5,7 +5,9 @@ resumes where it stopped instead of paying again.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import shutil
 from dataclasses import asdict
 from itertools import combinations
 from pathlib import Path
@@ -13,19 +15,46 @@ from pathlib import Path
 from culprit.claude import ask_claude
 from culprit.criterion import Criterion
 from culprit.episodes import Episode
-from culprit.experiment import (PRISTINE_DIR, EpisodeBudget, VariantOutcome, load_outcome, record_call_spend,
-                                run_variant)
+from culprit.experiment import (CALLS_FILE, PRISTINE_DIR, REPLAYS_DIR, SUPERSEDED_DIR, EpisodeBudget, VariantOutcome,
+                                load_outcome, record_call_spend, run_variant)
 from culprit.judge import JUDGE_CALL_CAP_USD
 from culprit.oracles import build_variant, combine
 from culprit.replay import ReplaySettings, settings_from_json, settings_to_json
 from culprit.store import episode_dir
 from culprit.taxonomy import ORACLE_ORDER, Cause, Symptom
-from culprit.verdict import Verdict, beats, reproducible, save_verdict
+from culprit.verdict import VERDICT_FILE, Verdict, beats, reproducible, save_verdict
 
 VARIANTS_DIR = "variants"
 BASELINE = "baseline"
 COMBINED = "combined"
 NOT_RUN_REASON = "not run: an earlier cause already explained the failure"
+CRITERION_USED_FILE = "criterion_used.json"
+
+
+def criterion_key(criterion: Criterion) -> str:
+    text = json.dumps([criterion.success_means, list(criterion.checks), list(criterion.must_not)])
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+def retire_if_criterion_changed(folder: Path, criterion: Criterion) -> bool:
+    """Set aside every run, variant and verdict judged against a different criterion; True if any were.
+
+    They move to superseded/<n>/ rather than being deleted, so their spend still counts against the budget."""
+    marker = folder / CRITERION_USED_FILE
+    key = criterion_key(criterion)
+    retired = False
+    if marker.is_file() and json.loads(marker.read_text())["key"] != key:
+        stale = [folder / name for name in (REPLAYS_DIR, VARIANTS_DIR, VERDICT_FILE, CALLS_FILE)
+                 if (folder / name).exists()]
+        if stale:
+            destination = folder / SUPERSEDED_DIR / str(len(list((folder / SUPERSEDED_DIR).glob("*"))) + 1)
+            destination.mkdir(parents=True)
+            for path in stale:
+                shutil.move(str(path), destination / path.name)
+            retired = True
+    folder.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({"key": key}))
+    return retired
 
 
 def diagnose(episode: Episode, criterion: Criterion, symptom: Symptom, base: ReplaySettings, *, runs_dir: Path,
@@ -33,6 +62,7 @@ def diagnose(episode: Episode, criterion: Criterion, symptom: Symptom, base: Rep
              out_dir: Path | None = None, ask=ask_claude, run=run_variant, build=build_variant) -> Verdict:
     folder = out_dir or episode_dir(runs_dir, episode.episode_id)
     pristine = episode_dir(runs_dir, episode.episode_id) / PRISTINE_DIR
+    retire_if_criterion_changed(folder, criterion)
     outcomes: dict[str, VariantOutcome] = {}
     untested: dict[str, str] = {}
 

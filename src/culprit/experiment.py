@@ -21,6 +21,7 @@ OUTCOME_FILE = "outcome.json"
 JUDGEMENT_FILE = "judgement.json"
 RESULT_FILE = "result.json"
 CALLS_FILE = "calls.json"
+SUPERSEDED_DIR = "superseded"  # runs judged against an earlier criterion, kept so their spend still counts
 MAX_VOID_RETRIES = 5  # extra attempts per variant when runs fail for reasons outside the agent
 
 
@@ -92,13 +93,15 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
 def stored_spend(folder: Path) -> float:
     """Everything an episode (or selftest) folder has already spent: replays, model judgements, other calls."""
     total = 0.0
-    for run_dir in (folder / REPLAYS_DIR).glob("*/*"):
+    run_dirs = [*(folder / REPLAYS_DIR).glob("*/*"), *(folder / SUPERSEDED_DIR).glob(f"*/{REPLAYS_DIR}/*/*")]
+    for run_dir in run_dirs:
         if (run_dir / RESULT_FILE).is_file():
             total += float(json.loads((run_dir / RESULT_FILE).read_text()).get("cost_usd") or 0)
         if (run_dir / JUDGEMENT_FILE).is_file() and json.loads((run_dir / JUDGEMENT_FILE).read_text()).get("by") == "model":
             total += JUDGE_CALL_CAP_USD
-    if (folder / CALLS_FILE).is_file():
-        total += float(json.loads((folder / CALLS_FILE).read_text()).get("usd") or 0)
+    for calls in [folder / CALLS_FILE, *(folder / SUPERSEDED_DIR).glob(f"*/{CALLS_FILE}")]:
+        if calls.is_file():
+            total += float(json.loads(calls.read_text()).get("usd") or 0)
     return round(total, 4)
 
 
