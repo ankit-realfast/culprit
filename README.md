@@ -55,6 +55,9 @@ uv run culprit report                           # writes runs/report.md
 uv run culprit status [<episode-id>]            # where each episode stands and what to run next
 ```
 
+`culprit --help` lists the commands by group (workflow, human review, trust, batch) with this run-through;
+`culprit <command> --help` ends with examples.
+
 `baseline`, `diagnose`, `selftest` and `diagnose-all` print a line on stderr as each replay finishes:
 its result, its cost and what the episode has spent so far. While a replay runs, a
 `… still running` line every 30 s shows it is alive.

@@ -78,41 +78,86 @@ def require_store(runs_dir: Path) -> None:
                        f"or set {RUNS_ENV}")
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="culprit", description="Find what to change when a Claude Code episode fails.")
-    commands = parser.add_subparsers(dest="command", required=True)
+COMMAND_GROUPS = {
+    "workflow": ("triage", "restore", "baseline", "env-fix", "diagnose", "report", "status"),
+    "human review": ("confirm", "criterion"),
+    "trust": ("review", "label", "calibration", "selftest"),
+    "batch": ("diagnose-all",),
+}
+EXAMPLE_RUN = """example run:
+  culprit triage --top 20                  rank likely failures; rows are numbered #1, #2, ...
+  culprit confirm #1 wrong-result          say what went wrong
+  culprit criterion draft #1               draft what success means, then edit it
+  culprit criterion approve #1
+  culprit restore #1                       rebuild the starting files
+  culprit baseline #1 --n 1 --budget 3     one cheap unchanged replay first
+  culprit diagnose #1                      find the layer to change
+  culprit report                           rank the changes across episodes
+  culprit status                           where every episode stands, and what to run next
+"""
+EXAMPLES = {
+    "triage": "  culprit triage --top 40\n  culprit triage --projects ~/.claude/projects --runs ./runs\n",
+    "confirm": "  culprit confirm #1 wrong-result\n  culprit confirm 1a2b3c4d:5e6f7a8b no-failure\n",
+    "status": "  culprit status\n  culprit status #1\n",
+    "criterion": "  culprit criterion draft #1\n  culprit criterion show #1\n  culprit criterion approve #1\n"
+                 "  culprit criterion draft #1 --force     replace an existing criterion\n",
+    "restore": "  culprit restore #1\n  culprit restore #1 --dest /tmp/look   rebuild somewhere else to inspect\n",
+    "baseline": "  culprit baseline #1 --dry-run         show the most it could run and spend\n"
+                "  culprit baseline #1 --n 1 --budget 3\n  culprit baseline #1 --yes             no question asked\n",
+    "env-fix": "  culprit env-fix #1 fix-env.sh         run before Claude starts in the environment oracle\n",
+    "diagnose": "  culprit diagnose #1 --dry-run\n  culprit diagnose #1 --budget 60\n",
+    "review": "  culprit review\n",
+    "label": "  culprit label 1a2b__5e6f/replays/baseline/0 pass\n",
+    "calibration": "  culprit calibration\n",
+    "selftest": "  culprit selftest #4 --dry-run\n  culprit selftest #4 --budget-per-fault 20\n",
+    "report": "  culprit report\n  CULPRIT_RUNS=~/work/runs culprit report\n",
+    "diagnose-all": "  culprit diagnose-all --dry-run\n  culprit diagnose-all --per-episode 40 --total 400 --yes\n",
+}
 
-    triage = commands.add_parser("triage", help="rank episodes most likely to have failed")
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="culprit", usage="culprit [-h] <command> ...", epilog=EXAMPLE_RUN,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    # the commands are listed by group in the description, so argparse's flat list is hidden
+    commands = parser.add_subparsers(dest="command", required=True, metavar="<command>", help=argparse.SUPPRESS)
+    summaries: dict[str, str] = {}
+
+    def add(name: str, summary: str) -> argparse.ArgumentParser:
+        summaries[name] = summary
+        return commands.add_parser(name, description=summary, epilog="examples:\n" + EXAMPLES[name],
+                                   formatter_class=argparse.RawDescriptionHelpFormatter)
+
+    triage = add("triage", "rank episodes most likely to have failed")
     _projects_and_runs(triage)
     triage.add_argument("--top", type=int, default=20)
     triage.set_defaults(handler=triage_command)
 
-    confirm = commands.add_parser("confirm", help="record what went wrong in a queued episode")
+    confirm = add("confirm", "record what went wrong in a queued episode")
     confirm.add_argument("episode_id")
     confirm.add_argument("symptom", choices=[s.value for s in Symptom])
     confirm.add_argument("--runs", type=Path, default=default_runs())
     confirm.set_defaults(handler=confirm_command, needs_store=True)
 
-    status = commands.add_parser("status", help="where each episode stands and the command that moves it on")
+    status = add("status", "where each episode stands and the command that moves it on")
     status.add_argument("episode_id", nargs="?")
     status.add_argument("--runs", type=Path, default=default_runs())
     status.set_defaults(handler=status_command, needs_store=True)
 
-    criterion = commands.add_parser("criterion", help="draft, show or approve what success means for an episode")
+    criterion = add("criterion", "draft, show or approve what success means for an episode")
     criterion.add_argument("action", choices=["draft", "show", "approve"])
     criterion.add_argument("episode_id")
     criterion.add_argument("--force", action="store_true", help="draft: replace an existing criterion")
     _projects_and_runs(criterion)
     criterion.set_defaults(handler=criterion_command)
 
-    restore_parser = commands.add_parser("restore", help="rebuild an episode's starting files and check them")
+    restore_parser = add("restore", "rebuild an episode's starting files and check them")
     restore_parser.add_argument("episode_id")
     _projects_and_runs(restore_parser)
     restore_parser.add_argument("--file-history", type=Path, default=DEFAULT_FILE_HISTORY)
     restore_parser.add_argument("--dest", type=Path, default=None)
     restore_parser.set_defaults(handler=restore_command)
 
-    baseline = commands.add_parser("baseline", help="replay the unchanged episode N times and judge each run")
+    baseline = add("baseline", "replay the unchanged episode N times and judge each run")
     baseline.add_argument("episode_id")
     _projects_and_runs(baseline)
     baseline.add_argument("--n", type=int, default=5)
@@ -121,13 +166,13 @@ def build_parser() -> argparse.ArgumentParser:
     _spend_flags(baseline)
     baseline.set_defaults(handler=baseline_command)
 
-    env_fix = commands.add_parser("env-fix", help="supply a script that fixes the environment for the environment oracle")
+    env_fix = add("env-fix", "supply a script that fixes the environment for the environment oracle")
     env_fix.add_argument("episode_id")
     env_fix.add_argument("script", type=Path)
     env_fix.add_argument("--runs", type=Path, default=default_runs())
     env_fix.set_defaults(handler=env_fix_command)
 
-    diagnose_parser = commands.add_parser("diagnose", help="find what to change: run the oracles and decide the cause")
+    diagnose_parser = add("diagnose", "find what to change: run the oracles and decide the cause")
     diagnose_parser.add_argument("episode_id")
     _projects_and_runs(diagnose_parser)
     diagnose_parser.add_argument("--n", type=int, default=5)
@@ -136,21 +181,21 @@ def build_parser() -> argparse.ArgumentParser:
     _spend_flags(diagnose_parser)
     diagnose_parser.set_defaults(handler=diagnose_command)
 
-    review = commands.add_parser("review", help="show the next judged replay you have not labelled")
+    review = add("review", "show the next judged replay you have not labelled")
     review.add_argument("--runs", type=Path, default=default_runs())
     review.set_defaults(handler=review_command, needs_store=True)
 
-    label = commands.add_parser("label", help="record your own pass/fail for one judged replay")
+    label = add("label", "record your own pass/fail for one judged replay")
     label.add_argument("run")
     label.add_argument("verdict", choices=["pass", "fail"])
     label.add_argument("--runs", type=Path, default=default_runs())
     label.set_defaults(handler=label_command)
 
-    calibration = commands.add_parser("calibration", help="how often the judge agrees with your labels")
+    calibration = add("calibration", "how often the judge agrees with your labels")
     calibration.add_argument("--runs", type=Path, default=default_runs())
     calibration.set_defaults(handler=calibration_command, needs_store=True)
 
-    selftest = commands.add_parser("selftest", help="plant known faults into a control episode and score culprit")
+    selftest = add("selftest", "plant known faults into a control episode and score culprit")
     selftest.add_argument("episode_id")
     _projects_and_runs(selftest)
     selftest.add_argument("--n", type=int, default=5)
@@ -159,11 +204,11 @@ def build_parser() -> argparse.ArgumentParser:
     _spend_flags(selftest)
     selftest.set_defaults(handler=selftest_command)
 
-    report = commands.add_parser("report", help="write runs/report.md from every stored verdict")
+    report = add("report", "write runs/report.md from every stored verdict")
     report.add_argument("--runs", type=Path, default=default_runs())
     report.set_defaults(handler=report_command, needs_store=True)
 
-    batch = commands.add_parser("diagnose-all", help="diagnose every prepared episode in the queue, then report")
+    batch = add("diagnose-all", "diagnose every prepared episode in the queue, then report")
     _projects_and_runs(batch)
     batch.add_argument("--n", type=int, default=5)
     batch.add_argument("--per-episode", type=float, default=40.0)
@@ -171,6 +216,10 @@ def build_parser() -> argparse.ArgumentParser:
     batch.add_argument("--replay-budget", type=float, default=DEFAULT_REPLAY_BUDGET_USD)
     _spend_flags(batch)
     batch.set_defaults(handler=diagnose_all_command)
+    width = max(map(len, summaries)) + 2
+    parser.description = "Find what to change when a Claude Code episode fails.\n" + "".join(
+        f"\n{group}:\n" + "".join(f"  {name:<{width}}{summaries[name]}\n" for name in names)
+        for group, names in COMMAND_GROUPS.items())
     return parser
 
 
