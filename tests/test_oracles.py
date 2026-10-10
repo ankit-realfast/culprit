@@ -5,7 +5,7 @@ from culprit.logs import episodes_from_session
 from culprit.oracles import (MAX_CONTEXT_CHARS, ORACLE_MODEL, VariantBuild, build_variant, combine,
                              harness_context)
 from culprit.replay import ReplaySettings, settings_from_json, settings_to_json
-from culprit.taxonomy import Cause, Symptom
+from culprit.store import Cause, Symptom
 from fakes import FakeAsk
 from records import human, tool_use
 

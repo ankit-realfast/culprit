@@ -19,8 +19,7 @@ from culprit.experiment import (CALLS_FILE, REPLAYS_DIR, SUPERSEDED_DIR, Episode
                                 VariantOutcome, load_outcome, pristine_dir, record_call_spend, run_variant)
 from culprit.oracles import build_variant, combine
 from culprit.replay import ReplaySettings, settings_from_json, settings_to_json
-from culprit.store import episode_dir, read_json, write_json
-from culprit.taxonomy import ORACLE_ORDER, Cause, Symptom
+from culprit.store import Cause, ORACLE_ORDER, Symptom, episode_dir, read_json, write_json
 from culprit.verdict import BASELINE, COMBINED, VERDICT_FILE, Verdict, beats, pair_variant, reproducible, save_verdict
 
 VARIANTS_DIR = "variants"

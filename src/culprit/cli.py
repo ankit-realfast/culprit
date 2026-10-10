@@ -32,9 +32,9 @@ from culprit import sandbox
 from culprit.sandbox import apply_episode_originals, check_restore, episode_originals, restore, restore_from_git
 from culprit.selftest import control_min_passes, is_control, run_selftest, selftest_accuracy, selftest_cost
 from culprit.status import STAGES, EpisodeStatus, episode_status, next_step, queue_status
-from culprit.store import (RESTORE_FILE, NotReady, UnknownEpisode, confirm_step, display_id, episode_dir, queued_ids,
-                           read_symptom, record_symptom, require_queue, resolve_episode_id, save_candidates, write_json)
-from culprit.taxonomy import ORACLE_ORDER, Cause, Symptom
+from culprit.store import (Cause, NotReady, ORACLE_ORDER, RESTORE_FILE, Symptom, UnknownEpisode, confirm_step,
+                           display_id, episode_dir, queued_ids, read_symptom, record_symptom, require_queue,
+                           resolve_episode_id, save_candidates, write_json)
 from culprit.verdict import BASELINE, load_verdict, numbers_line
 
 RUNS_ENV = "CULPRIT_RUNS"

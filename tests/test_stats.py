@@ -3,7 +3,7 @@ import math
 import pytest
 
 from culprit.stats import fisher_one_sided
-from culprit.taxonomy import ORACLE_ORDER, Cause
+from culprit.store import ORACLE_ORDER, Cause
 
 
 def test_causes_are_the_spec_values_in_order():

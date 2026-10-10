@@ -103,7 +103,7 @@ def test_diagnose_queue_plan_covers_only_ready_episodes_within_the_total(write_s
 
 def test_the_default_caps_never_stop_a_full_diagnose_at_n():
     from culprit.preview import diagnose_cost
-    from culprit.taxonomy import ORACLE_ORDER, Cause
+    from culprit.store import ORACLE_ORDER, Cause
     assert cli.RUNS_PER_VARIANT == 10
     every_oracle = diagnose_cost(DEFAULT_REPLAY_BUDGET_USD, ORACLE_ORDER, n=cli.RUNS_PER_VARIANT, spent_usd=0,
                                  cap_usd=float("inf"), drafts=2)

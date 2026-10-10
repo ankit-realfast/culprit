@@ -17,8 +17,7 @@ from culprit.criterion import Criterion, load_criterion
 from culprit.diagnose import criterion_changed, variant_file
 from culprit.experiment import MAX_VOID_RETRIES, load_outcome, stored_spend
 from culprit.oracles import DRAFTED_CAUSES, HARNESS_BUDGET_MULTIPLIER, MAX_DRAFT_ATTEMPTS, cannot_build
-from culprit.store import episode_dir, queued_ids, read_json
-from culprit.taxonomy import ORACLE_ORDER, Cause
+from culprit.store import Cause, ORACLE_ORDER, episode_dir, queued_ids, read_json
 from culprit.verdict import BASELINE, COMBINED, load_verdict, pair_variant
 
 CALLS_PER_DRAFT_ATTEMPT = 2  # the draft and its leak check

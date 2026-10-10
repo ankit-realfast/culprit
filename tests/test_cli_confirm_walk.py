@@ -4,8 +4,7 @@ import json
 
 import culprit.cli as cli
 from culprit.criterion import Criterion, load_criterion, save_criterion
-from culprit.store import episode_dir, read_symptom, record_symptom
-from culprit.taxonomy import Symptom
+from culprit.store import Symptom, episode_dir, read_symptom, record_symptom
 from fakes import FakeAsk
 from records import edit_result, human, snapshot
 

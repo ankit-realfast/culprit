@@ -3,7 +3,7 @@ import json
 from culprit.criterion import Criterion
 from culprit.diagnose import CRITERION_USED_FILE, criterion_key
 from culprit.preview import CostPlan, diagnose_cost, diagnose_cost_for, plan_cost
-from culprit.taxonomy import ORACLE_ORDER, Cause
+from culprit.store import ORACLE_ORDER, Cause
 
 CRITERION = Criterion("works", (), (), approved=True)
 

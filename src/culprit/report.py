@@ -11,8 +11,7 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
-from culprit.store import SELFTEST_DIR, load_restore
-from culprit.taxonomy import Cause, Symptom
+from culprit.store import Cause, SELFTEST_DIR, Symptom, load_restore
 from culprit.verdict import load_verdict, numbers_line
 
 REPORT_FILE = "report.md"

@@ -16,8 +16,7 @@ from culprit.logs import Episode
 from culprit.experiment import EpisodeBudget, Progress, load_outcome, scoped, stored_spend
 from culprit.preview import EMPTY, CostPlan, diagnose_cost_for
 from culprit.replay import ReplaySettings
-from culprit.store import SELFTEST_DIR, episode_dir
-from culprit.taxonomy import Cause, Symptom
+from culprit.store import Cause, SELFTEST_DIR, Symptom, episode_dir
 from culprit.verdict import BASELINE, load_verdict
 
 CONTROL_MIN_SHARE = (4, 5)  # a control's baseline passes at least 4 in 5 of the N runs

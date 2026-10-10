@@ -7,8 +7,7 @@ from culprit.logs import episodes_from_session
 from culprit.experiment import EpisodeBudget, VariantOutcome
 from culprit.oracles import VariantBuild
 from culprit.replay import ReplaySettings
-from culprit.store import episode_dir
-from culprit.taxonomy import Cause, Symptom
+from culprit.store import Cause, Symptom, episode_dir
 from culprit.verdict import beats, load_verdict, reproducible
 from records import human
 
