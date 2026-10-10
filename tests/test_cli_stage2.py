@@ -73,5 +73,5 @@ def test_restore_stores_its_trust_figures_for_the_report(write_session, tmp_path
     cli.main(["restore", "s1:p1", "--projects", str(projects), "--runs", str(runs),
               "--file-history", str(tmp_path / "file-history")])
     stored = json.loads((runs / "s1__p1" / "restore.json").read_text())
-    assert stored == {"snapshot_agreed": 1, "checked": 1, "restored": 1, "unknown": 0, "missing_backups": 0,
+    assert stored == {"git_commit": None, "set_from_git": 0, "removed_by_git": 0, "snapshot_agreed": 1, "checked": 1, "restored": 1, "unknown": 0, "missing_backups": 0,
                       "outside_cwd": 0, "set_from_episode": 1, "removed": 0}

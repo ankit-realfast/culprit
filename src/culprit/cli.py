@@ -20,7 +20,8 @@ from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget, run
 from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
 from culprit.replay import DEFAULT_REPLAY_BUDGET_USD, OriginalModified, SetupScriptFailed, baseline_settings
 from culprit.report import REPORT_FILE, RESTORE_FILE, collect, render_report
-from culprit.sandbox import DEFAULT_FILE_HISTORY, apply_episode_originals, check_restore, restore
+from culprit.sandbox import (DEFAULT_FILE_HISTORY, apply_episode_originals, check_restore, episode_originals, restore,
+                             restore_from_git)
 from culprit.selftest import CONTROL_MIN_PASSES, is_control, run_selftest, selftest_accuracy
 from culprit.signals import FailureSignals
 from culprit.snapshot import load_snapshot, session_root
@@ -212,6 +213,10 @@ def restore_command(args: argparse.Namespace) -> int:
         return 1
     report = restore(episode, tracked, destination, file_history_root=args.file_history,
                      session_root=session_root(episode.session_file))
+    root = session_root(episode.session_file) or Path(episode.cwd)
+    covered = {str(Path(path) if Path(path).is_absolute() else root / path) for path in tracked}
+    covered |= set(episode_originals(episode))
+    from_git = restore_from_git(episode, destination, covered)
     checked, mismatches = check_restore(episode, destination)  # the snapshot, before the episode's record overrides it
     written, removed = apply_episode_originals(episode, destination)
     print(f"{report.restored} restored from snapshots, {len(report.unknown)} unknown (snapshot kept no backup), "
@@ -221,7 +226,12 @@ def restore_command(args: argparse.Namespace) -> int:
     for mismatch in mismatches:
         print(f"  mismatch: {mismatch.path} ({mismatch.reason})")
     print(f"{written} file(s) set from the episode's own record, {removed} removed (created during the episode)")
-    trust = {"snapshot_agreed": checked - len(mismatches), "checked": checked, "restored": report.restored,
+    if from_git:
+        print(f"{from_git.restored} other file(s) set from git commit {from_git.commit[:10]} (the last before the "
+              f"episode), {from_git.removed} removed (added after it)")
+    trust = {"git_commit": from_git.commit if from_git else None,
+             "set_from_git": from_git.restored if from_git else 0,
+             "removed_by_git": from_git.removed if from_git else 0,"snapshot_agreed": checked - len(mismatches), "checked": checked, "restored": report.restored,
              "unknown": len(report.unknown), "missing_backups": len(report.missing_backups),
              "outside_cwd": len(report.outside_cwd), "set_from_episode": written, "removed": removed}
     episode_dir(args.runs, args.episode_id).mkdir(parents=True, exist_ok=True)

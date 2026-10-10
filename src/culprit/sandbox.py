@@ -30,6 +30,13 @@ class RestoreReport:
 
 
 @dataclass(frozen=True)
+class GitRestore:
+    commit: str
+    restored: int
+    removed: int
+
+
+@dataclass(frozen=True)
 class RestoreMismatch:
     path: str
     reason: str
@@ -77,6 +84,40 @@ def restore(episode: Episode, tracked: Tracked, destination: Path,
         shutil.copyfile(backup, target)
         restored += 1
     return RestoreReport(destination, restored, tuple(unknown), tuple(missing), tuple(outside))
+
+
+def restore_from_git(episode: Episode, workdir: Path, covered: set[str]) -> GitRestore | None:
+    """For a project in git, put every file nothing else recorded back as it was in the last commit before
+    the episode began; a file added after that commit is removed. None outside git or with no such commit.
+
+    Read-only on the original: --no-optional-locks keeps git from even refreshing its index."""
+    cwd = Path(episode.cwd)
+    git = ["git", "--no-optional-locks", "-C", str(cwd)]
+    inside = subprocess.run([*git, "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True)
+    if inside.returncode != 0 or inside.stdout.strip() != "true" or not episode.started_at:
+        return None
+    commit = subprocess.run([*git, "rev-list", "-1", f"--before={episode.started_at}", "HEAD"],
+                            capture_output=True, text=True).stdout.strip()
+    if not commit:
+        return None
+    changed = subprocess.run([*git, "diff", "--name-only", "--relative", "-z", commit],
+                             capture_output=True, text=True).stdout.split("\0")
+    restored = removed = 0
+    for relative in filter(None, changed):
+        if str(cwd / relative) in covered:
+            continue  # the snapshot or the episode's own record is closer in time than any commit
+        target = target_inside(cwd, workdir, relative)
+        if target is None:
+            continue
+        shown = subprocess.run([*git, "show", f"{commit}:./{relative}"], capture_output=True)
+        if shown.returncode == 0:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(shown.stdout)
+            restored += 1
+        elif target.is_file() or target.is_symlink():
+            target.unlink()
+            removed += 1
+    return GitRestore(commit, restored, removed)
 
 
 def episode_originals(episode: Episode) -> dict[str, str | None]:

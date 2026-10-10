@@ -150,3 +150,40 @@ def test_check_restore_uses_each_files_first_touch_only(write_session, tmp_path)
     workdir = tmp_path / "restored"
     clone_tree(repo, workdir)
     assert check_restore(episode, workdir) == (0, [])
+
+
+def git_commit(repo, message, when):
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+           "GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when, "PATH": "/usr/bin:/bin"}
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", message], check=True, env=env)
+
+
+def test_files_nothing_recorded_are_rolled_back_to_the_last_commit_before_the_episode(write_session, tmp_path):
+    from culprit.sandbox import restore_from_git
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / "a.py").write_text("v1\n")
+    git_commit(repo, "before", "2026-09-30T10:00:00Z")
+    (repo / "a.py").write_text("v2\n")
+    (repo / "b.py").write_text("added later\n")
+    git_commit(repo, "after", "2026-10-02T10:00:00Z")
+    (repo / "c.py").write_text("covered by the snapshot\n")
+    episode = episode_in(write_session, repo)  # started 2026-10-01T10:00:00Z
+    workdir = tmp_path / "restored"
+    clone_tree(repo, workdir)
+    result = restore_from_git(episode, workdir, covered={str(repo / "c.py")})
+    assert (workdir / "a.py").read_text() == "v1\n"
+    assert not (workdir / "b.py").exists()
+    assert (workdir / "c.py").read_text() == "covered by the snapshot\n"
+    assert (result.restored, result.removed) == (1, 1) and len(result.commit) == 40
+    assert (repo / "a.py").read_text() == "v2\n"  # the original is untouched
+
+
+def test_a_project_outside_git_is_left_alone(write_session, tmp_path):
+    from culprit.sandbox import restore_from_git
+    repo = make_repo(tmp_path)
+    workdir = tmp_path / "restored"
+    clone_tree(repo, workdir)
+    assert restore_from_git(episode_in(write_session, repo), workdir, covered=set()) is None
