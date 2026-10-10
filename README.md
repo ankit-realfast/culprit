@@ -52,13 +52,14 @@ uv run culprit restore <episode-id>
 uv run culprit baseline <episode-id> --n 1 --budget 3   # one cheap run first; read runs/<episode>/replays/
 uv run culprit diagnose <episode-id>
 uv run culprit report                           # writes runs/report.md
+uv run culprit status [<episode-id>]            # where each episode stands and what to run next
 ```
 
 `<episode-id>` can be the full id, the queue row triage prints (`#3`), the short id it prints
 (`1a2b3c4d:5e6f7a8b`) or any prefix that matches one episode in the queue or in `runs/`.
 
 Everything is stored in `runs/` in the current folder; set `CULPRIT_RUNS=/path/to/runs` to use another
-(`--runs` overrides both). `confirm`, `review`, `calibration` and `report` refuse (exit 3) when the store
+(`--runs` overrides both). `status`, `confirm`, `review`, `calibration` and `report` refuse (exit 3) when the store
 does not exist rather than create an empty one.
 
 Batch: `uv run culprit diagnose-all --per-episode 40 --total 400` diagnoses every prepared episode.

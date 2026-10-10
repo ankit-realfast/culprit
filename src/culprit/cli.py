@@ -26,6 +26,7 @@ from culprit.sandbox import (DEFAULT_FILE_HISTORY, apply_episode_originals, chec
 from culprit.selftest import CONTROL_MIN_PASSES, is_control, run_selftest, selftest_accuracy
 from culprit.signals import FailureSignals
 from culprit.snapshot import load_snapshot, session_root
+from culprit.status import EpisodeStatus, episode_status, next_step, queue_status
 from culprit.store import (NotReady, UnknownEpisode, candidate_rows, confirm_step, episode_dir, read_symptom, record_symptom,
                            resolve_episode_id, save_candidates, short_id)
 from culprit.taxonomy import Symptom
@@ -84,6 +85,11 @@ def build_parser() -> argparse.ArgumentParser:
     confirm.add_argument("symptom", choices=[s.value for s in Symptom])
     confirm.add_argument("--runs", type=Path, default=default_runs())
     confirm.set_defaults(handler=confirm_command, needs_store=True)
+
+    status = commands.add_parser("status", help="where each episode stands and the command that moves it on")
+    status.add_argument("episode_id", nargs="?")
+    status.add_argument("--runs", type=Path, default=default_runs())
+    status.set_defaults(handler=status_command, needs_store=True)
 
     criterion = commands.add_parser("criterion", help="draft, show or approve what success means for an episode")
     criterion.add_argument("action", choices=["draft", "show", "approve"])
@@ -209,6 +215,40 @@ def confirm_command(args: argparse.Namespace) -> int:
     path = record_symptom(args.runs, args.episode_id, Symptom(args.symptom))
     print(f"recorded {args.symptom} for {args.episode_id} in {path}")
     return 0
+
+
+def status_command(args: argparse.Namespace) -> int:
+    if args.episode_id:
+        for line in status_lines(episode_status(args.runs, args.episode_id)):
+            print(line)
+        return 0
+    statuses = queue_status(args.runs)
+    if not statuses:
+        print("nothing queued — run `culprit triage`")
+    for status in statuses:
+        print(f"{short_id(status.episode_id)}  {status.stage:<18}  next: {status.next_step}")
+    return 0
+
+
+def status_lines(status: EpisodeStatus) -> list[str]:
+    lines = [status.episode_id, f"stage: {status.stage}", f"symptom: {status.symptom or 'not confirmed'}"]
+    if status.criterion is None:
+        lines.append("criterion: none")
+    else:
+        state = "approved" if status.criterion.approved else "draft, not approved"
+        lines.append(f"criterion [{state}]: {status.criterion.success_means}")
+    if status.restore:
+        r = status.restore
+        lines.append(f"restore: snapshot agrees for {r.get('snapshot_agreed', 0)} of {r.get('checked', 0)} files, "
+                     f"{r.get('unknown', 0)} unknown, {r.get('missing_backups', 0)} missing backups")
+    for outcome in status.outcomes:
+        void = f", {outcome.void} void" if outcome.void else ""
+        lines.append(f"{outcome.variant}: {outcome.passes} of {outcome.runs} passed{void}, ${outcome.cost_usd:.2f}")
+    lines.append(f"spent: ${status.spent_usd:.2f}")
+    if status.verdict:
+        lines.append(f"cause: {status.verdict.cause} — {status.verdict.evidence}")
+    lines.append(f"next: {status.next_step}")
+    return lines
 
 
 def criterion_command(args: argparse.Namespace) -> int:
