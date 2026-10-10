@@ -127,7 +127,7 @@ state; v1 uses `claude -p` in a throwaway directory and revisits Harbor if isola
 | 6 | replayer | Run each variant N times, baseline first | Variant + directory → stream-json transcripts, cost |
 | 7 | judge | Score a replay against the criterion | Final answer, diff, check results and the transcript's tool calls + criterion → pass/fail |
 | 8 | verdict | Apply the cause checklist to the pass rates, then the pair test | Pass rates → Cause |
-| 9 | report | Roll verdicts into the grid and a ranked fix list | Verdicts → report |
+| 9 | report | Lead with what to fix first (single-layer fixes ranked by episodes covered), then interacting causes (multi-cause, by layer set), then the grid and trust | Verdicts → report |
 | 10 | selftest | Plant known faults and check culprit names them | Planted episodes → accuracy |
 
 Storage is plain files: one folder per episode holding its variants, transcripts and verdict JSON.

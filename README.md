@@ -36,7 +36,9 @@ more often than the unchanged one (one-sided Fisher exact test, p < 0.05 over 10
    If no single change works, it tries them together and in pairs: **multi-cause** or **unexplained**.
    The verdict prints the numbers behind it, e.g. `harness: baseline 0/10 → 8/10, p = 0.0004`
    (the report repeats them under each verdict).
-5. `report` ranks the changes by how many of your failures each would have fixed.
+5. `report` leads with what to fix first: the single-layer changes ranked by how many of your failures each
+   would have fixed, then the layers that only worked changed together, then the episodes left for your
+   review, the symptom × cause grid and how far to trust it all.
 
 ## Install
 
@@ -84,7 +86,7 @@ Session logs are read from `~/.claude/projects`; set `CULPRIT_PROJECTS=/path/to/
 does not exist rather than create an empty one.
 
 Batch: `uv run culprit diagnose` with no episode id restores and diagnoses every confirmed episode in the
-queue, sharing a $400 total, then writes the report.
+queue, sharing a $17,000 total, then writes the report.
 
 Trust: `culprit review` shows each judged replay you have not labelled and asks pass, fail, skip or quit
 (it needs a terminal). `culprit status` and the report show how often the judge agrees with you

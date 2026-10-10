@@ -1,4 +1,4 @@
-from culprit.report import collect, fix_list, grid, render_report
+from culprit.report import collect, fix_list, grid, interactions, render_report
 from culprit.verdict import Verdict, save_verdict
 
 
@@ -33,22 +33,41 @@ def test_grid_counts_symptom_by_cause(tmp_path):
 def test_fixes_rank_by_count_then_cause_order_and_skip_non_fixes(tmp_path):
     sample(tmp_path)
     fixes = fix_list(collect(tmp_path))
-    assert [(f.cause, f.count) for f in fixes] == [("harness", 2), ("agent-setup", 1), ("multi-cause", 1)]
+    assert [(f.cause, f.count) for f in fixes] == [("harness", 2), ("agent-setup", 1)]  # multi-cause: interactions
     assert fixes[0].episodes == ("a:1", "b:1")
     assert "tools" in fixes[0].action
 
 
-def test_multi_cause_names_its_layers_in_the_fix_list(tmp_path):
+def test_interacting_causes_are_listed_by_their_layers(tmp_path):
     sample(tmp_path)
-    multi = next(f for f in fix_list(collect(tmp_path)) if f.cause == "multi-cause")
-    assert "task + model" in multi.action
+    verdict(tmp_path, "f__1", "wrong-result", "multi-cause", pair=("model", "task"))
+    verdict(tmp_path, "g__1", "wrong-result", "multi-cause", pair=("harness", "model"))
+    assert [(i.layers, i.count, i.episodes) for i in interactions(collect(tmp_path))] == [
+        ("task + model", 2, ("d:1", "f:1")), ("harness + model", 1, ("g:1",))]
+
+
+def test_the_report_leads_with_what_to_fix_then_interactions_then_the_grid_and_trust(tmp_path):
+    sample(tmp_path)
+    text = render_report(collect(tmp_path), ["judge: 20 of 22 labels agree"])
+    order = ["## What to fix first", "## Causes that interact", "## Symptom × cause", "## How far to trust this",
+             "## Verdicts", "## Known limits"]
+    assert [text.index(heading) for heading in order] == sorted(text.index(heading) for heading in order)
+    fixes = text.split("## What to fix first")[1].split("##")[0]
+    assert fixes.index("| harness | 2 |") < fixes.index("| agent-setup | 1 |") and "multi-cause" not in fixes
+    assert "task + model" in text.split("## Causes that interact")[1].split("##")[0]
+
+
+def test_when_only_interacting_causes_explain_failures_the_headline_names_the_pair(tmp_path):
+    verdict(tmp_path, "a__1", "wrong-result", "multi-cause", pair=("task", "model"))
+    text = render_report(collect(tmp_path), [])
+    assert "**Change task + model together first:**" in text and "No single change to make" not in text
 
 
 def test_the_report_leads_with_the_answer_and_states_the_limits(tmp_path):
     sample(tmp_path)
     text = render_report(collect(tmp_path), ["judge: 20 of 22 labels agree, kappa 0.81 — calibrated",
                                              "selftest: 4 of 5 planted faults named correctly"])
-    first_lines = text.splitlines()[:4]
+    first_lines = text.splitlines()[:5]
     assert any("harness" in line and "2 of 5" in line for line in first_lines)
     for expected in ["| Fix", "| Symptom", "wrong-result", "kappa 0.81", "4 of 5 planted faults",
                      "Known limits", "project's memory", "no environment fix supplied", "harness passed 4/5"]:
