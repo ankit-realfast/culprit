@@ -60,3 +60,21 @@ def test_triage_numbers_rows_and_commands_take_the_number(write_session, tmp_pat
     assert read_symptom(runs, "s1:p2").value == "wasteful"
     assert main(["confirm", "s1", "stopped-short", "--runs", str(runs)]) == 0
     assert read_symptom(runs, "s1:p2").value == "stopped-short"
+
+
+def test_culprit_runs_sets_the_default_store_and_the_flag_wins(write_session, tmp_path, monkeypatch):
+    write_session([human("went wrong", "p2", session_id="s1"), interrupt("p2")])
+    monkeypatch.setenv("CULPRIT_RUNS", str(tmp_path / "env-runs"))
+    main(["triage", "--projects", str(tmp_path / "projects")])
+    assert (tmp_path / "env-runs" / "candidates.json").exists()
+    main(["triage", "--projects", str(tmp_path / "projects"), "--runs", str(tmp_path / "flag-runs")])
+    assert (tmp_path / "flag-runs" / "candidates.json").exists()
+
+
+def test_read_only_commands_refuse_a_missing_store_without_creating_it(tmp_path, capsys):
+    missing = tmp_path / "nowhere"
+    for argv in (["review"], ["calibration"], ["report"], ["confirm", "s1:p1", "wasteful"]):
+        assert main([*argv, "--runs", str(missing)]) == 3
+        err = capsys.readouterr().err
+        assert f"no culprit store at {missing.resolve()}" in err and "CULPRIT_RUNS" in err
+    assert not missing.exists()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -31,7 +32,7 @@ from culprit.taxonomy import Symptom
 from culprit.triage import EpisodeSummary, rank_candidates
 
 DEFAULT_PROJECTS = Path.home() / ".claude" / "projects"
-DEFAULT_RUNS = Path("runs")
+RUNS_ENV = "CULPRIT_RUNS"
 EXIT_REFUSED = 1
 EXIT_NOT_READY = 3
 EXIT_BUDGET = 4
@@ -40,6 +41,8 @@ EXIT_BUDGET = 4
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if getattr(args, "needs_store", False):
+            require_store(args.runs)
         if getattr(args, "episode_id", None):
             args.episode_id = resolve_episode_id(args.runs, args.episode_id)
         return args.handler(args)
@@ -55,6 +58,18 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_REFUSED
 
 
+def default_runs() -> Path:
+    """The store: $CULPRIT_RUNS when set, otherwise runs/ in the current folder; --runs overrides both."""
+    return Path(os.environ.get(RUNS_ENV) or "runs")
+
+
+def require_store(runs_dir: Path) -> None:
+    """Read-only commands call this so a wrong folder is reported instead of an empty store being created."""
+    if not runs_dir.is_dir():
+        raise NotReady(f"no culprit store at {runs_dir.resolve()} — run from the folder holding runs/ "
+                       f"or set {RUNS_ENV}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="culprit", description="Find what to change when a Claude Code episode fails.")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -67,8 +82,8 @@ def build_parser() -> argparse.ArgumentParser:
     confirm = commands.add_parser("confirm", help="record what went wrong in a queued episode")
     confirm.add_argument("episode_id")
     confirm.add_argument("symptom", choices=[s.value for s in Symptom])
-    confirm.add_argument("--runs", type=Path, default=DEFAULT_RUNS)
-    confirm.set_defaults(handler=confirm_command)
+    confirm.add_argument("--runs", type=Path, default=default_runs())
+    confirm.set_defaults(handler=confirm_command, needs_store=True)
 
     criterion = commands.add_parser("criterion", help="draft, show or approve what success means for an episode")
     criterion.add_argument("action", choices=["draft", "show", "approve"])
@@ -95,7 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
     env_fix = commands.add_parser("env-fix", help="supply a script that fixes the environment for the environment oracle")
     env_fix.add_argument("episode_id")
     env_fix.add_argument("script", type=Path)
-    env_fix.add_argument("--runs", type=Path, default=DEFAULT_RUNS)
+    env_fix.add_argument("--runs", type=Path, default=default_runs())
     env_fix.set_defaults(handler=env_fix_command)
 
     diagnose_parser = commands.add_parser("diagnose", help="find what to change: run the oracles and decide the cause")
@@ -107,18 +122,18 @@ def build_parser() -> argparse.ArgumentParser:
     diagnose_parser.set_defaults(handler=diagnose_command)
 
     review = commands.add_parser("review", help="show the next judged replay you have not labelled")
-    review.add_argument("--runs", type=Path, default=DEFAULT_RUNS)
-    review.set_defaults(handler=review_command)
+    review.add_argument("--runs", type=Path, default=default_runs())
+    review.set_defaults(handler=review_command, needs_store=True)
 
     label = commands.add_parser("label", help="record your own pass/fail for one judged replay")
     label.add_argument("run")
     label.add_argument("verdict", choices=["pass", "fail"])
-    label.add_argument("--runs", type=Path, default=DEFAULT_RUNS)
+    label.add_argument("--runs", type=Path, default=default_runs())
     label.set_defaults(handler=label_command)
 
     calibration = commands.add_parser("calibration", help="how often the judge agrees with your labels")
-    calibration.add_argument("--runs", type=Path, default=DEFAULT_RUNS)
-    calibration.set_defaults(handler=calibration_command)
+    calibration.add_argument("--runs", type=Path, default=default_runs())
+    calibration.set_defaults(handler=calibration_command, needs_store=True)
 
     selftest = commands.add_parser("selftest", help="plant known faults into a control episode and score culprit")
     selftest.add_argument("episode_id")
@@ -129,8 +144,8 @@ def build_parser() -> argparse.ArgumentParser:
     selftest.set_defaults(handler=selftest_command)
 
     report = commands.add_parser("report", help="write runs/report.md from every stored verdict")
-    report.add_argument("--runs", type=Path, default=DEFAULT_RUNS)
-    report.set_defaults(handler=report_command)
+    report.add_argument("--runs", type=Path, default=default_runs())
+    report.set_defaults(handler=report_command, needs_store=True)
 
     batch = commands.add_parser("diagnose-all", help="diagnose every prepared episode in the queue, then report")
     _projects_and_runs(batch)
@@ -144,7 +159,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _projects_and_runs(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--projects", type=Path, default=DEFAULT_PROJECTS)
-    parser.add_argument("--runs", type=Path, default=DEFAULT_RUNS)
+    parser.add_argument("--runs", type=Path, default=default_runs())
 
 
 def triage_command(args: argparse.Namespace) -> int:
