@@ -58,6 +58,9 @@ uv run culprit status [<episode-id>]            # where each episode stands and 
 `culprit --help` lists the commands by group (workflow, human review, trust, batch) with this run-through;
 `culprit <command> --help` ends with examples.
 
+For scripts, `triage`, `status`, `baseline`, `diagnose` and `calibration` take `--json`: stdout is then
+one JSON document and nothing else (progress, `next:` lines and questions stay on stderr).
+
 `baseline`, `diagnose`, `selftest` and `diagnose-all` print a line on stderr as each replay finishes:
 its result, its cost and what the episode has spent so far. While a replay runs, a
 `… still running` line every 30 s shows it is alive.

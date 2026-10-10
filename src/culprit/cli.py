@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 from culprit.batch import ENV_FIX_FILE, diagnose_all
@@ -130,6 +131,7 @@ def build_parser() -> argparse.ArgumentParser:
     triage = add("triage", "rank episodes most likely to have failed")
     _projects_and_runs(triage)
     triage.add_argument("--top", type=int, default=20)
+    _json_flag(triage)
     triage.set_defaults(handler=triage_command)
 
     confirm = add("confirm", "record what went wrong in a queued episode")
@@ -141,6 +143,7 @@ def build_parser() -> argparse.ArgumentParser:
     status = add("status", "where each episode stands and the command that moves it on")
     status.add_argument("episode_id", nargs="?")
     status.add_argument("--runs", type=Path, default=default_runs())
+    _json_flag(status)
     status.set_defaults(handler=status_command, needs_store=True)
 
     criterion = add("criterion", "draft, show or approve what success means for an episode")
@@ -164,6 +167,7 @@ def build_parser() -> argparse.ArgumentParser:
     baseline.add_argument("--budget", type=float, default=10.0, help="spend cap in USD for this episode, counting what it already spent")
     baseline.add_argument("--replay-budget", type=float, default=DEFAULT_REPLAY_BUDGET_USD)
     _spend_flags(baseline)
+    _json_flag(baseline)
     baseline.set_defaults(handler=baseline_command)
 
     env_fix = add("env-fix", "supply a script that fixes the environment for the environment oracle")
@@ -179,6 +183,7 @@ def build_parser() -> argparse.ArgumentParser:
     diagnose_parser.add_argument("--budget", type=float, default=40.0, help="spend cap in USD for this episode, counting what it already spent")
     diagnose_parser.add_argument("--replay-budget", type=float, default=DEFAULT_REPLAY_BUDGET_USD)
     _spend_flags(diagnose_parser)
+    _json_flag(diagnose_parser)
     diagnose_parser.set_defaults(handler=diagnose_command)
 
     review = add("review", "show the next judged replay you have not labelled")
@@ -193,6 +198,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     calibration = add("calibration", "how often the judge agrees with your labels")
     calibration.add_argument("--runs", type=Path, default=default_runs())
+    _json_flag(calibration)
     calibration.set_defaults(handler=calibration_command, needs_store=True)
 
     selftest = add("selftest", "plant known faults into a control episode and score culprit")
@@ -228,6 +234,15 @@ def _projects_and_runs(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--runs", type=Path, default=default_runs())
 
 
+def _json_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--json", action="store_true", help="print one JSON document on stdout instead of text")
+
+
+def emit(data: dict) -> None:
+    """The whole of stdout under --json: one document, so scripts can parse it."""
+    print(json.dumps(data, indent=2, default=str))
+
+
 def _spend_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dry-run", action="store_true", help="print the most it could run and spend, then stop")
     parser.add_argument("--yes", "-y", action="store_true", help="run without asking to confirm the spend")
@@ -240,8 +255,11 @@ def stdin_is_tty() -> bool:
 def approve_spend(args: argparse.Namespace, plan: CostPlan) -> int | None:
     """Show the most a command can spend and get a yes; None to go on, otherwise the exit code to stop with."""
     if args.dry_run:
-        for line in plan.lines():
-            print(line)
+        if getattr(args, "json", False):
+            emit({"plan": asdict(plan)})
+        else:
+            for line in plan.lines():
+                print(line)
         return 0
     for line in plan.lines():
         print(line, file=sys.stderr)
@@ -251,8 +269,9 @@ def approve_spend(args: argparse.Namespace, plan: CostPlan) -> int | None:
         print("culprit: not started — no terminal to confirm the spend; pass --yes to run without asking",
               file=sys.stderr)
         return EXIT_NOT_READY
+    print("proceed? [y/N] ", end="", file=sys.stderr, flush=True)  # on stderr, so stdout stays clean for --json
     try:
-        answer = input("proceed? [y/N] ")
+        answer = input()
     except EOFError:
         answer = ""
     if answer.strip().lower() in ("y", "yes"):
@@ -270,6 +289,13 @@ def triage_command(args: argparse.Namespace) -> int:
     candidates = rank_candidates(summaries, args.top)
     path = save_candidates(args.runs, candidates)
     queue = [row["summary"]["episode_id"] for row in candidate_rows(args.runs)]
+    if args.json:
+        emit({"scanned": len(summaries), "queued": len(queue), "path": path, "candidates": [
+            {"row": queue.index(c.summary.episode_id) + 1, "episode_id": c.summary.episode_id,
+             "short_id": short_id(c.summary.episode_id), "score": c.score, "signals": asdict(c.summary.signals),
+             "prompt_excerpt": c.summary.prompt_excerpt, "session_file": c.summary.session_file,
+             "replay_blockers": _blockers_for(args.projects, c.summary.episode_id)} for c in candidates]})
+        return 0
     for candidate in candidates:
         s = candidate.summary
         row = f"#{queue.index(s.episode_id) + 1}"
@@ -318,10 +344,17 @@ def print_next(runs_dir: Path, episode_id: str) -> None:
 
 def status_command(args: argparse.Namespace) -> int:
     if args.episode_id:
-        for line in status_lines(episode_status(args.runs, args.episode_id)):
+        status = episode_status(args.runs, args.episode_id)
+        if args.json:
+            emit(asdict(status))
+            return 0
+        for line in status_lines(status):
             print(line)
         return 0
     statuses = queue_status(args.runs)
+    if args.json:
+        emit({"episodes": [asdict(status) for status in statuses]})
+        return 0
     if not statuses:
         print("nothing queued — run `culprit triage`")
     for status in statuses:
@@ -439,11 +472,16 @@ def baseline_command(args: argparse.Namespace) -> int:
     if stop is not None:
         return stop  # asked before retiring stale runs, so a dry run or a "no" changes nothing on disk
     if retire_if_criterion_changed(episode_dir(args.runs, args.episode_id), criterion):
-        print("the criterion changed since the last runs: they were moved to superseded/ and will not be reused")
+        print("the criterion changed since the last runs: they were moved to superseded/ and will not be reused",
+              file=sys.stderr)
     budget = EpisodeBudget(args.budget, spent_usd=spent)
     with ProgressPrinter() as progress:
         outcome = run_variant("baseline", baseline_settings(episode, args.replay_budget), n=args.n, episode=episode,
                               runs_dir=args.runs, criterion=criterion, budget=budget, progress=progress)
+    if args.json:
+        emit({"episode_id": args.episode_id, "outcome": asdict(outcome), "next": next_step(args.runs, args.episode_id)})
+        print_next(args.runs, args.episode_id)
+        return 0
     print(f"baseline: {outcome.passes} of {outcome.runs} passed, ${outcome.cost_usd:.2f} spent on replays")
     print_next(args.runs, args.episode_id)
     return 0
@@ -478,6 +516,12 @@ def diagnose_command(args: argparse.Namespace) -> int:
                            runs_dir=args.runs, follow_ups=follow_up_prompts(args.projects, args.episode_id),
                            env_script=env_script if env_script.exists() else None, n=args.n, budget=budget,
                            progress=progress)
+    if args.json:
+        correct, total = selftest_accuracy(args.runs)
+        emit({"verdict": asdict(verdict), "judge": agreement_json(agreement(args.runs)),
+              "selftest": {"correct": correct, "total": total}, "next": next_step(args.runs, args.episode_id)})
+        print_next(args.runs, args.episode_id)
+        return 0
     print(f"cause: {verdict.cause}\nevidence: {verdict.evidence}")
     if verdict.pair:
         print(f"together: {' + '.join(verdict.pair)}")
@@ -516,8 +560,16 @@ def label_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def agreement_json(result) -> dict:
+    return {"labelled": result.labelled, "agreed": result.agreed, "kappa": result.kappa,
+            "calibrated": result.calibrated, "min_labels": MIN_LABELS, "min_kappa": MIN_KAPPA}
+
+
 def calibration_command(args: argparse.Namespace) -> int:
     result = agreement(args.runs)
+    if args.json:
+        emit(agreement_json(result))
+        return 0
     kappa = "not computable yet" if result.kappa is None else f"{result.kappa:.2f}"
     print(f"{result.labelled} labelled, {result.agreed} agree with the judge, kappa {kappa}")
     print("calibrated" if result.calibrated else f"uncalibrated: needs {MIN_LABELS} labels and kappa ≥ {MIN_KAPPA}")

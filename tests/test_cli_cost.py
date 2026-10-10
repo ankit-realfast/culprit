@@ -77,9 +77,10 @@ def test_at_a_terminal_it_asks_first(write_session, tmp_path, capsys, monkeypatc
     flags = ready(write_session, tmp_path)
     monkeypatch.setattr(cli, "stdin_is_tty", lambda: True)
     asked = []
-    monkeypatch.setattr("builtins.input", lambda prompt: asked.append(prompt) or answer)
+    monkeypatch.setattr("builtins.input", lambda: asked.append(True) or answer)
     assert cli.main(["baseline", "s1:p1", *flags]) == code
-    assert asked == ["proceed? [y/N] "] and spy == ran
+    assert asked == [True] and spy == ran
+    assert "proceed? [y/N] " in capsys.readouterr().err  # asked on stderr, so stdout stays clean
 
 
 def test_dry_run_does_not_retire_runs_judged_against_an_older_criterion(write_session, tmp_path, spy):
