@@ -84,3 +84,15 @@ def test_triage_marks_rows_with_api_errors_as_likely_not_reproducible(write_sess
     write_session([human("went wrong", "p2", session_id="s1"), system("api_error"), interrupt("p2")])
     main(["triage", "--projects", str(tmp_path / "projects"), "--runs", str(tmp_path / "runs")])
     assert "API errors — likely not reproducible" in capsys.readouterr().out
+
+
+def test_ctrl_c_stops_with_exit_130_and_says_how_to_resume(tmp_path, capsys, monkeypatch):
+    import culprit.cli as cli_module
+
+    def interrupted(runs_dir):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli_module, "write_report", interrupted)
+    (tmp_path / "runs").mkdir()
+    assert main(["report", "--runs", str(tmp_path / "runs")]) == 130
+    assert "stopped. finished runs are kept; rerun the same command to resume" in capsys.readouterr().err

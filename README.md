@@ -77,7 +77,8 @@ shows how often the judge agrees with you (calibrated at ≥ 20 labels and Cohen
 and reports how often culprit names it.
 
 Exit codes: 0 done · 1 refused or failed · 2 bad arguments · 3 not ready (a step that must come first
-is missing; the message names it) · 4 spend cap reached.
+is missing; the message names it) · 4 spend cap reached · 130 stopped with Ctrl-C (the replay in
+flight is killed and its copy deleted; finished replays are kept, so rerunning the same command resumes).
 
 ## Cost
 

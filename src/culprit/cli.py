@@ -38,6 +38,7 @@ RUNS_ENV = "CULPRIT_RUNS"
 EXIT_REFUSED = 1
 EXIT_NOT_READY = 3
 EXIT_BUDGET = 4
+EXIT_INTERRUPTED = 130
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -54,6 +55,10 @@ def main(argv: list[str] | None = None) -> int:
     except BudgetExhausted as spent:
         print(f"culprit: {spent}", file=sys.stderr)
         return EXIT_BUDGET
+    except KeyboardInterrupt:
+        # every replay is saved as soon as it is judged and reused on the next run, so nothing paid for is lost
+        print("\nculprit: stopped. finished runs are kept; rerun the same command to resume", file=sys.stderr)
+        return EXIT_INTERRUPTED
     except (UnknownEpisode, EpisodeNotFound, FileNotFoundError, ClaudeCallFailed,
             SetupScriptFailed, UnknownRun, OriginalModified) as refusal:
         print(f"culprit: {refusal}", file=sys.stderr)

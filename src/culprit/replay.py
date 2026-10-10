@@ -216,14 +216,16 @@ def project_folder_name(path: Path) -> str:
 def run_in_own_process_group(command: list[str], *, input: str | None = None, capture_output: bool = True,
                              text: bool = True, timeout: float | None = None, cwd: Path | None = None,
                              env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
-    """subprocess.run, except a timeout kills everything the command started, not just the command."""
+    """subprocess.run, except a timeout or an interrupt kills everything the command started.
+
+    The command runs in its own session, so the terminal's Ctrl-C never reaches it: culprit kills it."""
     process = subprocess.Popen(command, stdin=subprocess.PIPE if input is not None else None,
                                stdout=subprocess.PIPE if capture_output else None,
                                stderr=subprocess.PIPE if capture_output else None, text=text, cwd=cwd, env=env,
                                start_new_session=True)
     try:
         stdout, stderr = process.communicate(input, timeout=timeout)
-    except subprocess.TimeoutExpired:
+    except (subprocess.TimeoutExpired, KeyboardInterrupt):
         os.killpg(process.pid, signal.SIGKILL)
         process.communicate()
         raise

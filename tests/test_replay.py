@@ -358,3 +358,50 @@ def test_without_recorded_answers_every_permission_prompt_is_still_refused():
     command = replay_command(settings())
     assert command[command.index("--permission-prompts") + 1] == "none"
     assert "--permission-prompt-tool" not in command
+
+
+class InterruptedProcess:
+    """A Popen stand-in whose first communicate is cut short by Ctrl-C, as a real one would be."""
+
+    pid = 4242
+
+    def __init__(self, *args, **kwargs):
+        self.communicated = 0
+
+    def communicate(self, *args, **kwargs):
+        self.communicated += 1
+        if self.communicated == 1:
+            raise KeyboardInterrupt
+        return "", ""
+
+
+def test_an_interrupt_kills_the_whole_process_group_and_waits_for_it(monkeypatch):
+    import culprit.replay as replay
+    killed, made = [], []
+
+    def popen(*args, **kwargs):
+        made.append(InterruptedProcess())
+        return made[-1]
+
+    monkeypatch.setattr(replay.subprocess, "Popen", popen)
+    monkeypatch.setattr(replay.os, "killpg", lambda pid, sig: killed.append((pid, sig)))
+    with pytest.raises(KeyboardInterrupt):
+        replay.run_in_own_process_group(["claude", "-p"], input="fix it")
+    # the child runs in its own session, so the terminal's Ctrl-C never reached it: culprit must kill it
+    assert killed == [(4242, replay.signal.SIGKILL)]
+    assert made[0].communicated == 2
+
+
+def test_an_interrupt_during_a_replay_still_removes_the_clone_and_the_empty_memory_folder(tmp_path):
+    pristine = pristine_tree(tmp_path)
+    projects = tmp_path / "projects"
+    workdir = tmp_path / ".culprit-replay-abc"
+
+    def claude_leaves_memory(cwd):
+        (projects / project_folder_name(cwd.resolve()) / "memory").mkdir(parents=True)
+
+    run = FakeRun(on_claude=claude_leaves_memory, claude_raises=KeyboardInterrupt())
+    with pytest.raises(KeyboardInterrupt):
+        run_replay(settings(), pristine, tmp_path / "run0", workdir, (), run=run, projects_dir=projects)
+    assert not workdir.exists()
+    assert list(projects.iterdir()) == []
