@@ -101,6 +101,13 @@ says so.
   "result": …, "total_cost_usd": …, "num_turns": …}`; `--no-session-persistence` writes no session log
   but still creates an empty `~/.claude/projects/<encoded cwd>/memory/` folder; plugin `SessionStart`
   hooks run.
+- Verified live 2026-10-11 on 2.1.296 (Haiku): a copy of a session log cut before a prompt, with every
+  `sessionId` set to a fresh uuid4 and every `cwd` pointed at a new folder, written to
+  `~/.claude/projects/<encoded new folder>/<new id>.jsonl` (encoding: every non-alphanumeric character of
+  the absolute path becomes `-`), is resumed from that folder by `claude -p --resume <new id> --fork-session
+  --no-session-persistence`: the model sees the earlier turns and nothing after the cut, and neither the
+  original log nor the copy is modified. Without `--system-prompt-snapshot off` the resumed run reuses the
+  session's recorded system prompt and ignores `--append-system-prompt`.
 - `--json-schema` with `--output-format json` returns schema-checked output in `structured_output`
   (docs); the judge, drafter and leak check use it.
 
@@ -155,7 +162,7 @@ and spend before it starts.
 ### Every replay runs locked down
 
 ```
-claude -p "<episode or variant prompt>" \
+claude -p \                      # the episode or variant prompt goes on stdin
   --output-format stream-json --verbose \
   --strict-mcp-config --mcp-config '<stand-ins only, or {"mcpServers":{}}>' \
   --permission-prompts none --permission-mode <mode> \
@@ -163,9 +170,17 @@ claude -p "<episode or variant prompt>" \
   --no-session-persistence --max-budget-usd <cap> \
   --settings '<Bash sandbox, autoMemoryDirectory>' \
   --model <model> \
+    # a follow-up episode: --resume <fork id> --fork-session --system-prompt-snapshot off
   --disallowedTools "Bash(git push *)" "Bash(gh *)" <file tools on the original folder>
 ```
 
+- **A follow-up starts from its session's earlier conversation.** For an episode that is not its
+  session's first prompt, culprit copies every record before the episode's prompt (by file order), gives
+  the copy a fresh session id, points every path into the original project (each `cwd` and any path the
+  conversation mentions) at the clone, writes it under the clone's folder in `~/.claude/projects/` and
+  resumes it as a fork with the system-prompt snapshot off, so the appended-instructions oracle still
+  applies. Every variant gets the same history; the task oracle restates only the episode's own prompt.
+  A session's first prompt replays with no history, as before. The original log is only read.
 - **No real MCP server ever connects.** For each server an episode used, culprit runs a stand-in that
   answers recorded calls with their recorded results and fails any call the original never made.
 - **Questions are answered from the log:** culprit's answer host is the permission-prompt tool; a
@@ -182,8 +197,8 @@ claude -p "<episode or variant prompt>" \
   they were); the replay's writes never reach the real notes.
 - **Permission mode:** the episode's own mode (`auto`, `acceptEdits`), except `default` becomes
   `acceptEdits`, because in the original the human approved those prompts and no human is present now.
-- **Cleanup:** after each replay culprit deletes the clone and the empty `memory/` folder Claude Code
-  leaves under `~/.claude/projects/`.
+- **Cleanup:** after each replay culprit deletes the clone, the forked session copy, and the clone's
+  folder under `~/.claude/projects/` when nothing but an empty `memory/` folder is left in it.
 - **Spend:** `--max-budget-usd` per replay ($2 by default; the harness variant doubles it), each model
   call capped at $0.50, and built-in caps that stop further replays: $850 per episode, $650 per planted
   fault, $17,000 for a whole-queue `diagnose` (see §5).
@@ -192,7 +207,8 @@ claude -p "<episode or variant prompt>" \
 
 An episode is replayable only if its `cwd` still exists and is not the home folder, a folder containing
 culprit, a git worktree or submodule, or beside an unwritable parent; its snapshot exists; any question it
-asked has a recorded answer; and any image it carried was kept in the log. `triage` lists blocked candidates after every replayable one and prints the blocking reason under each,
+asked has a recorded answer; any image it carried was kept in the log; and, for a follow-up, its prompt
+record has the `uuid` the session copy is cut at. `triage` lists blocked candidates after every replayable one and prints the blocking reason under each,
 and the restore (run by the `confirm` walk or by `diagnose`) refuses with the reasons; it also lists every
 hook the project's own settings define, because those hooks run in every replay.
 
@@ -248,8 +264,10 @@ Every verdict states the numbers behind it — the baseline's pass count, the wi
 - An MCP call or a question the original session never made cannot be answered in a replay.
 - For a project in git, files nothing else recorded come from the last commit before the episode;
   elsewhere they are as they are today.
-- v1 replays from the episode's start, not from the step where it went wrong; mid-episode branching is
-  deferred until v1 proves the method.
+- v1 replays from the episode's start (with its session's earlier conversation in place), not from the
+  step where it went wrong; mid-episode branching is deferred until v1 proves the method.
+- A late-session episode re-sends its whole earlier conversation on every replay, so it costs more per run
+  and can hit the per-replay cap; a run stopped by the cap is void and retried, not counted.
 - A Harness verdict cannot say whether the fix is yours (configuration) or the vendor's (a Claude Code
   bug): an intervention shows what made it pass, not who must change it. The human reads the evidence.
 - Cost: about 60 replays per episode (baseline ×10 plus five variants ×10), ~50 minutes at the median turn

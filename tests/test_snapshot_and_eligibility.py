@@ -116,3 +116,10 @@ def test_a_question_whose_answer_was_recorded_does_not_block_a_replay(write_sess
     episode = only_episode(write_session, [human("x", "p1", cwd=str(tmp_path)), tool_use("AskUserQuestion", questions=[]),
                                            answered])
     assert not any("asked the human" in b for b in replay_blockers(episode, {}))
+
+
+def test_a_follow_up_whose_prompt_has_no_uuid_cannot_be_cut_from_its_session(write_session, tmp_path):
+    first, follow_up = episodes_from_session(write_session([
+        human("a", "p1", cwd=str(tmp_path)), human("b", "p2", cwd=str(tmp_path), uuid=None)]))
+    assert not any("uuid" in b for b in replay_blockers(first, {}))
+    assert any("earlier conversation" in b for b in replay_blockers(follow_up, {}))

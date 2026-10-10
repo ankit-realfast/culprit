@@ -8,7 +8,7 @@ from culprit.logs import episodes_from_session
 from culprit.replay import (ReplaySettings, SetupScriptFailed, baseline_settings, project_folder_name, replay_command,
                             replay_permission_mode, replay_prompt, replay_workdir, run_replay)
 from fakes import FakeRun
-from records import assistant, human
+from records import assistant, human, snapshot
 
 RESULT = json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "done",
                      "total_cost_usd": 0.42, "num_turns": 7})
@@ -405,3 +405,131 @@ def test_an_interrupt_during_a_replay_still_removes_the_clone_and_the_empty_memo
         run_replay(settings(), pristine, tmp_path / "run0", workdir, (), run=run, projects_dir=projects)
     assert not workdir.exists()
     assert list(projects.iterdir()) == []
+
+
+# --- a follow-up episode replays from a truncated copy of its session ---
+
+FORK_FLAGS = ("--resume", "--fork-session", "--system-prompt-snapshot")
+
+
+def follow_up_session(write_session, original):
+    records = [
+        snapshot("u-p1", {}),
+        human("look at the parser", "p1", cwd=str(original)),
+        assistant(text=f"I read {original}/parser.py and {original}-other/x.py"),
+        {"type": "system", "subtype": "turn_duration", "durationMs": 10, "sessionId": "s1", "cwd": f"{original}/sub"},
+        human("remove X3", "p2", cwd=str(original)),
+        assistant(text="LATER: removed it"),
+    ]
+    return write_session(records)
+
+
+def test_only_a_follow_up_episode_carries_its_sessions_history(write_session, tmp_path):
+    path = follow_up_session(write_session, tmp_path / "proj")
+    first, follow_up = episodes_from_session(path)
+    assert (baseline_settings(first).history_file, baseline_settings(first).history_before) == (None, None)
+    assert (baseline_settings(follow_up).history_file, baseline_settings(follow_up).history_before) == (path, "u-p2")
+
+
+def test_a_first_prompt_replays_without_resuming_anything(tmp_path):
+    run = FakeRun(claude_stdout=RESULT)
+    run_replay(settings(), pristine_tree(tmp_path), tmp_path / "run0", tmp_path / ".culprit-replay-first", (),
+               run=run, projects_dir=tmp_path / "p")
+    command = next(c for c, _ in run.calls if c[0] == "claude")
+    assert not any(flag in command for flag in FORK_FLAGS)
+
+
+def run_follow_up(write_session, tmp_path, **fake):
+    original = tmp_path / "proj"
+    original.mkdir()
+    path = follow_up_session(write_session, original)
+    before = path.read_text()
+    follow_up = list(episodes_from_session(path))[1]
+    projects = tmp_path / "claude-projects"
+    workdir = tmp_path / ".culprit-replay-fork"
+    seen = {}
+
+    def claude_reads_the_copy(cwd):
+        folder = projects / project_folder_name(cwd.resolve())
+        seen["files"] = {p.name: p.read_text() for p in folder.glob("*.jsonl")}
+
+    run = FakeRun(claude_stdout=RESULT, on_claude=claude_reads_the_copy, **fake)
+    try:
+        run_replay(baseline_settings(follow_up), pristine_tree(tmp_path), tmp_path / "run0", workdir, (), run=run,
+                   projects_dir=projects, original_cwd=original)
+    finally:
+        seen["command"] = next((c for c, _ in run.calls if c[0] == "claude"), None)
+        seen.update(original=original, workdir=workdir.resolve() if workdir.exists() else workdir, projects=projects,
+                    path=path, before=before)
+    return seen
+
+
+def test_a_follow_up_resumes_a_fork_of_its_session_cut_before_its_prompt(write_session, tmp_path):
+    import uuid
+    seen = run_follow_up(write_session, tmp_path)
+    command, original, workdir = seen["command"], seen["original"], seen["workdir"]
+    (name, content), = seen["files"].items()
+    new_id = name.removesuffix(".jsonl")
+    assert uuid.UUID(new_id).version == 4
+    at = command.index("--resume")
+    assert command[at:at + 5] == ["--resume", new_id, "--fork-session", "--system-prompt-snapshot", "off"]
+    assert "--no-session-persistence" in command
+    copied = [json.loads(line) for line in content.splitlines()]
+    # everything before the episode's prompt, nothing from the episode itself
+    assert [r["type"] for r in copied] == ["file-history-snapshot", "user", "assistant", "system"]
+    assert "LATER" not in content and "remove X3" not in content
+    assert all(r["sessionId"] == new_id for r in copied if "sessionId" in r)
+    assert copied[1]["cwd"] == str(workdir) and copied[3]["cwd"] == f"{workdir}/sub"
+    assert copied[2]["message"]["content"][0]["text"] == f"I read {workdir}/parser.py and {original}-other/x.py"
+    assert str(original) + "/" not in content
+    assert seen["path"].read_text() == seen["before"]  # the real session log is never touched
+
+
+def test_the_forked_copy_and_its_folder_are_removed_afterwards(write_session, tmp_path):
+    seen = run_follow_up(write_session, tmp_path)
+    assert seen["files"] and list(seen["projects"].iterdir()) == []
+
+
+@pytest.mark.parametrize("raises", [KeyboardInterrupt(), RuntimeError("boom")])
+def test_the_forked_copy_is_removed_even_when_the_replay_fails(write_session, tmp_path, raises):
+    with pytest.raises(type(raises)):
+        run_follow_up(write_session, tmp_path, claude_raises=raises)
+    assert list((tmp_path / "claude-projects").iterdir()) == []
+
+
+def test_a_project_folder_holding_something_else_keeps_it_but_loses_the_copy(write_session, tmp_path):
+    original = tmp_path / "proj"
+    original.mkdir()
+    follow_up = list(episodes_from_session(follow_up_session(write_session, original)))[1]
+    projects = tmp_path / "claude-projects"
+
+    def claude_leaves_a_log(cwd):
+        (projects / project_folder_name(cwd.resolve()) / "other.jsonl").write_text("{}\n")
+
+    workdir = tmp_path / ".culprit-replay-keep2"
+    run_replay(baseline_settings(follow_up), pristine_tree(tmp_path), tmp_path / "run0", workdir, (),
+               run=FakeRun(claude_stdout=RESULT, on_claude=claude_leaves_a_log), projects_dir=projects,
+               original_cwd=original)
+    (folder,) = projects.iterdir()
+    assert [p.name for p in folder.iterdir()] == ["other.jsonl"]
+
+
+def test_every_variant_of_a_follow_up_keeps_its_history_and_it_survives_json(write_session, tmp_path):
+    from dataclasses import replace
+    from culprit.replay import settings_from_json, settings_to_json
+    follow_up = list(episodes_from_session(follow_up_session(write_session, tmp_path / "proj")))[1]
+    base = baseline_settings(follow_up)
+    restated = replace(base, prompt="remove the X3 flag from the parser")
+    assert (restated.history_file, restated.history_before) == (base.history_file, base.history_before)
+    assert settings_from_json(json.loads(json.dumps(settings_to_json(base)))) == base
+
+
+def test_a_follow_up_whose_session_log_lost_the_prompt_is_refused_before_claude_runs(write_session, tmp_path):
+    from culprit.logs import EpisodeNotFound
+    run = FakeRun(claude_stdout=RESULT)
+    workdir = tmp_path / ".culprit-replay-gone"
+    with pytest.raises(EpisodeNotFound):
+        run_replay(settings(history_file=tmp_path / "gone.jsonl", history_before="u-p2"), pristine_tree(tmp_path),
+                   tmp_path / "run0", workdir, (), run=run, projects_dir=tmp_path / "claude-projects")
+    assert not any(c[0] == "claude" for c, _ in run.calls)
+    assert not workdir.exists()

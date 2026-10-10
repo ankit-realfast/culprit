@@ -14,7 +14,8 @@ guesses the cause.
 2. **Confirm.** You say what went wrong (`stopped-short`, `wrong-result`, `ignored-instructions`,
    `wasteful` or `no-failure`) and approve a drafted success criterion.
 3. **Baseline.** The episode's starting files are rebuilt in a throwaway copy and the episode is
-   replayed unchanged 10 times. If 6 or more pass, the failure was luck (**not-reproducible**).
+   replayed unchanged 10 times. A follow-up prompt ("now do it on main") is replayed with its session's
+   earlier conversation in place, so Claude knows what "it" is. If 6 or more pass, the failure was luck (**not-reproducible**).
 4. **Oracles.** The episode is replayed with one layer improved at a time, cheapest first:
 
    | Change | Verdict if it now passes |
@@ -81,12 +82,17 @@ uv run culprit status [1]          # where episodes stand and the next command
   variant, every retry), so they never cut a diagnosis short.
 - **What caps count:** caps include money already spent, so resuming never double-spends.
 - **Plan printed first:** before spending, culprit prints the most it could spend.
-- **Void runs:** runs that fail outside the agent (API error, timeout) don't count and are retried.
+- **Void runs:** runs that fail outside the agent (API error, timeout, the per-replay cap) don't count and
+  are retried.
+- **Late-session episodes:** every replay re-sends the session's earlier conversation, so they cost more
+  per run and are likelier to hit the per-replay cap.
 - **Not testable:** if no result could beat the baseline, culprit stops before running any oracles.
 
 ## Safety
 
-- Replays run in a copy beside your project (`.culprit-replay-<id>`), deleted afterwards. File tools are
+- Replays run in a copy beside your project (`.culprit-replay-<id>`), deleted afterwards. A follow-up's
+  earlier conversation is a copy of your session log under `~/.claude/projects/`, also deleted afterwards;
+  your own log is only read. File tools are
   denied on your project, and culprit stops if your project changes during a replay.
 - Shell commands run in Claude Code's OS sandbox and can write only to the copy and the temp folder.
 - Git remotes are stripped, and `git push` and `gh` are denied. Worktrees and submodules are refused.
@@ -104,7 +110,8 @@ uv run culprit status [1]          # where episodes stand and the next command
   (similarity ≥ 0.6). Anything else is refused.
 - **MCP calls:** a call the original session never made fails.
 - **Images:** an image the log didn't keep blocks the replay.
-- **Starting point:** replays start at the beginning of the episode, not at the failing step.
+- **Starting point:** replays start at the beginning of the episode, with the session's earlier
+  conversation in place (a fork of your log cut just before your prompt), not at the failing step.
 - **Harness verdicts:** don't say whether the fix is yours or Claude Code's. Replaying on another build
   (`CULPRIT_CLAUDE_BIN`) narrows it.
 

@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from culprit import logs
-from culprit.logs import Episode, Tracked, prompt_images, recorded_answers
+from culprit.logs import Episode, Tracked, is_follow_up, prompt_images, recorded_answers, records_before
 from culprit.stubs import MCP_PREFIX, PERMISSION_PROMPT_TOOL, SERVER as ANSWER_SERVER, recordings_from_episode
 
 
@@ -212,6 +212,9 @@ def target_inside(cwd: Path, destination: Path, tracked_path: str,
 # One replay: an episode re-run through a locked-down `claude -p` in a fresh clone of its starting files.
 # The settings carry every knob an oracle may change — prompt, model, appended instructions, tools,
 # context, setup script, spend cap — so a variant is the baseline with some fields replaced.
+# A follow-up episode (not its session's first prompt) also starts from its session's earlier conversation:
+# a copy of the log cut before the episode's prompt, under a fresh id and pointed at the clone, is written
+# where Claude Code looks for the clone's sessions and resumed as a fork (verified live on 2.1.296).
 
 NO_MCP_SERVERS = '{"mcpServers":{}}'
 SAFETY_DENIED_TOOLS = ("Bash(git push *)", "Bash(gh *)")
@@ -252,6 +255,8 @@ class ReplaySettings:
     prompt_images: tuple[dict, ...] = ()  # image blocks the human attached, resent with the prompt
     mcp_recordings: dict = field(default_factory=dict)  # per MCP server, the calls the episode made and their results
     recorded_answers: dict = field(default_factory=dict)  # question -> what the human answered in the original
+    history_file: Path | None = None  # a follow-up's session log: the replay resumes its records before...
+    history_before: str | None = None  # ...the record with this uuid, the episode's prompt
 
 
 @dataclass(frozen=True)
@@ -293,7 +298,13 @@ def baseline_settings(episode: Episode, max_budget_usd: float = DEFAULT_REPLAY_B
                           permission_mode=replay_permission_mode(episode.permission_mode),
                           max_budget_usd=max_budget_usd, prompt_images=tuple(prompt_images(episode)),
                           mcp_recordings=recordings_from_episode(episode),
-                          recorded_answers=recorded_answers(episode))
+                          recorded_answers=recorded_answers(episode), **_history(episode))
+
+
+def _history(episode: Episode) -> dict:
+    if episode.prompt_uuid and is_follow_up(episode):
+        return {"history_file": episode.session_file, "history_before": episode.prompt_uuid}
+    return {}
 
 
 def full_prompt(settings: ReplaySettings) -> str:
@@ -313,7 +324,8 @@ def replay_prompt(settings: ReplaySettings, original_cwd: Path | None = None, wo
 
 def replay_command(settings: ReplaySettings, original_cwd: Path | None = None,
                    workdir: Path | None = None, memory_dir: Path | None = None,
-                   recordings_file: Path | None = None, answers_file: Path | None = None) -> list[str]:
+                   recordings_file: Path | None = None, answers_file: Path | None = None,
+                   resume_id: str | None = None) -> list[str]:
     appended = settings.append_system_prompt
     if appended and original_cwd and workdir:
         appended = _point_at_clone(appended, original_cwd, workdir)
@@ -329,6 +341,10 @@ def replay_command(settings: ReplaySettings, original_cwd: Path | None = None,
         "--max-budget-usd", f"{settings.max_budget_usd:.2f}",
         "--settings", json.dumps(_applied_settings(memory_dir)),
     ]
+    if resume_id:
+        # the snapshot must be off: with it Claude Code reuses the session's recorded system prompt and
+        # ignores --append-system-prompt, which would silently disable the agent-setup oracle
+        command += ["--resume", resume_id, "--fork-session", "--system-prompt-snapshot", "off"]
     if settings.prompt_images:
         command += ["--input-format", "stream-json"]  # the only way to send images headless (verified live)
     if settings.model:
@@ -379,6 +395,22 @@ def _applied_settings(memory_dir: Path | None) -> dict:
 
 def _point_at_clone(text: str, original_cwd: Path, workdir: Path) -> str:
     return re.sub(re.escape(str(original_cwd)) + r"(?![\w.-])", lambda _: str(workdir), text)
+
+
+def forked_history(records: list[dict], session_id: str, original_cwd: Path | None, workdir: Path) -> list[dict]:
+    """The earlier records as the clone's own session: every sessionId the new id, and every path into the
+    original project (each cwd, and any mentioned in the conversation) pointed at the clone."""
+
+    def rewrite(value):
+        if isinstance(value, dict):
+            return {key: session_id if key == "sessionId" else rewrite(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [rewrite(item) for item in value]
+        if isinstance(value, str) and original_cwd is not None:
+            return _point_at_clone(value, original_cwd, workdir)
+        return value
+
+    return [rewrite(record) for record in records]
 
 
 def tree_fingerprint(root: Path) -> dict[str, tuple[int, int]]:
@@ -444,9 +476,12 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
     if settings.mcp_recordings:
         recordings_file = (run_dir / "mcp-recordings.json").resolve()
         recordings_file.write_text(json.dumps(settings.mcp_recordings))
+    # read before anything is made, so a session log that lost the prompt refuses the replay cleanly
+    history = records_before(settings.history_file, settings.history_before) if settings.history_file else None
     clone_tree(pristine, workdir)
     # Claude Code makes a folder for the clone among its projects; it is removed afterwards if left empty
     project_folder = (projects_dir or logs.DEFAULT_PROJECTS) / project_folder_name(workdir.resolve())
+    resume_id = forked_log = None
     # git must not climb out of the clone: beside a project inside a real repository it would find that
     # repository and a replay's `git commit` would land in it
     env = {**os.environ, "GIT_CEILING_DIRECTORIES": str(workdir.parent.resolve())}
@@ -459,8 +494,15 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
                         timeout=CHECK_TIMEOUT_S, env=env)
             if setup.returncode != 0:
                 raise SetupScriptFailed(f"{settings.setup_script} exited {setup.returncode}: {setup.stderr[-500:]}")
+        if history is not None:
+            resume_id = str(uuid.uuid4())
+            forked_log = project_folder / f"{resume_id}.jsonl"
+            project_folder.mkdir(parents=True, exist_ok=True)
+            forked = forked_history(history, resume_id, original_cwd, workdir.resolve())
+            forked_log.write_text("".join(json.dumps(record) + "\n" for record in forked))
         try:
-            completed = run(replay_command(settings, original_cwd, workdir, memory_dir, recordings_file, answers_file),
+            completed = run(replay_command(settings, original_cwd, workdir, memory_dir, recordings_file, answers_file,
+                                           resume_id),
                             cwd=workdir,
                             capture_output=True,
                             text=True, timeout=REPLAY_TIMEOUT_S, env=env,
@@ -493,6 +535,8 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
         return replay
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+        if forked_log is not None:
+            forked_log.unlink(missing_ok=True)
         _remove_if_only_empty_memory(project_folder)
 
 
@@ -559,6 +603,7 @@ def settings_to_json(settings: ReplaySettings) -> dict:
     data["setup_script"] = str(settings.setup_script) if settings.setup_script else None
     data["disallowed_tools"] = list(settings.disallowed_tools)
     data["prompt_images"] = list(settings.prompt_images)
+    data["history_file"] = str(settings.history_file) if settings.history_file else None
     return data
 
 
@@ -569,4 +614,5 @@ def settings_from_json(data: dict) -> ReplaySettings:
     fields["prompt_images"] = tuple(fields.get("prompt_images") or ())
     fields["mcp_recordings"] = dict(fields.get("mcp_recordings") or {})
     fields["recorded_answers"] = dict(fields.get("recorded_answers") or {})
+    fields["history_file"] = Path(fields["history_file"]) if fields.get("history_file") else None
     return ReplaySettings(**fields)

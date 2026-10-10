@@ -13,6 +13,7 @@ class FakeEpisode:
         self.permission_mode = "auto"
         self.cwd = "/repo"
         self.records = ()
+        self.prompt_uuid = None  # a first prompt: no earlier conversation to resume
 
 
 def queue(runs, *episode_ids):

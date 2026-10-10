@@ -304,6 +304,35 @@ def follow_up_prompts(projects_dir: Path, episode_id: str, count: int = 3) -> li
     return follow_ups
 
 
+def _is_prompt_of(record: dict, episode: Episode) -> bool:
+    if episode.prompt_uuid:
+        return record.get("uuid") == episode.prompt_uuid
+    return bool(episode.records) and record == episode.records[0]
+
+
+def is_follow_up(episode: Episode) -> bool:
+    """Whether the human prompted earlier in the same session, by file order (episodes are cut that way)."""
+    for record in read_records(episode.session_file):
+        if _is_prompt_of(record, episode):
+            return False
+        if is_human_prompt(record):
+            return True
+    return False
+
+
+def records_before(session_file: Path, prompt_uuid: str) -> list[dict]:
+    """Every record of a session log before the prompt with this uuid: the conversation a follow-up
+    episode started from."""
+    if not session_file.is_file():
+        raise EpisodeNotFound(f"session log {session_file} is gone, so the earlier conversation cannot be rebuilt")
+    earlier: list[dict] = []
+    for record in read_records(session_file):
+        if record.get("uuid") == prompt_uuid:
+            return earlier
+        earlier.append(record)
+    raise EpisodeNotFound(f"prompt {prompt_uuid} is no longer in {session_file}")
+
+
 # --- snapshot: The file-history snapshot Claude Code took when the episode's prompt arrived. ---
 # It maps every file Claude Code had edited so far in the session to the backup holding that file's
 # content at this point, or to None for a file that did not exist yet (an assumption Stage 2's
@@ -360,6 +389,8 @@ def replay_blockers(episode: Episode, tracked: Tracked | None) -> list[str]:
                         "repository, so a copy would still write into that repository")
     if tracked is None:
         blockers.append("no file-history snapshot exists for this prompt")
+    if not episode.prompt_uuid and is_follow_up(episode):
+        blockers.append("the prompt has no uuid, so the session's earlier conversation cannot be cut at it")
     names = {use.get("name", "") for use in tool_uses(episode)}
     if any(not (image.get("source") or {}).get("data") for image in prompt_images(episode)):
         blockers.append("the prompt carried an image whose data the log did not keep, so a replay cannot resend it")
