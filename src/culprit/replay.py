@@ -34,6 +34,9 @@ DIFF_EXCLUDES = (".git", "node_modules", ".venv", "venv", "__pycache__", ".pytes
                  "target")
 DIFF_TIMEOUT_S = 120
 MAX_DIFF_BYTES = 2_000_000
+# the OS-enforced Bash sandbox: shell commands may write only in the replay's copy and the temp folder,
+# and may not fall back to running unsandboxed (verified live 2026-10-11: a write to ~ was refused)
+SANDBOX_SETTINGS = {"enabled": True, "allowUnsandboxedCommands": False, "failIfUnavailable": True}
 GIT_STATE_FILES = ("HEAD", "index")
 
 
@@ -106,7 +109,7 @@ def replay_prompt(settings: ReplaySettings, original_cwd: Path | None = None, wo
 
 
 def replay_command(settings: ReplaySettings, original_cwd: Path | None = None,
-                   workdir: Path | None = None) -> list[str]:
+                   workdir: Path | None = None, memory_dir: Path | None = None) -> list[str]:
     appended = settings.append_system_prompt
     if appended and original_cwd and workdir:
         appended = _point_at_clone(appended, original_cwd, workdir)
@@ -118,6 +121,7 @@ def replay_command(settings: ReplaySettings, original_cwd: Path | None = None,
         "--permission-mode", settings.permission_mode,
         "--no-session-persistence",
         "--max-budget-usd", f"{settings.max_budget_usd:.2f}",
+        "--settings", json.dumps(_applied_settings(memory_dir)),
     ]
     if settings.model:
         command += ["--model", settings.model]
@@ -131,6 +135,13 @@ def replay_command(settings: ReplaySettings, original_cwd: Path | None = None,
         denied += [f"{tool}(/{original_cwd}/**)" for tool in WRITE_TOOLS]
     command += ["--disallowedTools", *denied]
     return command
+
+
+def _applied_settings(memory_dir: Path | None) -> dict:
+    applied: dict = {"sandbox": SANDBOX_SETTINGS}
+    if memory_dir is not None:
+        applied["autoMemoryDirectory"] = str(memory_dir)
+    return applied
 
 
 def _point_at_clone(text: str, original_cwd: Path, workdir: Path) -> str:
@@ -182,8 +193,14 @@ def run_in_own_process_group(command: list[str], *, input: str | None = None, ca
 
 def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir: Path, checks: tuple[str, ...],
                run=run_in_own_process_group, projects_dir: Path = DEFAULT_PROJECTS,
-               original_cwd: Path | None = None) -> ReplayResult:
+               original_cwd: Path | None = None, original_memory: Path | None = None) -> ReplayResult:
     run_dir.mkdir(parents=True, exist_ok=True)
+    memory_dir = None
+    if original_memory and original_memory.is_dir():
+        # a copy, so whatever the replay writes to its memory never reaches the real project's notes
+        memory_dir = (run_dir / "memory").resolve()
+        shutil.rmtree(memory_dir, ignore_errors=True)
+        shutil.copytree(original_memory, memory_dir)
     clone_tree(pristine, workdir)
     project_folder = projects_dir / project_folder_name(workdir.resolve())
     # git must not climb out of the clone: beside a project inside a real repository it would find that
@@ -199,7 +216,7 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
             if setup.returncode != 0:
                 raise SetupScriptFailed(f"{settings.setup_script} exited {setup.returncode}: {setup.stderr[-500:]}")
         try:
-            completed = run(replay_command(settings, original_cwd, workdir), cwd=workdir, capture_output=True,
+            completed = run(replay_command(settings, original_cwd, workdir, memory_dir), cwd=workdir, capture_output=True,
                             text=True, timeout=REPLAY_TIMEOUT_S, env=env,
                             input=replay_prompt(settings, original_cwd, workdir))
             stdout, stderr, exit_code = completed.stdout, completed.stderr, completed.returncode

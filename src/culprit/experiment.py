@@ -71,7 +71,8 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
         else:
             budget.ensure_room(settings.max_budget_usd + JUDGE_CALL_CAP_USD)
             result = replay(settings, episode_folder / PRISTINE_DIR, run_dir, replay_workdir(episode),
-                            criterion.checks, original_cwd=Path(episode.cwd))
+                            criterion.checks, original_cwd=Path(episode.cwd),
+                            original_memory=episode.session_file.parent / "memory")
             budget.spend(result.cost_usd)  # charged before judging, so a judge failure cannot lose it
             cost += result.cost_usd
             judgement = judge(criterion, result)

@@ -260,3 +260,24 @@ def test_the_stored_diff_skips_dependency_folders_and_is_bounded(tmp_path):
     assert "--exclude=node_modules" in diff_command and "--exclude=.venv" in diff_command
     stored = (tmp_path / "run0" / "diff.patch").read_text()
     assert len(stored.encode()) <= MAX_DIFF_BYTES + 200 and "[diff cut" in stored
+
+
+def test_every_replay_runs_inside_the_bash_sandbox():
+    command = replay_command(settings())
+    applied = json.loads(command[command.index("--settings") + 1])
+    assert applied["sandbox"] == {"enabled": True, "allowUnsandboxedCommands": False, "failIfUnavailable": True}
+
+
+def test_the_replay_reads_a_copy_of_the_original_projects_memory(tmp_path):
+    memory = tmp_path / "project-logs" / "memory"
+    memory.mkdir(parents=True)
+    (memory / "MEMORY.md").write_text("- tests live in spec/\n")
+    run = FakeRun(claude_stdout=RESULT, on_claude=lambda cwd: None)
+    run_replay(settings(), pristine_tree(tmp_path), tmp_path / "run0", tmp_path / ".culprit-replay-mem", (), run=run,
+               projects_dir=tmp_path / "p", original_memory=memory)
+    command = next(command for command, _ in run.calls if command[0] == "claude")
+    applied = json.loads(command[command.index("--settings") + 1])
+    copy = Path(applied["autoMemoryDirectory"])
+    assert copy == (tmp_path / "run0" / "memory").resolve()
+    assert (copy / "MEMORY.md").read_text() == "- tests live in spec/\n"
+    assert (memory / "MEMORY.md").read_text() == "- tests live in spec/\n"
