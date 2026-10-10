@@ -11,7 +11,7 @@ from dataclasses import asdict, fields
 from pathlib import Path
 from typing import Callable, Sequence
 
-from culprit.batch import ENV_FIX_FILE, diagnose_all
+from culprit.batch import ENV_FIX_FILE, diagnose_all, env_fix_script
 from culprit.calibration import (MIN_KAPPA, MIN_LABELS, UnknownRun, agreement, next_unlabelled, record_label,
                                  run_id, run_summary)
 from culprit.claude import ClaudeCallFailed, ask_claude
@@ -558,14 +558,14 @@ def diagnose_command(args: argparse.Namespace) -> int:
                        f"{confirm_step(args.runs, args.episode_id)}")
     episode, criterion = ready_to_replay(args)
     folder = episode_dir(args.runs, args.episode_id)
-    env_script = folder / ENV_FIX_FILE
+    env_script = env_fix_script(folder)
     budget = EpisodeBudget(EPISODE_CAP_USD, spent_usd=stored_spend(folder))
-    show_plan(diagnose_cost_for(folder, criterion, DEFAULT_REPLAY_BUDGET_USD, model=episode.model, env_fix=env_script.exists(),
+    show_plan(diagnose_cost_for(folder, criterion, DEFAULT_REPLAY_BUDGET_USD, model=episode.model, env_fix=env_script is not None,
                                 n=RUNS_PER_VARIANT, spent_usd=budget.spent_usd, cap_usd=EPISODE_CAP_USD))
     with ProgressPrinter() as progress:
         verdict = diagnose(episode, criterion, symptom, baseline_settings(episode),
                            runs_dir=args.runs, follow_ups=follow_up_prompts(args.projects, args.episode_id),
-                           env_script=env_script if env_script.exists() else None, n=RUNS_PER_VARIANT, budget=budget,
+                           env_script=env_script, n=RUNS_PER_VARIANT, budget=budget,
                            progress=progress)
     print(f"cause: {verdict.cause}\nevidence: {verdict.evidence}")
     if numbers := numbers_line(verdict):

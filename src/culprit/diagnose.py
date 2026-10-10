@@ -21,7 +21,7 @@ from culprit.oracles import build_variant, combine
 from culprit.replay import ReplaySettings, settings_from_json, settings_to_json
 from culprit.store import episode_dir, read_json, write_json
 from culprit.taxonomy import ORACLE_ORDER, Cause, Symptom
-from culprit.verdict import BASELINE, COMBINED, VERDICT_FILE, Verdict, beats, reproducible, save_verdict
+from culprit.verdict import BASELINE, COMBINED, VERDICT_FILE, Verdict, beats, pair_variant, reproducible, save_verdict
 
 VARIANTS_DIR = "variants"
 NOT_RUN_REASON = "not run: an earlier cause already explained the failure"
@@ -33,14 +33,23 @@ def criterion_key(criterion: Criterion) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
+def criterion_changed(folder: Path, criterion: Criterion) -> bool:
+    """True when the folder's runs were judged against a different criterion than this one."""
+    stored = read_json(folder / CRITERION_USED_FILE)
+    return stored is not None and stored["key"] != criterion_key(criterion)
+
+
+def variant_file(folder: Path, cause: Cause) -> Path:
+    """Where the oracle's built settings (or why it could not be built) are kept."""
+    return folder / VARIANTS_DIR / f"{cause.value}.json"
+
+
 def retire_if_criterion_changed(folder: Path, criterion: Criterion) -> bool:
     """Set aside every run, variant and verdict judged against a different criterion; True if any were.
 
     They move to superseded/<n>/ rather than being deleted, so their spend still counts against the budget."""
-    marker = folder / CRITERION_USED_FILE
-    key = criterion_key(criterion)
     retired = False
-    if read_json(marker, {}).get("key", key) != key:
+    if criterion_changed(folder, criterion):
         stale = [folder / name for name in (REPLAYS_DIR, VARIANTS_DIR, VERDICT_FILE, CALLS_FILE)
                  if (folder / name).exists()]
         if stale:
@@ -49,7 +58,7 @@ def retire_if_criterion_changed(folder: Path, criterion: Criterion) -> bool:
             for path in stale:
                 shutil.move(str(path), destination / path.name)
             retired = True
-    write_json(marker, {"key": key})
+    write_json(folder / CRITERION_USED_FILE, {"key": criterion_key(criterion)})
     return retired
 
 
@@ -114,7 +123,7 @@ def diagnose(episode: Episode, criterion: Criterion, symptom: Symptom, base: Rep
     if not beats(together, baseline):
         return finish(Cause.UNEXPLAINED, f"even every change together passed only {_rate(together)}")
     for first, second in combinations(list(built), 2):
-        name = f"{first.value}+{second.value}"
+        name = pair_variant(first.value, second.value)
         result = measured(name, combine(base, {first: built[first], second: built[second]}))
         if beats(result, baseline):
             return finish(Cause.MULTI_CAUSE, f"{name} passed {_rate(result)} against the baseline's {_rate(baseline)}",
@@ -124,7 +133,7 @@ def diagnose(episode: Episode, criterion: Criterion, symptom: Symptom, base: Rep
 
 
 def _oracle(folder: Path, cause: Cause, base: ReplaySettings, untested: dict[str, str], make) -> ReplaySettings | None:
-    path = folder / VARIANTS_DIR / f"{cause.value}.json"
+    path = variant_file(folder, cause)
     data = read_json(path)
     if data is None:
         made = make()

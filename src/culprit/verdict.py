@@ -15,6 +15,11 @@ BASELINE = "baseline"  # the unchanged replay
 COMBINED = "combined"  # every tested change at once
 
 
+def pair_variant(first: str, second: str) -> str:
+    """The variant that makes two causes' changes together, e.g. `task+model`."""
+    return f"{first}+{second}"
+
+
 @dataclass(frozen=True)
 class Verdict:
     episode_id: str

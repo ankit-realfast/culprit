@@ -31,6 +31,19 @@ class BatchSummary:
     spent_usd: float = 0.0
 
 
+def env_fix_script(folder: Path) -> Path | None:
+    """The environment fix stored with `culprit env-fix`, if any."""
+    script = folder / ENV_FIX_FILE
+    return script if script.exists() else None
+
+
+def total_spend(runs_dir: Path) -> float:
+    """What every episode in runs/ has spent, selftests aside: the batch total covers all of it."""
+    if not runs_dir.is_dir():
+        return 0.0
+    return sum(stored_spend(folder) for folder in runs_dir.iterdir() if folder.is_dir() and folder.name != SELFTEST_DIR)
+
+
 def readiness_problem(runs_dir: Path, episode_id: str) -> str | None:
     shown = display_id(runs_dir, episode_id)
     symptom = read_symptom(runs_dir, episode_id)
@@ -52,8 +65,7 @@ def diagnose_all(runs_dir: Path, projects_dir: Path, *, n: int, per_episode_usd:
     require_queue(runs_dir)
     queued = queued_ids(runs_dir)
     # the total covers every batch ever run in this folder, not just this one
-    remaining = total_usd - sum(stored_spend(folder) for folder in runs_dir.iterdir()
-                                if folder.is_dir() and folder.name != SELFTEST_DIR)
+    remaining = total_usd - total_spend(runs_dir)
     for episode_id in queued:
         folder = episode_dir(runs_dir, episode_id)
         if load_verdict(folder) is not None:
@@ -72,11 +84,10 @@ def diagnose_all(runs_dir: Path, projects_dir: Path, *, n: int, per_episode_usd:
         stop = False
         try:
             episode = find(projects_dir, episode_id)
-            env_script = folder / ENV_FIX_FILE
             diagnose_fn(episode, load_criterion(runs_dir, episode_id), read_symptom(runs_dir, episode_id),
                         baseline_settings(episode, replay_budget_usd), runs_dir=runs_dir,
                         follow_ups=follow(projects_dir, episode_id),
-                        env_script=env_script if env_script.exists() else None, n=n, budget=budget,
+                        env_script=env_fix_script(folder), n=n, budget=budget,
                         progress=scoped(progress, short_id(episode_id)))
             summary.diagnosed.append(episode_id)
         except BudgetExhausted:

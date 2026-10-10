@@ -109,9 +109,20 @@ def harness_context(episode: Episode, pristine: Path) -> str:
     return "These files from the working directory are relevant to the request below:\n\n" + "".join(blocks)
 
 
+def cannot_build(cause: Cause, *, model: str | None, env_fix: bool) -> str | None:
+    """Why this cause's oracle cannot be built for the episode, decided before any model call; None if it can."""
+    if cause is Cause.ENVIRONMENT and not env_fix:
+        return "no environment fix supplied (culprit env-fix)"
+    if cause is Cause.MODEL and (model or "").startswith(FABLE_PREFIX):
+        return "the episode already ran on Fable, the strongest model"
+    return None
+
+
 def build_variant(cause: Cause, base: ReplaySettings, *, episode: Episode, follow_ups: list[str],
                   criterion: Criterion, symptom: Symptom, pristine: Path, env_script: Path | None,
                   ask: Ask = ask_claude) -> VariantBuild:
+    if reason := cannot_build(cause, model=base.model, env_fix=env_script is not None):
+        return VariantBuild(None, reason)
     if cause is Cause.TASK:
         return _drafted(base, "prompt", lambda evidence: task_rewrite_prompt(episode, criterion, evidence),
                         episode, follow_ups, ask)
@@ -120,16 +131,12 @@ def build_variant(cause: Cause, base: ReplaySettings, *, episode: Episode, follo
                         lambda evidence: agent_instructions_prompt(criterion, symptom, evidence),
                         episode, follow_ups, ask)
     if cause is Cause.ENVIRONMENT:
-        if env_script is None:
-            return VariantBuild(None, "no environment fix supplied (culprit env-fix)")
         return VariantBuild(replace(base, setup_script=env_script), None)
     if cause is Cause.HARNESS:
         context = harness_context(episode, pristine) or None
         return VariantBuild(replace(base, tools="default", disallowed_tools=(), context_preamble=context,
                                     max_budget_usd=base.max_budget_usd * HARNESS_BUDGET_MULTIPLIER), None)
     if cause is Cause.MODEL:
-        if (base.model or "").startswith(FABLE_PREFIX):
-            return VariantBuild(None, "the episode already ran on Fable, the strongest model")
         return VariantBuild(replace(base, model=ORACLE_MODEL), None)
     raise ValueError(f"{cause} has no oracle")
 
