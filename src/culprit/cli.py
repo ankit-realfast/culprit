@@ -200,6 +200,12 @@ def stdin_is_tty() -> bool:
     return sys.stdin.isatty()
 
 
+def require_terminal(why: str, otherwise: str = "") -> None:
+    """Commands that ask the person questions refuse to run without someone at the keyboard."""
+    if not stdin_is_tty():
+        raise NotReady(f"{why}, so it needs a terminal" + (f" — otherwise {otherwise}" if otherwise else ""))
+
+
 def show_plan(plan: CostPlan) -> None:
     """The most a command can run and spend, on stderr before it starts: information, not a question."""
     for line in plan.lines():
@@ -301,9 +307,8 @@ def choose(prompt: str, options: Sequence[str], read: Callable[[str], str] | Non
 def confirm_queue(args: argparse.Namespace) -> int:
     """Walk the triage queue in order: for each episode not yet past every step, ask the symptom, draft and
     approve the criterion, and restore the starting files when a replay can use the episode."""
-    if not stdin_is_tty():
-        raise NotReady("confirm with no episode asks about each queued episode, so it needs a terminal — "
-                       "otherwise run `culprit confirm <episode-id> <symptom>`")
+    require_terminal("confirm with no episode asks about each queued episode",
+                     otherwise="run `culprit confirm <episode-id> <symptom>`")
     rows = require_queue(args.runs)
     shown_any = False
     for position, row in enumerate(rows, 1):
@@ -380,8 +385,7 @@ def confirm_walk_step(args: argparse.Namespace, position: int, row: dict, blocke
             print(f"criterion not drafted: {failure}")
             return "skip"
     if not criterion.approved:
-        for line in criterion_lines(criterion):
-            print(f"  {line}")
+        print_criterion(criterion)
         answer = choose("approve it?", ("approve", "edit later", "skip", "quit"))
         if answer == "edit later":
             print(f"edit {episode_dir(args.runs, episode_id) / CRITERION_FILE}, then run `culprit confirm` again")
@@ -409,9 +413,13 @@ def criterion_lines(criterion: Criterion) -> list[str]:
             + [f"  must not: {rule}" for rule in criterion.must_not])
 
 
-def show_draft(runs_dir: Path, episode_id: str, criterion: Criterion, symptom: str) -> None:
+def print_criterion(criterion: Criterion) -> None:
     for line in criterion_lines(criterion):
         print(f"  {line}")
+
+
+def show_draft(runs_dir: Path, episode_id: str, criterion: Criterion, symptom: str) -> None:
+    print_criterion(criterion)
     shown = display_id(runs_dir, episode_id)
     print(f"approve: rerun `culprit confirm {shown} {symptom}` once it says what success means "
           f"(edit {episode_dir(runs_dir, episode_id) / CRITERION_FILE} first if it does not)")
@@ -581,20 +589,22 @@ def diagnose_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def planted_line(correct: int, total: int) -> str:
+    return f"{correct} of {total} planted faults named correctly"
+
+
 def trust_lines(runs_dir: Path) -> list[str]:
     result = agreement(runs_dir)
     kappa = "not computable yet" if result.kappa is None else f"{result.kappa:.2f}"
     state = "calibrated" if result.calibrated else f"uncalibrated (needs {MIN_LABELS} labels and kappa ≥ {MIN_KAPPA})"
     correct, total = selftest_accuracy(runs_dir)
-    planted = f"selftest: {correct} of {total} planted faults named correctly" if total else "selftest: not run"
+    planted = f"selftest: {planted_line(correct, total)}" if total else "selftest: not run"
     return [f"judge: {result.agreed} of {result.labelled} labels agree, kappa {kappa} — {state}", planted]
 
 
 def review_command(args: argparse.Namespace) -> int:
     """Show each judged replay nobody has labelled and record the person's pass/fail, until none are left."""
-    if not stdin_is_tty():
-        print("culprit: review asks for your verdict on each replay, so it needs a terminal", file=sys.stderr)
-        return EXIT_NOT_READY
+    require_terminal("review asks for your verdict on each replay")
     skipped: set[Path] = set()
     while (run_dir := next_unlabelled(args.runs, skip=skipped)) is not None:
         print(f"\n{run_id(args.runs, run_dir)}\n{run_summary(run_dir)}")
@@ -635,7 +645,7 @@ def selftest_command(args: argparse.Namespace) -> int:
                                budget_per_fault=FAULT_CAP_USD, progress=progress)
     for result in results:
         print(f"{result.fault}: expected {result.expected}, got {result.got} {'✓' if result.correct else '✗'}")
-    print(f"{sum(r.correct for r in results)} of {len(results)} planted faults named correctly")
+    print(planted_line(sum(r.correct for r in results), len(results)))
     return 0
 
 
@@ -655,10 +665,8 @@ def diagnose_queue(args: argparse.Namespace) -> int:
     """Every confirmed episode in the queue: restore the ones not yet restored, diagnose them all, then report."""
     require_queue(args.runs)
     for episode_id in queued_ids(args.runs):
-        folder = episode_dir(args.runs, episode_id)
-        criterion = load_criterion(args.runs, episode_id)
-        if pristine_dir(args.runs, episode_id).is_dir() or load_verdict(folder) is not None \
-                or read_symptom(args.runs, episode_id) is None or criterion is None or not criterion.approved:
+        approved, restored = _confirm_progress(args.runs, episode_id)
+        if restored or not approved:
             continue
         shown = display_id(args.runs, episode_id)
         try:
