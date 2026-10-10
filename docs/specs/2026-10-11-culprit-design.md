@@ -50,7 +50,7 @@ Claude Code did until the next human prompt, identified by the log's `promptId`.
 configuration → Harness; anything outside Claude Code → Environment.
 
 **"Passes" is statistical:** a variant counts only when its pass rate over N replays clearly exceeds the
-unchanged baseline's over N replays (the threshold is fixed in the implementation plan, not here).
+unchanged baseline's over N replays — the exact test is in §3, *What "passes clearly" means*.
 
 ---
 
@@ -64,8 +64,19 @@ unchanged baseline's over N replays (the threshold is fixed in the implementatio
 | Episodes (`promptId`) | 5,522 | The unit of analysis exists already |
 | Interrupts / tool errors / compactions / API errors | 386 / 1,021 / 36 / 25 | Failure-candidate signals |
 | Turn duration p50 / p90 / p99 | 52 s / 241 s / 967 s | Wasteful budget, replay cost |
-| `file-history-snapshot` records | 6,093 (plus `cwd`, `gitBranch`) | Restoring the episode's starting state — **feasibility unverified** |
+| `file-history-snapshot` records | 4,853 of 4,933 prompts have one keyed by the prompt record's `uuid` | Restoring the episode's starting state (see below) |
+| Tracked file backups | 35,238 entries: 28,370 backup present in `~/.claude/file-history/<sessionId>/`, 6,239 `backupFileName: null`, 629 missing | Overlay onto a copy of the working directory |
+| Working directories | 86 distinct: 9 git repos, 56 exist without git, 21 gone | An episode whose `cwd` is gone cannot be replayed |
+| Permission modes | `auto` 9,547, `acceptEdits` 3,378, `default` 880 | Replays reuse the episode's mode (see §3) |
+| Tool use | Bash 14,940, MCP 4,473, Edit 3,789, AskUserQuestion 220 | Episodes that used MCP or asked a question are not replayable in v1 |
 | Models | ~99% Opus; Fable 303 responses | Fable 5.1 is the oracle model for almost every episode |
+
+**Restoring an episode's starting state.** Claude Code backs up every file it edits. The snapshot keyed
+by the episode's prompt `uuid` maps each tracked path (relative to `cwd`, or absolute) to a backup file;
+`backupFileName: null` is read as "the file did not exist yet" — **an assumption Stage 2 verifies on a
+real episode** by comparing a restored file with what the episode's first `Read` of it returned. Files
+Claude Code never edited are not backed up, so they are taken from the working directory as it is today:
+restore fidelity is exact for tracked files and best-effort for the rest, and every verdict says so.
 
 **Claude Code 2.1.296** (`claude --help`, and the headless docs at
 <https://code.claude.com/docs/en/headless>, both read 2026-10-11):
@@ -75,6 +86,13 @@ unchanged baseline's over N replays (the threshold is fixed in the implementatio
 - `--strict-mcp-config` with `--mcp-config` limits MCP servers to the ones passed.
 - `--permission-prompts none` removes tools that need a person, such as `AskUserQuestion`.
 - `--max-budget-usd` caps spend; JSON output reports `total_cost_usd`.
+- Measured with two live Haiku calls (about $0.008 in total): `--output-format stream-json` requires
+  `--verbose` with `-p`; the last line is `{"type": "result", "subtype": "success", "is_error": false,
+  "result": …, "total_cost_usd": …, "num_turns": …}`; `--no-session-persistence` writes no session log
+  but still creates an empty `~/.claude/projects/<encoded cwd>/memory/` folder; plugin `SessionStart`
+  hooks run.
+- `--json-schema` with `--output-format json` returns schema-checked output in `structured_output`
+  (docs); the judge, drafter and leak check use it.
 
 **User-level hooks:** one `SessionStart` hook (`context-mode-cache-heal.mjs`), local only. Project-level
 hooks are checked per episode before its first replay.
@@ -108,15 +126,47 @@ Storage is plain files: one folder per episode holding its variants, transcripts
 
 ```
 claude -p "<episode or variant prompt>" \
-  --strict-mcp-config --mcp-config safe-servers.json \
-  --permission-prompts none \
-  --max-budget-usd <cap> --output-format stream-json \
+  --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
+  --permission-prompts none --permission-mode <mode> \
+  --disallowedTools "Bash(git push *)" "Bash(gh *)" \
+  --no-session-persistence --max-budget-usd <cap> \
+  --output-format stream-json --verbose \
   --model <model>
 ```
 
-No outbound MCP server (Slack, Gmail, Salesforce, monday) ever connects; no `git push`; the working
-directory is a throwaway copy. A variant that tests an MCP server as a harness fix connects only that
-server.
+- **No MCP server connects in v1**, so no outbound server (Slack, Gmail, Salesforce, monday) can be
+  reached. An episode whose transcript used an MCP tool is therefore not replayable in v1.
+- **The working directory is an APFS clone** (`cp -cR`) of a pristine restored copy, one fresh clone
+  per replay, with every git remote removed; `git push` and `gh` are also denied.
+- **Permission mode:** the episode's own mode (`auto`, `acceptEdits`), except `default` becomes
+  `acceptEdits`, because in the original the human approved those prompts and no human is present now.
+- **Cleanup:** after each replay culprit deletes the clone and the empty `memory/` folder Claude Code
+  leaves under `~/.claude/projects/`.
+- **Spend:** `--max-budget-usd` per replay, and a per-episode cap that stops further replays.
+
+### Which episodes are replayable
+
+An episode is replayable only if its `cwd` still exists, its snapshot exists, it used no MCP tool, and it
+never called `AskUserQuestion`. culprit reports the reason for every episode it skips.
+
+### The oracles, concretely
+
+| Variant | What changes from the baseline | Untested when |
+|---|---|---|
+| Task | The prompt, rewritten from the original prompt and the human's follow-ups to state scope and success criterion | The leak check rejects it twice |
+| Environment | A fix script the human supplies (`culprit env-fix`) runs in the clone before the replay | No script supplied (the common case in v1) |
+| Agent setup | An appended system prompt (`--append-system-prompt`) drafted from the criterion: standing instructions, no task-specific facts | The leak check rejects it twice |
+| Harness | The default tool set with every non-safety restriction lifted, the files the episode read or edited preloaded into the prompt as context, and double the spend cap | Never |
+| Model | `--model claude-fable-5-1` | The episode already ran on Fable |
+
+### What "passes clearly" means
+
+Each variant and the baseline run **N = 5** times. A variant beats the baseline when a one-sided Fisher
+exact test on their pass counts gives p < 0.05 (for example 4/5 against 0/5). **Not reproducible** means
+the baseline itself passed at least 3 of 5. The pair test first runs every tested variant combined: if
+that fails, the cause is **Unexplained**; if it passes, pairs are tried in cause order and the first pair
+that beats the baseline is the **Multi-cause** verdict; if no pair does, the verdict is Multi-cause with
+the full set.
 
 ---
 
@@ -129,9 +179,14 @@ server.
    before any verdict counts; its agreement is reported with every result.
 3. **Baseline before variants.** Every episode is replayed unchanged N times first; that baseline is
    what makes "Not reproducible" detectable.
-4. **Planted-fault accuracy.** selftest breaks one layer on purpose — a removed tool (Harness), a vague
-   prompt (Agent setup), a weak model (Model), a broken check (Misjudged) — and reports how often culprit
-   names it. That figure is printed beside every verdict.
+4. **Planted-fault accuracy.** selftest takes a control episode (one whose baseline passes at least 4 of
+   5), breaks one layer on purpose, and checks culprit names it: a truncated prompt (expect Task), a
+   misleading appended instruction (expect Agent setup), the edit tools removed (expect Harness), a weak
+   model (expect Model), and an impossible success criterion (expect Unexplained, the outcome a broken
+   check produces — catching that case is what judge calibration is for). The share named correctly is
+   printed beside every verdict.
+5. **Judge calibration threshold.** Verdicts are marked *uncalibrated* until the human has labelled at
+   least 20 replays and the judge's agreement with them reaches Cohen's kappa ≥ 0.6.
 
 ## 5. Known limits, reported rather than hidden
 

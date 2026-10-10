@@ -73,7 +73,7 @@ culprit/
 - Consumes: nothing.
 - Produces:
   - `INTERRUPT_MARKER: str = "[Request interrupted by user"`
-  - `@dataclass(frozen=True) class Episode` with fields `session_id: str`, `prompt_id: str`, `session_file: Path`, `prompt_text: str`, `started_at: str`, `cwd: str | None`, `git_branch: str | None`, `model: str | None`, `records: tuple[dict, ...]`, and property `episode_id -> str` returning `f"{session_id}:{prompt_id}"`.
+  - `@dataclass(frozen=True) class Episode` with fields `session_id: str`, `prompt_id: str`, `prompt_uuid: str | None` (the prompt record's `uuid`, which keys its file-history snapshot), `session_file: Path`, `prompt_text: str`, `started_at: str`, `cwd: str | None`, `git_branch: str | None`, `permission_mode: str | None`, `model: str | None`, `records: tuple[dict, ...]`, and property `episode_id -> str` returning `f"{session_id}:{prompt_id}"`.
   - `content_blocks(record: dict) -> list[dict]`
   - `text_of(record: dict) -> str`
   - `is_interrupt(record: dict) -> bool`
@@ -264,12 +264,14 @@ def test_a_session_with_no_human_prompt_has_no_episodes(write_session):
     assert list(episodes_from_session(path)) == []
 
 
-def test_an_episode_records_its_id_place_and_first_real_model(write_session):
-    path = write_session([human("fix it", "p1", session_id="abc"), assistant(model="<synthetic>"),
-                          assistant(model="claude-opus-5")])
+def test_an_episode_records_its_id_place_mode_and_first_real_model(write_session):
+    path = write_session([human("fix it", "p1", session_id="abc", permissionMode="auto"),
+                          assistant(model="<synthetic>"), assistant(model="claude-opus-5")])
     (episode,) = episodes_from_session(path)
     assert episode.episode_id == "abc:p1"
+    assert episode.prompt_uuid == "u-p1"
     assert (episode.cwd, episode.git_branch, episode.model) == ("/repo", "main", "claude-opus-5")
+    assert episode.permission_mode == "auto"
     assert episode.session_file == path
 
 
@@ -314,11 +316,13 @@ class Episode:
 
     session_id: str
     prompt_id: str
+    prompt_uuid: str | None  # keys the episode's file-history snapshot
     session_file: Path
     prompt_text: str
     started_at: str
     cwd: str | None
     git_branch: str | None
+    permission_mode: str | None
     model: str | None
     records: tuple[dict, ...]
 
@@ -401,11 +405,13 @@ def _episode(session_file: Path, prompt: dict, records: list[dict]) -> Episode:
     return Episode(
         session_id=prompt.get("sessionId") or session_file.stem,
         prompt_id=prompt.get("promptId") or prompt.get("uuid") or "",
+        prompt_uuid=prompt.get("uuid"),
         session_file=session_file,
         prompt_text=text_of(prompt),
         started_at=prompt.get("timestamp", ""),
         cwd=prompt.get("cwd"),
         git_branch=prompt.get("gitBranch"),
+        permission_mode=prompt.get("permissionMode"),
         model=_first_real_model(records),
         records=tuple(records),
     )
