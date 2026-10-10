@@ -47,3 +47,38 @@ def system(subtype, **extra):
     record = {"type": "system", "subtype": subtype}
     record.update(extra)
     return record
+
+
+def tool_use(name, **tool_input):
+    return {
+        "type": "assistant",
+        "message": {"role": "assistant", "model": "claude-opus-5",
+                    "content": [{"type": "tool_use", "id": "t1", "name": name, "input": tool_input}]},
+    }
+
+
+def edit_result(prompt_id, file_path, original_file):
+    return {
+        "type": "user",
+        "promptId": prompt_id,
+        "toolUseResult": {"filePath": file_path, "oldString": "a", "newString": "b",
+                          "originalFile": original_file, "replaceAll": False},
+        "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
+    }
+
+
+def snapshot(message_id, tracked):
+    """tracked maps a path to a backup file name, or to None for a file that did not exist yet."""
+    return {
+        "type": "file-history-snapshot",
+        "messageId": message_id,
+        "isSnapshotUpdate": False,
+        "snapshot": {
+            "messageId": message_id,
+            "timestamp": "2026-10-01T10:00:00Z",
+            "trackedFileBackups": {
+                path: {"backupFileName": name, "version": 1, "backupTime": "2026-10-01T10:00:00Z"}
+                for path, name in tracked.items()
+            },
+        },
+    }

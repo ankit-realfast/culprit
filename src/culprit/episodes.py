@@ -120,3 +120,14 @@ def _episode(session_file: Path, prompt: dict, records: list[dict]) -> Episode:
         model=_first_real_model(records),
         records=tuple(records),
     )
+
+
+def tool_uses(episode: Episode) -> list[dict]:
+    """Every tool call the agent made in this episode, in order; each has a name and an input."""
+    return [
+        block
+        for record in episode.records
+        if record.get("type") == "assistant"
+        for block in content_blocks(record)
+        if block.get("type") == "tool_use"
+    ]
