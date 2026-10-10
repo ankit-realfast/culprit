@@ -332,3 +332,9 @@ def test_recorded_mcp_servers_are_replaced_by_the_stand_in(tmp_path):
     assert json.loads(Path(stub["args"][2]).read_text()) == NOTES
     assert "--strict-mcp-config" in command
     assert "mcp__notes" in command[command.index("--allowedTools") + 1:]
+
+
+def test_culprit_claude_bin_chooses_the_claude_code_that_replays(monkeypatch):
+    assert replay_command(settings())[0] == "claude"
+    monkeypatch.setenv("CULPRIT_CLAUDE_BIN", "/opt/claude-2.1.250/bin/claude")
+    assert replay_command(settings())[0] == "/opt/claude-2.1.250/bin/claude"

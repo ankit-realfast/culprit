@@ -122,7 +122,9 @@ def replay_command(settings: ReplaySettings, original_cwd: Path | None = None,
     if appended and original_cwd and workdir:
         appended = _point_at_clone(appended, original_cwd, workdir)
     command = [
-        "claude", "-p",
+        # CULPRIT_CLAUDE_BIN replays on another Claude Code build: a verdict that flips between builds points
+        # at Claude Code itself rather than at your setup
+        os.environ.get("CULPRIT_CLAUDE_BIN", "claude"), "-p",
         "--output-format", "stream-json", "--verbose",
         "--strict-mcp-config", "--mcp-config", _mcp_config(settings, recordings_file),
         "--permission-prompts", "none",
