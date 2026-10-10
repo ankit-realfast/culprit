@@ -133,3 +133,19 @@ def test_a_rerun_reuses_saved_variants_and_outcomes(write_session, tmp_path):
     verdict = run_diagnose(write_session, tmp_path, second, build=counting_build)
     assert verdict.cause == "model"
     assert second.calls == [] and builds == []
+
+
+def test_a_baseline_no_oracle_could_beat_spends_nothing_more(write_session, tmp_path):
+    run = scripted_run({"baseline": 2})
+    verdict = run_diagnose(write_session, tmp_path, run)
+    assert verdict.cause == "unexplained"
+    assert "not testable" in verdict.evidence
+    assert [name for name, _ in run.calls] == ["baseline"]
+
+
+def test_a_baseline_with_no_counted_runs_is_not_testable(write_session, tmp_path):
+    def run(name, settings, **kwargs):
+        return VariantOutcome(name, 0, 0, 1.0, void=5)
+
+    verdict = run_diagnose(write_session, tmp_path, run)
+    assert verdict.cause == "unexplained" and "not testable" in verdict.evidence

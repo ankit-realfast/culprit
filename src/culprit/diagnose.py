@@ -53,6 +53,11 @@ def diagnose(episode: Episode, criterion: Criterion, symptom: Symptom, base: Rep
     baseline = measured(BASELINE, base)
     if not reproducible(baseline):
         return finish(Cause.NOT_REPRODUCIBLE, f"the unchanged replay passed {_rate(baseline)}")
+    best_possible = VariantOutcome("best possible", n, n, 0.0)
+    if baseline.runs == 0 or not beats(best_possible, baseline):
+        return finish(Cause.UNEXPLAINED, f"not testable at N={n}: the baseline passed {_rate(baseline)}"
+                      f"{f' with {baseline.void} void runs' if baseline.void else ''}, so even {n}/{n} could not "
+                      f"beat it — rerun with a larger --n")
 
     built: dict[Cause, ReplaySettings] = {}
     for position, cause in enumerate(ORACLE_ORDER):
