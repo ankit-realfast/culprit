@@ -3,3 +3,6 @@ runs/
 .venv/
 __pycache__/
 .pytest_cache/
+.superpowers/
+.ruff_cache/
+*.egg-info/
