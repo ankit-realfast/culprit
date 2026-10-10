@@ -345,8 +345,9 @@ def baseline_command(args: argparse.Namespace) -> int:
     if retire_if_criterion_changed(episode_dir(args.runs, args.episode_id), criterion):
         print("the criterion changed since the last runs: they were moved to superseded/ and will not be reused")
     budget = EpisodeBudget(args.budget, spent_usd=stored_spend(episode_dir(args.runs, args.episode_id)))
-    outcome = run_variant("baseline", baseline_settings(episode, args.replay_budget), n=args.n, episode=episode,
-                          runs_dir=args.runs, criterion=criterion, budget=budget, progress=ProgressPrinter())
+    with ProgressPrinter() as progress:
+        outcome = run_variant("baseline", baseline_settings(episode, args.replay_budget), n=args.n, episode=episode,
+                              runs_dir=args.runs, criterion=criterion, budget=budget, progress=progress)
     print(f"baseline: {outcome.passes} of {outcome.runs} passed, ${outcome.cost_usd:.2f} spent on replays")
     print_next(args.runs, args.episode_id)
     return 0
@@ -369,11 +370,12 @@ def diagnose_command(args: argparse.Namespace) -> int:
     if symptom is None:
         raise NotReady(f"{args.episode_id} has no confirmed symptom — {confirm_step(args.runs, args.episode_id)}")
     env_script = episode_dir(args.runs, args.episode_id) / ENV_FIX_FILE
-    verdict = diagnose(episode, criterion, symptom, baseline_settings(episode, args.replay_budget),
-                       runs_dir=args.runs, follow_ups=follow_up_prompts(args.projects, args.episode_id),
-                       env_script=env_script if env_script.exists() else None, n=args.n,
-                       budget=EpisodeBudget(args.budget, spent_usd=stored_spend(episode_dir(args.runs, args.episode_id))),
-                       progress=ProgressPrinter())
+    budget = EpisodeBudget(args.budget, spent_usd=stored_spend(episode_dir(args.runs, args.episode_id)))
+    with ProgressPrinter() as progress:
+        verdict = diagnose(episode, criterion, symptom, baseline_settings(episode, args.replay_budget),
+                           runs_dir=args.runs, follow_ups=follow_up_prompts(args.projects, args.episode_id),
+                           env_script=env_script if env_script.exists() else None, n=args.n, budget=budget,
+                           progress=progress)
     print(f"cause: {verdict.cause}\nevidence: {verdict.evidence}")
     if verdict.pair:
         print(f"together: {' + '.join(verdict.pair)}")
@@ -430,9 +432,10 @@ def selftest_command(args: argparse.Namespace) -> int:
         print(f"culprit: {args.episode_id} is not a control — its baseline passed {baseline.passes} of "
               f"{baseline.runs}, and a control must pass at least {CONTROL_MIN_PASSES} of 5", file=sys.stderr)
         return EXIT_REFUSED
-    results = run_selftest(episode, criterion, baseline_settings(episode, args.replay_budget), runs_dir=args.runs,
-                           follow_ups=follow_up_prompts(args.projects, args.episode_id), n=args.n,
-                           budget_per_fault=args.budget_per_fault, progress=ProgressPrinter())
+    with ProgressPrinter() as progress:
+        results = run_selftest(episode, criterion, baseline_settings(episode, args.replay_budget), runs_dir=args.runs,
+                               follow_ups=follow_up_prompts(args.projects, args.episode_id), n=args.n,
+                               budget_per_fault=args.budget_per_fault, progress=progress)
     for result in results:
         print(f"{result.fault}: expected {result.expected}, got {result.got} {'✓' if result.correct else '✗'}")
     print(f"{sum(r.correct for r in results)} of {len(results)} planted faults named correctly")
@@ -452,8 +455,9 @@ def report_command(args: argparse.Namespace) -> int:
 
 
 def diagnose_all_command(args: argparse.Namespace) -> int:
-    summary = diagnose_all(args.runs, args.projects, n=args.n, per_episode_usd=args.per_episode,
-                           total_usd=args.total, replay_budget_usd=args.replay_budget, progress=ProgressPrinter())
+    with ProgressPrinter() as progress:
+        summary = diagnose_all(args.runs, args.projects, n=args.n, per_episode_usd=args.per_episode,
+                               total_usd=args.total, replay_budget_usd=args.replay_budget, progress=progress)
     print(f"diagnosed {len(summary.diagnosed)}: {', '.join(summary.diagnosed) or 'none'}")
     for episode_id, reason in summary.skipped.items():
         print(f"{episode_id} skipped: {reason}")
