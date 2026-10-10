@@ -5311,3 +5311,658 @@ Proven: <L> replays labelled, kappa <k>; selftest on <CONTROL>: <per-fault resul
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 git status --short   # must print nothing
 ```
+
+---
+
+## Stage 6 — Report and batch run
+
+**Goal:** `culprit diagnose-all` diagnoses every prepared episode in the triage queue under a total spend cap, and `culprit report` writes `runs/report.md`: the bottom-line fix first, then the ranked fix list, the symptom × cause grid, each verdict with its evidence, the trust figures, and the known limits. The stage ends with a real report over 10–20 of your episodes.
+
+**Architecture:** `batch` decides which queued episodes are ready (confirmed, criterion approved, restored, not yet diagnosed), shares the total budget across them, and keeps going past an episode that hits its own cap. `report` reads stored verdicts only — it never replays — and renders answer-first markdown.
+
+**Spec:** §1 (the grid is the report), §5 (known limits, reported), §6 build step 6.
+
+### Global Constraints
+
+- The report reads `runs/<episode>/verdict.json` and `symptom.json` only; `runs/selftest/` is excluded from the grid and appears only as the accuracy line.
+- Fix-list order: number of episodes, highest first; ties in cause order. Misjudged and Not reproducible are counted in the grid but are not fixes.
+- Each fix names what you change, taken from spec §1's cause table.
+- `diagnose-all` defaults: $40 per episode, $400 in total; an episode that already has a verdict is skipped.
+- The report always states the known limits: restore exact only for files Claude Code edited; the original project's auto-memory not loaded; episodes that used MCP or asked a question excluded; the per-verdict untested causes.
+
+### Review Focus
+
+1. **A total budget that runs out mid-batch** must stop cleanly, keep every finished verdict, and say which episode stopped and how to resume. Pinned in Task 6.2 (`test_the_total_budget_stops_the_batch_and_names_where`).
+2. **An episode that hits its own cap** must not stop the rest of the batch. Pinned in Task 6.2 (`test_one_episode_over_its_cap_does_not_stop_the_others`).
+3. **A report with no verdicts yet** must say so plainly, not render empty tables. Pinned in Task 6.1 (`test_a_report_with_no_verdicts_says_what_to_run`).
+4. **A Multi-cause verdict** must show both layers in the fix list, not drop one. Pinned in Task 6.1 (`test_multi_cause_names_its_layers_in_the_fix_list`).
+
+### File Structure
+
+```
+src/culprit/
+├── report.py        # Row, collect, grid, fix_list, render_report
+├── batch.py         # readiness_problem, BatchSummary, diagnose_all
+└── cli.py           # MODIFY: add report, diagnose-all
+tests/
+├── test_report.py
+├── test_batch.py
+└── test_cli_stage6.py
+```
+
+---
+
+#### Task 6.1: Render the report from stored verdicts
+
+**Files:**
+- Create: `src/culprit/report.py`
+- Test: `tests/test_report.py`
+
+**Interfaces:**
+- Consumes: `Verdict`, `load_verdict`, `save_verdict` (verdict); `Cause`, `Symptom` (taxonomy); `SELFTEST_DIR` (selftest).
+- Produces:
+  - `REPORT_FILE = "report.md"`, `FIX_ACTIONS: dict[str, str]`, `NOT_FIXES = ("misjudged", "not-reproducible")`
+  - `@dataclass(frozen=True) class Row` with `episode_id: str`, `symptom: str`, `cause: str`, `evidence: str`, `pair: tuple[str, ...]`, `untested: dict[str, str]`.
+  - `collect(runs_dir: Path) -> list[Row]`
+  - `grid(rows: list[Row]) -> dict[tuple[str, str], int]` — keyed (symptom, cause).
+  - `@dataclass(frozen=True) class Fix` with `cause: str`, `count: int`, `episodes: tuple[str, ...]`, `action: str`.
+  - `fix_list(rows: list[Row]) -> list[Fix]`
+  - `render_report(rows: list[Row], trust: list[str]) -> str`
+
+- [ ] **Step 1: Write the failing tests**
+
+`tests/test_report.py`:
+
+```python
+from culprit.report import Fix, collect, fix_list, grid, render_report
+from culprit.verdict import Verdict, save_verdict
+
+
+def verdict(runs, episode_folder, symptom, cause, pair=(), untested=None):
+    episode_id = episode_folder.replace("__", ":")
+    save_verdict(runs / episode_folder, Verdict(episode_id, symptom, cause, f"{cause} passed 4/5 against the baseline's 0/5",
+                                                {}, untested or {}, pair))
+
+
+def sample(runs):
+    verdict(runs, "a__1", "wrong-result", "harness")
+    verdict(runs, "b__1", "wrong-result", "harness")
+    verdict(runs, "c__1", "ignored-instructions", "agent-setup", untested={"environment": "no environment fix supplied"})
+    verdict(runs, "d__1", "stopped-short", "multi-cause", pair=("task", "model"))
+    verdict(runs, "e__1", "no-failure", "misjudged")
+    save_verdict(runs / "selftest" / "a__1" / "weak-model", Verdict("a:1", "wrong-result", "model", "e", {}, {}))
+
+
+def test_collect_reads_real_verdicts_and_skips_selftest(tmp_path):
+    sample(tmp_path)
+    assert [row.episode_id for row in collect(tmp_path)] == ["a:1", "b:1", "c:1", "d:1", "e:1"]
+
+
+def test_grid_counts_symptom_by_cause(tmp_path):
+    sample(tmp_path)
+    cells = grid(collect(tmp_path))
+    assert cells[("wrong-result", "harness")] == 2
+    assert cells[("no-failure", "misjudged")] == 1
+    assert sum(cells.values()) == 5
+
+
+def test_fixes_rank_by_count_then_cause_order_and_skip_non_fixes(tmp_path):
+    sample(tmp_path)
+    fixes = fix_list(collect(tmp_path))
+    assert [(f.cause, f.count) for f in fixes] == [("harness", 2), ("agent-setup", 1), ("multi-cause", 1)]
+    assert fixes[0].episodes == ("a:1", "b:1")
+    assert "tools" in fixes[0].action
+
+
+def test_multi_cause_names_its_layers_in_the_fix_list(tmp_path):
+    sample(tmp_path)
+    multi = next(f for f in fix_list(collect(tmp_path)) if f.cause == "multi-cause")
+    assert "task + model" in multi.action
+
+
+def test_the_report_leads_with_the_answer_and_states_the_limits(tmp_path):
+    sample(tmp_path)
+    text = render_report(collect(tmp_path), ["judge: 20 of 22 labels agree, kappa 0.81 — calibrated",
+                                             "selftest: 4 of 5 planted faults named correctly"])
+    first_lines = text.splitlines()[:4]
+    assert any("harness" in line and "2 of 5" in line for line in first_lines)
+    for expected in ["| Fix", "| Symptom", "wrong-result", "kappa 0.81", "4 of 5 planted faults",
+                     "Known limits", "auto-memory", "no environment fix supplied", "harness passed 4/5"]:
+        assert expected in text
+
+
+def test_a_report_with_no_verdicts_says_what_to_run(tmp_path):
+    text = render_report(collect(tmp_path), ["judge: 0 of 0 labels agree", "selftest: not run"])
+    assert "No verdicts yet" in text and "culprit diagnose" in text
+    assert "| Symptom" not in text
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `uv run pytest tests/test_report.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'culprit.report'`
+
+- [ ] **Step 3: Write the implementation**
+
+`src/culprit/report.py`:
+
+```python
+"""The report: what to change, ranked by how many failed episodes each change would have fixed.
+
+Built from stored verdicts only. Answer first, then the fix list, the symptom × cause grid, every
+verdict with its evidence, how far the verdicts can be trusted, and what culprit could not see.
+"""
+
+from __future__ import annotations
+
+from collections import Counter
+from dataclasses import dataclass
+from pathlib import Path
+
+from culprit.selftest import SELFTEST_DIR
+from culprit.taxonomy import Cause, Symptom
+from culprit.verdict import load_verdict
+
+REPORT_FILE = "report.md"
+NOT_FIXES = ("misjudged", "not-reproducible")
+FIX_ACTIONS = {
+    "misjudged": "your label — it was not a failure",
+    "not-reproducible": "nothing — the failure did not recur",
+    "task": "how you ask: scope and success criteria in the prompt",
+    "environment": "the repo or infrastructure the agent runs in",
+    "agent-setup": "standing instructions: CLAUDE.md, rules, skills, subagent definitions",
+    "harness": "Claude Code's setup: tools, MCP servers, hooks, settings, context handling",
+    "model": "the model: --model, or route these tasks to Fable",
+    "multi-cause": "two layers together",
+    "unexplained": "nothing single — review these by hand",
+}
+KNOWN_LIMITS = (
+    "Restores are exact only for files Claude Code edited; every other file is as it is today.",
+    "Replays start in a new working directory, so the original project's auto-memory was not loaded.",
+    "Episodes that used an MCP tool or asked you a question were not replayed.",
+    "Causes marked untested below were not measured for that episode; a cheaper fix may exist there.",
+)
+CAUSE_RANK = {cause.value: rank for rank, cause in enumerate(Cause)}
+SYMPTOM_ROWS = [s.value for s in Symptom]
+
+
+@dataclass(frozen=True)
+class Row:
+    episode_id: str
+    symptom: str
+    cause: str
+    evidence: str
+    pair: tuple[str, ...]
+    untested: dict[str, str]
+
+
+@dataclass(frozen=True)
+class Fix:
+    cause: str
+    count: int
+    episodes: tuple[str, ...]
+    action: str
+
+
+def collect(runs_dir: Path) -> list[Row]:
+    rows = []
+    for folder in sorted(p for p in runs_dir.iterdir() if p.is_dir() and p.name != SELFTEST_DIR) if runs_dir.is_dir() else []:
+        verdict = load_verdict(folder)
+        if verdict is not None:
+            rows.append(Row(verdict.episode_id, verdict.symptom, verdict.cause, verdict.evidence, verdict.pair,
+                            verdict.untested))
+    return rows
+
+
+def grid(rows: list[Row]) -> dict[tuple[str, str], int]:
+    return dict(Counter((row.symptom, row.cause) for row in rows))
+
+
+def fix_list(rows: list[Row]) -> list[Fix]:
+    by_cause: dict[str, list[Row]] = {}
+    for row in rows:
+        if row.cause not in NOT_FIXES:
+            by_cause.setdefault(row.cause, []).append(row)
+    fixes = []
+    for cause, members in by_cause.items():
+        action = FIX_ACTIONS[cause]
+        if cause == "multi-cause":
+            pairs = sorted({" + ".join(row.pair) for row in members})
+            action = f"{action}: {'; '.join(pairs)}"
+        fixes.append(Fix(cause, len(members), tuple(row.episode_id for row in members), action))
+    return sorted(fixes, key=lambda fix: (-fix.count, CAUSE_RANK[fix.cause]))
+
+
+def render_report(rows: list[Row], trust: list[str]) -> str:
+    lines = ["# culprit report", ""]
+    if not rows:
+        lines += ["No verdicts yet. Confirm failures with `culprit triage` and `culprit confirm`, prepare them with "
+                  "`culprit criterion` and `culprit restore`, then run `culprit diagnose` or `culprit diagnose-all`.",
+                  "", "## How far to trust this", "", *[f"- {line}" for line in trust]]
+        return "\n".join(lines) + "\n"
+    fixes = fix_list(rows)
+    if fixes:
+        top = fixes[0]
+        lines.append(f"**Change {top.cause} first:** it explains {top.count} of {len(rows)} diagnosed episodes — "
+                     f"change {top.action}.")
+    else:
+        lines.append(f"**No change to make:** none of the {len(rows)} diagnosed episodes was a reproducible failure.")
+    lines += ["", "## Fix list", "", "| Fix | Episodes | What you change |", "|---|---|---|"]
+    lines += [f"| {fix.cause} | {fix.count} | {fix.action} |" for fix in fixes]
+    cells = grid(rows)
+    causes = [c.value for c in Cause if any(cause == c.value for _, cause in cells)]
+    symptoms = [s for s in SYMPTOM_ROWS if any(symptom == s for symptom, _ in cells)]
+    lines += ["", "## Symptom × cause", "", "| Symptom | " + " | ".join(causes) + " |",
+              "|---|" + "---|" * len(causes)]
+    for symptom in symptoms:
+        lines.append(f"| {symptom} | " + " | ".join(str(cells.get((symptom, c), "")) for c in causes) + " |")
+    lines += ["", "## Verdicts", ""]
+    for row in rows:
+        lines.append(f"- **{row.episode_id}** — {row.symptom} → **{row.cause}**: {row.evidence}")
+        for cause, reason in row.untested.items():
+            lines.append(f"  - {cause} untested: {reason}")
+    lines += ["", "## How far to trust this", "", *[f"- {line}" for line in trust],
+              "", "## Known limits", "", *[f"- {limit}" for limit in KNOWN_LIMITS]]
+    return "\n".join(lines) + "\n"
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `uv run pytest -v`
+Expected: 129 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/culprit/report.py tests/test_report.py
+git commit -m "Render the report from stored verdicts: answer first, fix list, grid, evidence, trust, limits
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git status --short   # must print nothing
+```
+
+---
+
+#### Task 6.2: Diagnose every prepared episode under a total budget
+
+**Files:**
+- Create: `src/culprit/batch.py`
+- Test: `tests/test_batch.py`
+
+**Interfaces:**
+- Consumes: `CANDIDATES_FILE`, `episode_dir`, `read_symptom` (store); `load_criterion` (criterion); `PRISTINE_DIR`, `EpisodeBudget`, `BudgetExhausted` (experiment); `load_verdict` (verdict); `find_episode`, `follow_up_prompts` (locate); `baseline_settings` (replay); `diagnose` (diagnose).
+- Produces:
+  - `readiness_problem(runs_dir: Path, episode_id: str) -> str | None` — the first missing step, or None when ready.
+  - `@dataclass class BatchSummary` with `diagnosed: list[str]`, `skipped: dict[str, str]`, `over_cap: list[str]`, `stopped_at: str | None`, `spent_usd: float`.
+  - `diagnose_all(runs_dir: Path, projects_dir: Path, *, n: int, per_episode_usd: float, total_usd: float, replay_budget_usd: float, diagnose_fn=diagnose, find=find_episode, follow=follow_up_prompts) -> BatchSummary`
+
+- [ ] **Step 1: Write the failing tests**
+
+`tests/test_batch.py`:
+
+```python
+import json
+
+from culprit.batch import diagnose_all, readiness_problem
+from culprit.criterion import Criterion, save_criterion
+from culprit.experiment import BudgetExhausted
+from culprit.store import episode_dir
+from culprit.verdict import Verdict, save_verdict
+
+
+class FakeEpisode:
+    def __init__(self, episode_id):
+        self.episode_id = episode_id
+        self.prompt_text = "fix"
+        self.model = "claude-opus-5"
+        self.permission_mode = "auto"
+        self.cwd = "/repo"
+
+
+def queue(runs, *episode_ids):
+    runs.mkdir(parents=True, exist_ok=True)
+    (runs / "candidates.json").write_text(json.dumps(
+        [{"summary": {"episode_id": e, "session_file": "/s.jsonl", "prompt_excerpt": "x", "signals": {}}, "score": 5}
+         for e in episode_ids]))
+
+
+def prepare(runs, episode_id, symptom="wrong-result", approved=True, restored=True):
+    folder = episode_dir(runs, episode_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    if symptom:
+        (folder / "symptom.json").write_text(json.dumps({"episode_id": episode_id, "symptom": symptom}))
+    save_criterion(runs, episode_id, Criterion("works", (), (), approved=approved))
+    if restored:
+        (folder / "pristine").mkdir(exist_ok=True)
+
+
+def spending_diagnose(costs, raises=()):
+    calls = []
+
+    def fake(episode, criterion, symptom, base, **kwargs):
+        calls.append((episode.episode_id, kwargs["budget"].cap_usd))
+        kwargs["budget"].spend(costs.get(episode.episode_id, 0.0))
+        if episode.episode_id in raises:
+            raise BudgetExhausted("over")
+        verdict = Verdict(episode.episode_id, symptom.value, "harness", "e", {}, {})
+        save_verdict(episode_dir(kwargs["runs_dir"], episode.episode_id), verdict)
+        return verdict
+
+    fake.calls = calls
+    return fake
+
+
+def run(runs, fake, total=400.0, per=40.0):
+    return diagnose_all(runs, runs / "projects", n=5, per_episode_usd=per, total_usd=total, replay_budget_usd=2.0,
+                        diagnose_fn=fake, find=lambda projects, episode_id: FakeEpisode(episode_id),
+                        follow=lambda projects, episode_id: [])
+
+
+def test_readiness_names_the_first_missing_step(tmp_path):
+    prepare(tmp_path, "a:1", symptom=None)
+    prepare(tmp_path, "b:1", approved=False)
+    prepare(tmp_path, "c:1", restored=False)
+    prepare(tmp_path, "d:1")
+    assert "culprit confirm" in readiness_problem(tmp_path, "a:1")
+    assert "culprit criterion approve" in readiness_problem(tmp_path, "b:1")
+    assert "culprit restore" in readiness_problem(tmp_path, "c:1")
+    assert readiness_problem(tmp_path, "d:1") is None
+
+
+def test_ready_episodes_are_diagnosed_and_the_rest_skipped_with_reasons(tmp_path):
+    runs = tmp_path / "runs"
+    queue(runs, "a:1", "b:1", "c:1")
+    prepare(runs, "a:1")
+    prepare(runs, "b:1", restored=False)
+    prepare(runs, "c:1")
+    save_verdict(episode_dir(runs, "c:1"), Verdict("c:1", "wrong-result", "task", "e", {}, {}))
+    summary = run(runs, spending_diagnose({"a:1": 12.5}))
+    assert summary.diagnosed == ["a:1"]
+    assert "culprit restore" in summary.skipped["b:1"]
+    assert summary.skipped["c:1"] == "already diagnosed"
+    assert summary.spent_usd == 12.5
+
+
+def test_one_episode_over_its_cap_does_not_stop_the_others(tmp_path):
+    runs = tmp_path / "runs"
+    queue(runs, "a:1", "b:1")
+    prepare(runs, "a:1")
+    prepare(runs, "b:1")
+    summary = run(runs, spending_diagnose({"a:1": 40.0, "b:1": 10.0}, raises=("a:1",)))
+    assert summary.over_cap == ["a:1"] and summary.diagnosed == ["b:1"]
+    assert summary.stopped_at is None
+    assert summary.spent_usd == 50.0
+
+
+def test_the_total_budget_stops_the_batch_and_names_where(tmp_path):
+    runs = tmp_path / "runs"
+    queue(runs, "a:1", "b:1", "c:1")
+    for episode_id in ("a:1", "b:1", "c:1"):
+        prepare(runs, episode_id)
+    fake = spending_diagnose({"a:1": 30.0, "b:1": 30.0})
+    summary = run(runs, fake, total=60.0, per=40.0)
+    assert [episode for episode, _ in fake.calls] == ["a:1", "b:1"]
+    assert fake.calls[1][1] == 30.0  # the second episode only got what was left of the total
+    assert summary.stopped_at == "c:1"
+    assert summary.diagnosed == ["a:1", "b:1"]
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `uv run pytest tests/test_batch.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'culprit.batch'`
+
+- [ ] **Step 3: Write the implementation**
+
+`src/culprit/batch.py`:
+
+```python
+"""Diagnose every prepared episode in the triage queue, sharing one total budget.
+
+An episode that hits its own cap is set aside and the batch goes on; when the total runs out the batch
+stops and names the next episode, and rerunning resumes, because finished verdicts are skipped.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from culprit.criterion import load_criterion
+from culprit.diagnose import diagnose
+from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget
+from culprit.locate import find_episode, follow_up_prompts
+from culprit.replay import baseline_settings
+from culprit.store import CANDIDATES_FILE, episode_dir, read_symptom
+from culprit.verdict import load_verdict
+
+ENV_FIX_FILE = "env-fix.sh"
+MIN_USEFUL_BUDGET_USD = 1.0
+
+
+@dataclass
+class BatchSummary:
+    diagnosed: list[str] = field(default_factory=list)
+    skipped: dict[str, str] = field(default_factory=dict)
+    over_cap: list[str] = field(default_factory=list)
+    stopped_at: str | None = None
+    spent_usd: float = 0.0
+
+
+def readiness_problem(runs_dir: Path, episode_id: str) -> str | None:
+    if read_symptom(runs_dir, episode_id) is None:
+        return f"not confirmed — run `culprit confirm {episode_id} <symptom>`"
+    criterion = load_criterion(runs_dir, episode_id)
+    if criterion is None or not criterion.approved:
+        return f"no approved criterion — run `culprit criterion draft {episode_id}` then `culprit criterion approve {episode_id}`"
+    if not (episode_dir(runs_dir, episode_id) / PRISTINE_DIR).is_dir():
+        return f"not restored — run `culprit restore {episode_id}`"
+    return None
+
+
+def diagnose_all(runs_dir: Path, projects_dir: Path, *, n: int, per_episode_usd: float, total_usd: float,
+                 replay_budget_usd: float, diagnose_fn=diagnose, find=find_episode,
+                 follow=follow_up_prompts) -> BatchSummary:
+    summary = BatchSummary()
+    queued = [row["summary"]["episode_id"] for row in json.loads((runs_dir / CANDIDATES_FILE).read_text())]
+    for episode_id in queued:
+        if load_verdict(episode_dir(runs_dir, episode_id)) is not None:
+            summary.skipped[episode_id] = "already diagnosed"
+            continue
+        problem = readiness_problem(runs_dir, episode_id)
+        if problem:
+            summary.skipped[episode_id] = problem
+            continue
+        remaining = total_usd - summary.spent_usd
+        if remaining < MIN_USEFUL_BUDGET_USD:
+            summary.stopped_at = episode_id
+            break
+        budget = EpisodeBudget(min(per_episode_usd, remaining))
+        episode = find(projects_dir, episode_id)
+        env_script = episode_dir(runs_dir, episode_id) / ENV_FIX_FILE
+        try:
+            diagnose_fn(episode, load_criterion(runs_dir, episode_id), read_symptom(runs_dir, episode_id),
+                        baseline_settings(episode, replay_budget_usd), runs_dir=runs_dir,
+                        follow_ups=follow(projects_dir, episode_id),
+                        env_script=env_script if env_script.exists() else None, n=n, budget=budget)
+            summary.diagnosed.append(episode_id)
+        except BudgetExhausted:
+            summary.over_cap.append(episode_id)
+        summary.spent_usd += budget.spent_usd
+    return summary
+```
+
+In `src/culprit/cli.py`, replace the Stage 4 constant `ENV_FIX_FILE = "env-fix.sh"` with `from culprit.batch import ENV_FIX_FILE`, so one module owns the name.
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `uv run pytest -v`
+Expected: 133 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/culprit/batch.py src/culprit/cli.py tests/test_batch.py
+git commit -m "Diagnose every prepared queued episode under one total budget, resumably
+
+Unprepared episodes are skipped with the step they miss; an episode over
+its own cap is set aside; when the total runs out the batch names where it
+stopped, and a rerun resumes because finished verdicts are skipped.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git status --short   # must print nothing
+```
+
+---
+
+#### Task 6.3: `culprit report` and `culprit diagnose-all`, and the first real report
+
+**Files:**
+- Modify: `src/culprit/cli.py`
+- Test: `tests/test_cli_stage6.py`
+
+**Interfaces:**
+- Consumes: Stage 5's CLI (`trust_lines`); `collect`, `render_report`, `REPORT_FILE` (report); `diagnose_all` (batch).
+- Produces: subcommands `report` (writes `runs/report.md`, prints it) and `diagnose-all [--n 5] [--per-episode 40] [--total 400] [--replay-budget 2.0]` (prints the batch summary, then writes the report).
+
+- [ ] **Step 1: Write the failing tests**
+
+`tests/test_cli_stage6.py`:
+
+```python
+import culprit.cli as cli
+from culprit.batch import BatchSummary
+from culprit.verdict import Verdict, save_verdict
+
+
+def test_report_writes_and_prints_the_markdown(tmp_path, capsys):
+    runs = tmp_path / "runs"
+    save_verdict(runs / "a__1", Verdict("a:1", "wrong-result", "harness", "harness passed 4/5 against the baseline's 0/5", {}, {}))
+    assert cli.main(["report", "--runs", str(runs)]) == 0
+    written = (runs / "report.md").read_text()
+    assert "Change harness first" in written
+    assert written in capsys.readouterr().out
+
+
+def test_diagnose_all_prints_the_summary_and_writes_the_report(tmp_path, capsys, monkeypatch):
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    seen = {}
+
+    def fake_all(runs_dir, projects_dir, **kwargs):
+        seen.update(kwargs)
+        return BatchSummary(diagnosed=["a:1"], skipped={"b:1": "not restored — run `culprit restore b:1`"},
+                            over_cap=["c:1"], stopped_at="d:1", spent_usd=88.5)
+
+    monkeypatch.setattr(cli, "diagnose_all", fake_all)
+    assert cli.main(["diagnose-all", "--runs", str(runs), "--projects", str(tmp_path / "projects"),
+                     "--total", "100"]) == 0
+    out = capsys.readouterr().out
+    assert seen["total_usd"] == 100.0 and seen["per_episode_usd"] == 40.0 and seen["n"] == 5
+    for expected in ["diagnosed 1", "b:1 skipped: not restored", "c:1 hit its $40.00 cap",
+                     "stopped at d:1", "$88.50", "rerun"]:
+        assert expected in out
+    assert (runs / "report.md").exists()
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `uv run pytest tests/test_cli_stage6.py -v`
+Expected: FAIL — `invalid choice: 'report'` (SystemExit 2).
+
+- [ ] **Step 3: Add the subcommands**
+
+In `src/culprit/cli.py`, add to the imports:
+
+```python
+from culprit.batch import diagnose_all
+from culprit.report import REPORT_FILE, collect, render_report
+```
+
+Add before `return parser` in `build_parser`:
+
+```python
+    report = commands.add_parser("report", help="write runs/report.md from every stored verdict")
+    report.add_argument("--runs", type=Path, default=DEFAULT_RUNS)
+    report.set_defaults(handler=report_command)
+
+    batch = commands.add_parser("diagnose-all", help="diagnose every prepared episode in the queue, then report")
+    _projects_and_runs(batch)
+    batch.add_argument("--n", type=int, default=5)
+    batch.add_argument("--per-episode", type=float, default=40.0)
+    batch.add_argument("--total", type=float, default=400.0)
+    batch.add_argument("--replay-budget", type=float, default=DEFAULT_REPLAY_BUDGET_USD)
+    batch.set_defaults(handler=diagnose_all_command)
+```
+
+Add at the end of the file:
+
+```python
+def write_report(runs_dir: Path) -> str:
+    text = render_report(collect(runs_dir), trust_lines(runs_dir))
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    (runs_dir / REPORT_FILE).write_text(text)
+    return text
+
+
+def report_command(args: argparse.Namespace) -> int:
+    print(write_report(args.runs), end="")
+    return 0
+
+
+def diagnose_all_command(args: argparse.Namespace) -> int:
+    summary = diagnose_all(args.runs, args.projects, n=args.n, per_episode_usd=args.per_episode,
+                           total_usd=args.total, replay_budget_usd=args.replay_budget)
+    print(f"diagnosed {len(summary.diagnosed)}: {', '.join(summary.diagnosed) or 'none'}")
+    for episode_id, reason in summary.skipped.items():
+        print(f"{episode_id} skipped: {reason}")
+    for episode_id in summary.over_cap:
+        print(f"{episode_id} hit its ${args.per_episode:.2f} cap — rerun with a larger --per-episode to resume it")
+    if summary.stopped_at:
+        print(f"stopped at {summary.stopped_at}: the ${args.total:.2f} total is spent — rerun to continue from there")
+    write_report(args.runs)
+    print(f"spent ${summary.spent_usd:.2f}; report written to {args.runs / REPORT_FILE}")
+    return 0
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `uv run pytest -v`
+Expected: 135 passed.
+
+- [ ] **Step 5: Produce the first real report over 10–20 episodes**
+
+This is the human-in-the-loop run the whole build exists for. Budget it before starting: about 30 replays per episode at the measured median cost, capped at $40 per episode and $400 in total by default.
+
+```bash
+uv run culprit triage --top 40
+# for 10–20 real failures in that queue: read the prompt, then
+uv run culprit confirm <ID> <symptom>        # or no-failure
+uv run culprit criterion draft <ID>          # read it; edit runs/<ID>/criterion.json if needed
+uv run culprit criterion approve <ID>
+uv run culprit restore <ID>                  # must print N of N checked files match
+uv run culprit diagnose-all
+uv run culprit review                        # label every judged replay until calibrated, then
+uv run culprit report
+```
+
+Expected:
+- `diagnose-all` lists diagnosed, skipped (with the missing step) and capped episodes and the total spent.
+- `runs/report.md` opens with `**Change <cause> first:** it explains K of M diagnosed episodes`, then the fix list, the grid, every verdict with evidence, the trust lines, and the known limits.
+- Read three verdicts against their replays (`runs/<ID>/replays/<cause>/*/diff.patch`) and confirm the evidence is what the files show. If the report and the replays disagree, the report is wrong: find the step that misread them before trusting any other verdict.
+
+Record M, the top fix, kappa, selftest accuracy and total spend in the commit message.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/culprit/cli.py tests/test_cli_stage6.py
+git commit -m "Add culprit report and culprit diagnose-all
+
+First real report: M episodes diagnosed; top fix <cause> (K of M); kappa
+<k>; selftest <c> of 5; \$<spend> total.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git status --short   # must print nothing
+```
