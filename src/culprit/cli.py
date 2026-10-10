@@ -7,6 +7,7 @@ import shutil
 import sys
 from pathlib import Path
 
+from culprit.batch import ENV_FIX_FILE
 from culprit.calibration import (MIN_KAPPA, MIN_LABELS, UnknownRun, agreement, next_unlabelled, record_label,
                                  run_id, run_summary)
 from culprit.claude import ClaudeCallFailed, ask_claude
@@ -230,7 +231,6 @@ def baseline_command(args: argparse.Namespace) -> int:
     return 0
 
 
-ENV_FIX_FILE = "env-fix.sh"
 
 
 def env_fix_command(args: argparse.Namespace) -> int:
