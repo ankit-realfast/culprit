@@ -115,6 +115,7 @@ testpaths = ["tests"]
 
 ```
 runs/
+.DS_Store
 .venv/
 __pycache__/
 .pytest_cache/
