@@ -152,3 +152,22 @@ def test_a_relative_setup_script_runs_inside_the_clone(tmp_path, monkeypatch):
     run_replay(settings(setup_script=Path("runs/env-fix.sh")), pristine_tree(tmp_path), tmp_path / "run0",
                tmp_path / ".culprit-replay-rel", (), run=run, projects_dir=tmp_path / "p")
     assert seen["fixed"] is True
+
+
+def test_git_in_a_replay_cannot_reach_a_repository_above_the_clone(tmp_path):
+    parent_repo = tmp_path / "real-repo"
+    parent_repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(parent_repo)], check=True)
+    seen = {}
+
+    def run(command, **kwargs):
+        if command[0] == "claude":
+            probe = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=kwargs["cwd"],
+                                   env=kwargs.get("env"), capture_output=True, text=True)
+            seen["found_repo"] = probe.returncode == 0
+            return FakeRun(claude_stdout=RESULT)(command, **kwargs)
+        return FakeRun()(command, **kwargs)
+
+    run_replay(settings(), pristine_tree(tmp_path), tmp_path / "run0", parent_repo / ".culprit-replay-git", (),
+               run=run, projects_dir=tmp_path / "p")
+    assert seen["found_repo"] is False

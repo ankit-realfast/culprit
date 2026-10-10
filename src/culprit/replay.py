@@ -7,6 +7,7 @@ context, setup script, spend cap — so a variant is the baseline with some fiel
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -116,23 +117,26 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
     run_dir.mkdir(parents=True, exist_ok=True)
     clone_tree(pristine, workdir)
     project_folder = projects_dir / project_folder_name(workdir.resolve())
+    # git must not climb out of the clone: beside a project inside a real repository it would find that
+    # repository and a replay's `git commit` would land in it
+    env = {**os.environ, "GIT_CEILING_DIRECTORIES": str(workdir.parent.resolve())}
     try:
         if settings.setup_script:
             # resolved first: the script path is usually relative to culprit's folder, and the clone is elsewhere
             setup = run(["bash", str(settings.setup_script.resolve())], cwd=workdir, capture_output=True, text=True,
-                        timeout=CHECK_TIMEOUT_S)
+                        timeout=CHECK_TIMEOUT_S, env=env)
             if setup.returncode != 0:
                 raise SetupScriptFailed(f"{settings.setup_script} exited {setup.returncode}: {setup.stderr[-500:]}")
         try:
             completed = run(replay_command(settings), cwd=workdir, capture_output=True, text=True,
-                            timeout=REPLAY_TIMEOUT_S)
+                            timeout=REPLAY_TIMEOUT_S, env=env)
             stdout, stderr, exit_code = completed.stdout, completed.stderr, completed.returncode
         except subprocess.TimeoutExpired:
             stdout, stderr, exit_code = "", f"timed out after {REPLAY_TIMEOUT_S}s", -1
         (run_dir / "transcript.jsonl").write_text(stdout)
         (run_dir / "stderr.txt").write_text(stderr)
         result_line = _result_line(stdout)
-        check_results = tuple(_run_check(command, workdir, run) for command in checks)
+        check_results = tuple(_run_check(command, workdir, run, env) for command in checks)
         diff = run(["diff", "-ruN", "--exclude=.git", str(pristine), str(workdir)], capture_output=True, text=True)
         (run_dir / "diff.patch").write_text(diff.stdout)
         if result_line is None:
@@ -160,9 +164,10 @@ def _result_line(stdout: str) -> dict | None:
     return None
 
 
-def _run_check(command: str, workdir: Path, run) -> CheckResult:
+def _run_check(command: str, workdir: Path, run, env: dict[str, str]) -> CheckResult:
     try:
-        done = run(["bash", "-c", command], cwd=workdir, capture_output=True, text=True, timeout=CHECK_TIMEOUT_S)
+        done = run(["bash", "-c", command], cwd=workdir, capture_output=True, text=True, timeout=CHECK_TIMEOUT_S,
+                   env=env)
         return CheckResult(command, done.returncode, (done.stdout + done.stderr)[-OUTPUT_TAIL_CHARS:])
     except subprocess.TimeoutExpired:
         return CheckResult(command, -1, f"timed out after {CHECK_TIMEOUT_S}s")
