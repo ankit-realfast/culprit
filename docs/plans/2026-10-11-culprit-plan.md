@@ -1,5 +1,12 @@
 # culprit Implementation Plan
 
+> **Historical build plan.** This is the plan culprit was originally built from; it is kept as a record and
+> is not maintained. The CLI (now eight commands, with `triage --top` and `status --json` as the only flags),
+> the module layout (now nine modules, one per pipeline stage, instead of one per job) and several
+> behaviours changed after it was executed, so its exact code, file paths and commands no longer match.
+> The spec ([`docs/specs/2026-10-11-culprit-design.md`](../specs/2026-10-11-culprit-design.md)) and the
+> code are the source of truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build culprit end to end: from Claude Code session logs to a verdict per failed episode (what to change: task, environment, agent setup, harness or model) and a ranked fix list, with culprit's own accuracy measured.

@@ -2,7 +2,7 @@ import subprocess
 
 
 class FakeAsk:
-    """Stands in for culprit.claude.ask_claude: records each prompt, returns canned answers in order."""
+    """Stands in for culprit.model.ask_claude: records each prompt, returns canned answers in order."""
 
     def __init__(self, *responses):
         self.responses = list(responses)

@@ -14,7 +14,7 @@ from difflib import SequenceMatcher
 from culprit.logs import ASK_USER_TOOL, Episode, content_blocks
 
 
-# --- mcp_stub: A stand-in MCP server that only replays results recorded in the original session. ---
+# --- mcp: A stand-in MCP server that only replays results recorded in the original session. ---
 # A replay connects to this instead of the real server, so a tool that once sent a Slack message or an
 # email answers with what it answered then and reaches nothing. A call the original session never made
 # gets an error saying so, which the replay sees like any failing tool.
@@ -114,7 +114,7 @@ def mcp_main(args: list[str]) -> None:
     serve_stdio(lambda message: handle(message, recordings))
 
 
-# --- answer_host ---
+# --- answers ---
 # The replay's permission host: answers AskUserQuestion with what you answered in the original session.
 # Claude Code offers AskUserQuestion headless only when a permission-prompt tool is configured
 # (verified live on 2.1.296: a PreToolUse hook is not enough). This MCP tool is that host. A question

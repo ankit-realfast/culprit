@@ -20,7 +20,7 @@ which fix makes it pass.** It proves a cause by intervention, not by asking a ju
 
 Each axis is an ordered checklist; **the first match wins** (mutually exclusive), and each ends in a
 catch-all (collectively exhaustive). The unit is the **episode**: one human prompt and everything
-Claude Code did until the next human prompt, identified by the log's `promptId`.
+Claude Code did until the next human prompt, identified as `<sessionId>:<promptId>` and cut by file order.
 
 ### Symptom — what went wrong (ordered worst first)
 
@@ -79,7 +79,7 @@ session started in** (97 of 347 sessions later change directory). A snapshot ent
 unknown and left as it is today. Last, every file the episode itself recorded at first touch is set
 from that record, which is exact: an `Edit`'s or `Write`'s `originalFile`, or absent for a file a
 `Write` created (in the logs: 1,232 recorded originals, 576 creations, 2,559 edits that recorded none).
-Before that last step, `restore` reports how often the snapshot agreed with those records — the trust
+Before that last step, the restore reports how often the snapshot agreed with those records — the trust
 figure for files only the snapshot covers. Files nothing recorded are as they are today; every verdict
 says so.
 
@@ -117,31 +117,53 @@ devi (a different harness from the one being diagnosed). Harbor, a container tes
 drive Claude Code, is deferred: it adds Docker and has not been shown to start from a restored repo
 state; v1 uses `claude -p` in a throwaway directory and revisits Harbor if isolation proves too weak.
 
-| # | Unit | One job | Input → output |
+| # | Step (module) | One job | Input → output |
 |---|---|---|---|
-| 1 | episodes | Split sessions into episodes | `.jsonl` → `Episode{prompt, transcript, model, cwd, branch, snapshot ref, signals}` |
-| 2 | triage | Rank failure candidates for the human to confirm, from interrupts, tool errors (capped), compactions and slow turns (an interrupted turn logs no duration, so it is timed from its first to its last timestamp); API errors are infrastructure failures, so they add nothing to the score and a row that has them is marked likely not reproducible | Episodes → confirmed episodes, each with a Symptom (human-confirmed; this is the Misjudged check) |
-| 3 | criterion | Draft what success means, from the human's follow-up messages | Episode → success criterion the human approves (`culprit confirm` with no id walks the queue: each row with the human's next prompt beside it, since whether that prompt corrects Claude is for the human to judge, not a phrase list; symptom, then the drafted criterion to approve, then the restore) |
-| 4 | sandbox | Restore the episode's starting state in a throwaway directory | Episode → directory |
-| 5 | oracles | Build one variant per cause | Episode → variants: task, environment, agent setup, harness, model |
-| 6 | replayer | Run each variant N times, baseline first | Variant + directory → stream-json transcripts, cost |
-| 7 | judge | Score a replay against the criterion | Final answer, diff, check results and the transcript's tool calls + criterion → pass/fail |
-| 8 | verdict | Apply the cause checklist to the pass rates, then the pair test | Pass rates → Cause |
-| 9 | report | Lead with what to fix first (single-layer fixes ranked by episodes covered), then interacting causes (multi-cause, by layer set), then the grid and trust | Verdicts → report |
-| 10 | selftest | Plant known faults and check culprit names them | Planted episodes → accuracy |
+| 1 | episodes (`logs`) | Split sessions into episodes | `.jsonl` → `Episode{prompt, transcript, model, cwd, branch, snapshot ref, signals}` |
+| 2 | triage (`logs`) | Rank failure candidates for the human to confirm, from interrupts, tool errors (capped), compactions and slow turns (an interrupted turn logs no duration, so it is timed from its first to its last timestamp); API errors are infrastructure failures, so they add nothing to the score and a row that has them is marked likely not reproducible | Episodes → confirmed episodes, each with a Symptom (human-confirmed; this is the Misjudged check) |
+| 3 | criterion (`model`) | Draft what success means, from the human's follow-up messages | Episode → success criterion the human approves (`culprit confirm` with no id walks the queue: each row with the human's next prompt beside it, since whether that prompt corrects Claude is for the human to judge, not a phrase list; symptom, then the drafted criterion to approve, then the restore) |
+| 4 | restore (`replay`) | Restore the episode's starting state in a throwaway directory | Episode → directory |
+| 5 | oracles (`diagnose`) | Build one variant per cause | Episode → variants: task, environment, agent setup, harness, model |
+| 6 | replayer (`replay`, `diagnose`) | Run each variant N times, baseline first | Variant + directory → stream-json transcripts, cost |
+| 7 | judge (`model`) | Score a replay against the criterion | Final answer, diff, check results and the transcript's tool calls + criterion → pass/fail |
+| 8 | verdict (`diagnose`) | Apply the cause checklist to the pass rates, then the pair test | Pass rates → Cause |
+| 9 | report (`report`) | Lead with what to fix first (single-layer fixes ranked by episodes covered), then interacting causes (multi-cause, by layer set), then the grid and trust | Verdicts → report |
+| 10 | selftest (`trust`) | Plant known faults and check culprit names them | Planted episodes → accuracy |
 
-Storage is plain files: one folder per episode holding its variants, transcripts and verdict JSON.
+The package is standard-library Python in nine modules, one per pipeline stage: `logs` (episodes,
+failure signals, triage, locating an episode, snapshots, replay eligibility), `store` (taxonomy and the
+plain-file store), `model` (every model call: the locked-down call, criterion drafting, leak check,
+judge), `replay` (restore and one replay), `stubs` (the stand-in MCP servers, run as their own light
+processes: `python -m culprit.stubs mcp …` and `python -m culprit.stubs answers …`), `diagnose`
+(variants, oracles, verdict and its statistics, cost preview, the whole-queue batch), `trust` (judge
+calibration and selftest), `report` (the report and per-episode status) and `cli`.
+
+Storage is plain files: one folder per episode holding its variants, transcripts and verdict JSON, under
+`runs/` (or `$CULPRIT_RUNS`); the session logs are read from `~/.claude/projects` (or
+`$CULPRIT_PROJECTS`). Planted-fault runs live under `runs/selftest/`, apart from real episodes.
+
+### The command line
+
+Eight commands: `triage`, `confirm`, `env-fix`, `diagnose`, `report`, `status`, `review` and `selftest`.
+The only flags are `triage --top` and `status --json`; everything else comes from the two environment
+variables above. An episode is named by its row number in the triage queue (plain `3`; a shell drops
+`#3` as a comment), its short id or a unique prefix. `confirm` with no id walks the queue in a terminal;
+`diagnose` restores the starting files when they are missing, runs the baseline and the oracles, and with
+no id diagnoses the whole queue and writes the report. Every replaying command prints the most it can run
+and spend before it starts.
 
 ### Every replay runs locked down
 
 ```
 claude -p "<episode or variant prompt>" \
-  --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
-  --permission-prompts none --permission-mode <mode> \
-  --disallowedTools "Bash(git push *)" "Bash(gh *)" \
-  --no-session-persistence --max-budget-usd <cap> \
   --output-format stream-json --verbose \
-  --model <model>
+  --strict-mcp-config --mcp-config '<stand-ins only, or {"mcpServers":{}}>' \
+  --permission-prompts none --permission-mode <mode> \
+    # with recorded answers: --permission-prompts host --permission-prompt-tool <answer host>
+  --no-session-persistence --max-budget-usd <cap> \
+  --settings '<Bash sandbox, autoMemoryDirectory>' \
+  --model <model> \
+  --disallowedTools "Bash(git push *)" "Bash(gh *)" <file tools on the original folder>
 ```
 
 - **No real MCP server ever connects.** For each server an episode used, culprit runs a stand-in that
@@ -162,13 +184,17 @@ claude -p "<episode or variant prompt>" \
   `acceptEdits`, because in the original the human approved those prompts and no human is present now.
 - **Cleanup:** after each replay culprit deletes the clone and the empty `memory/` folder Claude Code
   leaves under `~/.claude/projects/`.
-- **Spend:** `--max-budget-usd` per replay, and a per-episode cap that stops further replays.
+- **Spend:** `--max-budget-usd` per replay ($2 by default; the harness variant doubles it), each model
+  call capped at $0.50, and built-in caps that stop further replays: $850 per episode, $650 per planted
+  fault, $17,000 for a whole-queue `diagnose` (see §5).
 
 ### Which episodes are replayable
 
 An episode is replayable only if its `cwd` still exists and is not the home folder, a folder containing
 culprit, a git worktree or submodule, or beside an unwritable parent; its snapshot exists; any question it
-asked has a recorded answer; and any image it carried was kept in the log. `triage` lists blocked candidates after every replayable one and prints the blocking reason under each, and `restore` refuses with the reasons; `restore` also lists every hook the project's own settings define, because those hooks run in every replay.
+asked has a recorded answer; and any image it carried was kept in the log. `triage` lists blocked candidates after every replayable one and prints the blocking reason under each,
+and the restore (run by the `confirm` walk or by `diagnose`) refuses with the reasons; it also lists every
+hook the project's own settings define, because those hooks run in every replay.
 
 ### The oracles, concretely
 
@@ -216,8 +242,8 @@ Every verdict states the numbers behind it — the baseline's pass count, the wi
 
 ## 5. Known limits, reported rather than hidden
 
-- Episodes in which Claude asked the human a question cannot be replayed faithfully (no person to
-  answer); they are tagged and excluded from v1.
+- An episode in which Claude asked the human a question replays only when the log recorded the
+  human's answer (the answer host gives it back); one with no recorded answer is not replayable.
 - Episodes already run on Fable cannot test the Model cause; reported as untestable.
 - An MCP call or a question the original session never made cannot be answered in a replay.
 - For a project in git, files nothing else recorded come from the last commit before the episode;
@@ -235,7 +261,7 @@ Every verdict states the numbers behind it — the baseline's pass count, the wi
 ## 6. Build order
 
 1. episodes + triage on the real logs, with human confirmation (no replays yet).
-2. criterion + sandbox; prove one episode's starting state restores.
+2. criterion + restore; prove one episode's starting state restores.
 3. replayer + baseline for one episode.
 4. oracles + verdict for one episode, end to end.
 5. judge calibration and selftest.
