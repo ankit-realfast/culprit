@@ -4,7 +4,7 @@ import pytest
 
 from culprit.model import Criterion, Judgement
 from culprit.logs import episodes_from_session
-from culprit.experiment import BudgetExhausted, EpisodeBudget, VariantOutcome, load_outcome, run_variant
+from culprit.diagnose import BudgetExhausted, EpisodeBudget, VariantOutcome, load_outcome, run_variant
 from culprit.replay import ReplayResult, ReplaySettings
 from culprit.store import episode_dir
 from records import human
@@ -100,7 +100,7 @@ def test_runs_already_paid_for_are_reused_after_a_stop(write_session, tmp_path):
 
 
 def test_stored_spend_counts_replays_model_judgements_and_other_calls(tmp_path):
-    from culprit.experiment import record_call_spend, stored_spend
+    from culprit.diagnose import record_call_spend, stored_spend
     for i, (cost, by) in enumerate([(1.25, "model"), (0.5, "check")]):
         run_dir = tmp_path / "replays" / "baseline" / str(i)
         run_dir.mkdir(parents=True)
@@ -112,7 +112,7 @@ def test_stored_spend_counts_replays_model_judgements_and_other_calls(tmp_path):
 
 
 def test_progress_hears_each_replay_start_and_finish_with_the_spend_so_far(write_session, tmp_path):
-    from culprit.experiment import ReplayEvent
+    from culprit.diagnose import ReplayEvent
     episode = episode_at(write_session, tmp_path)
     runs = tmp_path / "runs"
     done = episode_dir(runs, episode.episode_id) / "replays" / "baseline" / "0"

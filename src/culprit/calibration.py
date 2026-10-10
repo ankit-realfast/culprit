@@ -9,7 +9,7 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 
-from culprit.experiment import JUDGEMENT_FILE, REPLAYS_DIR
+from culprit.diagnose import JUDGEMENT_FILE, REPLAYS_DIR
 from culprit.replay import DIFF_FILE, RESULT_FILE
 from culprit.store import read_json, write_json
 

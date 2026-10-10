@@ -1,10 +1,8 @@
 import json
 
-from culprit.batch import diagnose_all, readiness_problem
+from culprit.diagnose import BudgetExhausted, Verdict, diagnose_all, readiness_problem, save_verdict
 from culprit.model import Criterion, save_criterion
-from culprit.experiment import BudgetExhausted
 from culprit.store import episode_dir
-from culprit.verdict import Verdict, save_verdict
 
 
 class FakeEpisode:
@@ -153,7 +151,7 @@ def test_readiness_with_no_criterion_names_draft(tmp_path):
 
 
 def test_batch_progress_names_the_episode(tmp_path):
-    from culprit.experiment import ReplayEvent
+    from culprit.diagnose import ReplayEvent
     queue(tmp_path, "aaaaaaaaaaaa:bbbbbbbbbbbb")
     prepare(tmp_path, "aaaaaaaaaaaa:bbbbbbbbbbbb")
     events = []

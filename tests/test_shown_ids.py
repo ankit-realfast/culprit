@@ -1,7 +1,7 @@
 import json
 
 import culprit.cli as cli
-from culprit.batch import readiness_problem
+from culprit.diagnose import readiness_problem
 from culprit.model import Criterion, save_criterion
 from culprit.store import display_id, episode_dir
 from records import human, snapshot

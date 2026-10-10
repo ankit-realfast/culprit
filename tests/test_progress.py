@@ -1,6 +1,6 @@
 import io
 
-from culprit.experiment import ReplayEvent
+from culprit.diagnose import ReplayEvent
 from culprit.progress import Heartbeat, ProgressPrinter, elapsed
 
 

@@ -7,7 +7,7 @@ import threading
 import time
 from typing import Callable, TextIO
 
-from culprit.experiment import ReplayEvent
+from culprit.diagnose import ReplayEvent
 
 
 HEARTBEAT_S = 30

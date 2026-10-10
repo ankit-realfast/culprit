@@ -1,4 +1,4 @@
-from culprit.verdict import Verdict, numbers_line
+from culprit.diagnose import Verdict, numbers_line
 
 
 def outcome(name, passes, runs):

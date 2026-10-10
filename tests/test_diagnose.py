@@ -2,13 +2,11 @@ import json
 from dataclasses import replace
 
 from culprit.model import Criterion
-from culprit.diagnose import NOT_RUN_REASON, diagnose
+from culprit.diagnose import (NOT_RUN_REASON, EpisodeBudget, VariantBuild, VariantOutcome, beats, diagnose,
+                              load_verdict, reproducible)
 from culprit.logs import episodes_from_session
-from culprit.experiment import EpisodeBudget, VariantOutcome
-from culprit.oracles import VariantBuild
 from culprit.replay import ReplaySettings
 from culprit.store import Cause, Symptom, episode_dir
-from culprit.verdict import beats, load_verdict, reproducible
 from records import human
 
 CRITERION = Criterion("works", (), (), approved=True)
@@ -151,7 +149,7 @@ def test_a_baseline_with_no_counted_runs_is_not_testable(write_session, tmp_path
 
 
 def test_drafting_calls_are_charged_to_the_episode_budget(write_session, tmp_path):
-    from culprit.experiment import stored_spend
+    from culprit.diagnose import stored_spend
 
     def drafting_build(cause, base, **kwargs):
         kwargs["ask"]("draft", {})
@@ -168,7 +166,7 @@ def test_drafting_calls_are_charged_to_the_episode_budget(write_session, tmp_pat
 
 def test_runs_judged_against_an_older_criterion_are_set_aside_but_still_counted(write_session, tmp_path):
     from culprit.diagnose import retire_if_criterion_changed
-    from culprit.experiment import stored_spend
+    from culprit.diagnose import stored_spend
     (episode,) = episodes_from_session(write_session([human("fix", "p1", session_id="s1", cwd=str(tmp_path))]))
     folder = episode_dir(tmp_path / "runs", "s1:p1")
     old_criterion = Criterion("the old definition", (), (), approved=True)

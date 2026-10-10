@@ -1,5 +1,5 @@
 from culprit.report import collect, fix_list, grid, interactions, render_report
-from culprit.verdict import Verdict, save_verdict
+from culprit.diagnose import Verdict, save_verdict
 
 
 def verdict(runs, episode_folder, symptom, cause, pair=(), untested=None):

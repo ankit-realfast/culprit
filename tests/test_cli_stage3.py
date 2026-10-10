@@ -7,7 +7,7 @@ import pytest
 
 import culprit.cli as cli
 from culprit.model import Criterion, save_criterion
-from culprit.experiment import VariantOutcome
+from culprit.diagnose import VariantOutcome
 from culprit.store import episode_dir
 from records import human, snapshot
 
@@ -81,7 +81,7 @@ def test_the_baseline_counts_what_the_episode_already_spent(write_session, tmp_p
 
 
 def test_a_baseline_over_budget_exits_4(write_session, tmp_path, capsys, monkeypatch, no_selftest):
-    from culprit.experiment import BudgetExhausted
+    from culprit.diagnose import BudgetExhausted
     projects, runs = setup_episode(write_session, tmp_path)
 
     def over(*args, **kwargs):
@@ -94,7 +94,7 @@ def test_a_baseline_over_budget_exits_4(write_session, tmp_path, capsys, monkeyp
 
 def test_the_baseline_prints_a_line_on_stderr_for_each_finished_replay(write_session, tmp_path, capsys, monkeypatch,
                                                                        no_selftest):
-    from culprit.experiment import ReplayEvent
+    from culprit.diagnose import ReplayEvent
     projects, runs = setup_episode(write_session, tmp_path)
 
     def fake_run_variant(variant, settings, **kwargs):

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from culprit.store import SELFTEST_DIR, Cause, Symptom, load_restore
-from culprit.verdict import load_verdict, numbers_line
+from culprit.diagnose import load_verdict, numbers_line
 
 REPORT_FILE = "report.md"
 # what to change for each cause a single layer explains; the other causes are not fixes: unexplained is listed

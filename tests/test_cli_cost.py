@@ -4,11 +4,9 @@ import json
 import pytest
 
 import culprit.cli as cli
-from culprit.batch import BatchSummary
+from culprit.diagnose import BatchSummary, VariantOutcome, Verdict
 from culprit.model import Criterion, save_criterion
-from culprit.experiment import VariantOutcome
 from culprit.store import episode_dir
-from culprit.verdict import Verdict
 from records import human, snapshot
 
 
@@ -102,7 +100,7 @@ def test_diagnose_queue_plan_covers_only_ready_episodes_within_the_total(write_s
 
 
 def test_the_default_caps_never_stop_a_full_diagnose_at_n():
-    from culprit.preview import diagnose_cost
+    from culprit.diagnose import diagnose_cost
     from culprit.store import ORACLE_ORDER, Cause
     assert cli.RUNS_PER_VARIANT == 10
     every_oracle = diagnose_cost(DEFAULT_REPLAY_BUDGET_USD, ORACLE_ORDER, n=cli.RUNS_PER_VARIANT, spent_usd=0,

@@ -1,6 +1,5 @@
 import culprit.cli as cli
-from culprit.batch import BatchSummary
-from culprit.verdict import Verdict, save_verdict
+from culprit.diagnose import BatchSummary, Verdict, save_verdict
 
 
 def test_report_writes_and_prints_the_markdown(tmp_path, capsys):

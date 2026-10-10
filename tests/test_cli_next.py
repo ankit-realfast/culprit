@@ -2,9 +2,8 @@ import json
 
 import culprit.cli as cli
 from culprit.model import Criterion, save_criterion
-from culprit.experiment import VariantOutcome
+from culprit.diagnose import VariantOutcome, Verdict
 from culprit.store import episode_dir
-from culprit.verdict import Verdict
 from records import human, snapshot
 
 
@@ -53,7 +52,7 @@ def test_diagnose_and_env_fix_name_their_next_step(write_session, tmp_path, caps
 
     def fake_diagnose(episode, criterion, symptom, base, **kwargs):
         verdict = Verdict("s1:p1", "wrong-result", "model", "model passed 4/5", {}, {})
-        from culprit.verdict import save_verdict
+        from culprit.diagnose import save_verdict
         save_verdict(episode_dir(runs, "s1:p1"), verdict)
         return verdict
 

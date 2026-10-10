@@ -1,7 +1,7 @@
 import culprit.cli as cli
 from culprit.model import Criterion, save_criterion
 from culprit.store import episode_dir
-from culprit.verdict import Verdict
+from culprit.diagnose import Verdict
 from records import human, snapshot
 
 
@@ -93,7 +93,7 @@ def test_diagnose_refuses_with_the_reasons_when_the_episode_cannot_be_replayed(w
 
 def test_diagnose_without_an_id_restores_the_ready_episodes_then_diagnoses_the_queue(write_session, tmp_path,
                                                                                      capsys, monkeypatch):
-    from culprit.batch import BatchSummary
+    from culprit.diagnose import BatchSummary
     projects, runs = ready(write_session, tmp_path, restored=False)
     (runs / "candidates.json").write_text('[{"score": 1, "summary": {"episode_id": "s1:p1"}}]')
     seen = []

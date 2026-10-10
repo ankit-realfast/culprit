@@ -4,7 +4,7 @@ import culprit.cli as cli
 from culprit.model import Criterion, save_criterion
 from culprit.status import episode_status, next_step, queue_status
 from culprit.store import episode_dir, short_id
-from culprit.verdict import Verdict, save_verdict
+from culprit.diagnose import Verdict, save_verdict
 
 ID = "aaaaaaaa1111:bbbbbbbb2222"
 

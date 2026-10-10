@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from culprit.stats import fisher_one_sided
+from culprit.diagnose import fisher_one_sided
 from culprit.store import ORACLE_ORDER, Cause
 
 

@@ -7,7 +7,7 @@ from culprit.replay import ReplaySettings
 from culprit.selftest import (EXPECTED, IMPOSSIBLE, MISLEADING_INSTRUCTION_TEXT, PlantedFault, SelftestResult,
                               control_min_passes, is_control, plant, run_selftest, selftest_accuracy, selftest_dir)
 from culprit.store import episode_dir
-from culprit.verdict import Verdict, save_verdict
+from culprit.diagnose import Verdict, save_verdict
 from records import human
 
 CRITERION = Criterion("works", ("pytest -q",), (), approved=True)
@@ -72,7 +72,7 @@ def test_selftest_reports_each_fault_and_the_accuracy(write_session, tmp_path):
 
 
 def test_selftest_progress_names_the_planted_fault(write_session, tmp_path):
-    from culprit.experiment import ReplayEvent
+    from culprit.diagnose import ReplayEvent
     (episode,) = episodes_from_session(write_session([human("fix", "p1", session_id="s1", cwd=str(tmp_path))]))
     events = []
 
