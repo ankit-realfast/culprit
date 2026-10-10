@@ -19,6 +19,7 @@ REPLAYS_DIR = "replays"
 PRISTINE_DIR = "pristine"
 OUTCOME_FILE = "outcome.json"
 JUDGEMENT_FILE = "judgement.json"
+MAX_VOID_RETRIES = 5  # extra attempts per variant when runs fail for reasons outside the agent
 
 
 class BudgetExhausted(RuntimeError):
@@ -43,8 +44,9 @@ class EpisodeBudget:
 class VariantOutcome:
     variant: str
     passes: int
-    runs: int
+    runs: int  # counted runs; void runs are retried and left out
     cost_usd: float
+    void: int = 0
 
 
 def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Episode, runs_dir: Path,
@@ -53,9 +55,12 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
     episode_folder = episode_dir(runs_dir, episode.episode_id)
     folder = out_dir or episode_folder
     variant_dir = folder / REPLAYS_DIR / variant
-    passes = 0
+    passes = counted = void = 0
     cost = 0.0
-    for i in range(n):
+    attempt = 0
+    while counted < n and attempt < n + MAX_VOID_RETRIES:
+        i = attempt
+        attempt += 1
         budget.ensure_room(settings.max_budget_usd + JUDGE_CALL_CAP_USD)
         run_dir = variant_dir / str(i)
         result = replay(settings, episode_folder / PRISTINE_DIR, run_dir, replay_workdir(episode), criterion.checks,
@@ -65,8 +70,12 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
         budget.spend(spent)
         cost += result.cost_usd
         (run_dir / JUDGEMENT_FILE).write_text(json.dumps(asdict(judgement), indent=2))
+        if judgement.by == "void":
+            void += 1
+            continue
+        counted += 1
         passes += int(judgement.passed)
-    outcome = VariantOutcome(variant, passes, n, round(cost, 4))
+    outcome = VariantOutcome(variant, passes, counted, round(cost, 4), void)
     variant_dir.mkdir(parents=True, exist_ok=True)
     (variant_dir / OUTCOME_FILE).write_text(json.dumps(asdict(outcome), indent=2))
     return outcome

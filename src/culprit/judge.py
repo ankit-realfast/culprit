@@ -28,7 +28,7 @@ JUDGEMENT_SCHEMA = {
 class Judgement:
     passed: bool
     reason: str
-    by: str  # "check", "replay" or "model"
+    by: str  # "check", "replay", "model", or "void" (not counted)
 
 
 def actions_from_transcript(transcript: str) -> str:
@@ -82,6 +82,8 @@ was done, in the files or in the actions. reason is one sentence naming the evid
 
 
 def judge_replay(criterion: Criterion, replay: ReplayResult, ask: Ask = ask_claude) -> Judgement:
+    if replay.void_reason:
+        return Judgement(False, f"not counted: {replay.void_reason}", "void")
     failed = [check for check in replay.checks if check.exit_code != 0]
     if failed:
         return Judgement(False, f"check failed: {failed[0].command} (exit {failed[0].exit_code})", "check")

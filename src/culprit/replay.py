@@ -28,6 +28,7 @@ DEFAULT_PROJECTS = Path.home() / ".claude" / "projects"
 OUTPUT_TAIL_CHARS = 2000
 REPLAY_DIR_PREFIX = ".culprit-replay-"
 WRITE_TOOLS = ("Edit", "Write", "NotebookEdit")
+VOID_SUBTYPES = ("error_max_budget_usd", "error_during_execution")
 GIT_STATE_FILES = ("HEAD", "index")
 
 
@@ -60,6 +61,7 @@ class ReplayResult:
     cost_usd: float
     num_turns: int
     checks: tuple[CheckResult, ...]
+    void_reason: str | None = None  # set when the run failed for a reason outside the agent: it does not count
 
 
 class SetupScriptFailed(RuntimeError):
@@ -181,11 +183,13 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
         (run_dir / "diff.patch").write_text(diff.stdout)
         if result_line is None:
             reason = "timed out" if exit_code == -1 else f"no result line (exit {exit_code})"
-            replay = ReplayResult(run_dir, exit_code, True, f"{reason}: {stderr[-300:]}", 0.0, 0, check_results)
+            replay = ReplayResult(run_dir, exit_code, True, f"{reason}: {stderr[-300:]}", 0.0, 0, check_results,
+                                  void_reason=reason)
         else:
             replay = ReplayResult(run_dir, exit_code, bool(result_line.get("is_error")),
                                   str(result_line.get("result") or ""), float(result_line.get("total_cost_usd") or 0),
-                                  int(result_line.get("num_turns") or 0), check_results)
+                                  int(result_line.get("num_turns") or 0), check_results,
+                                  void_reason=_void_reason(result_line))
         (run_dir / "result.json").write_text(json.dumps(asdict(replay), default=str, indent=2))
         if watched:
             after = tree_fingerprint(watched)
@@ -197,6 +201,14 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
         _remove_if_only_empty_memory(project_folder)
+
+
+def _void_reason(result_line: dict) -> str | None:
+    if result_line.get("api_error_status"):
+        return f"API error {result_line['api_error_status']}"
+    if result_line.get("subtype") in VOID_SUBTYPES:
+        return str(result_line["subtype"])
+    return None
 
 
 def _result_line(stdout: str) -> dict | None:

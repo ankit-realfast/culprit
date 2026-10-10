@@ -197,3 +197,23 @@ def test_a_replay_that_changes_the_original_project_is_stopped_loudly(tmp_path):
         run_replay(settings(), pristine_tree(tmp_path), tmp_path / "run0", tmp_path / ".culprit-replay-esc", (),
                    run=FakeRun(claude_stdout=RESULT, on_claude=claude_escapes), projects_dir=tmp_path / "p",
                    original_cwd=original)
+
+
+@pytest.mark.parametrize("result_line, void", [
+    ({"type": "result", "subtype": "success", "is_error": False, "result": "ok"}, None),
+    ({"type": "result", "subtype": "error_max_budget_usd", "is_error": True, "result": ""}, "error_max_budget_usd"),
+    ({"type": "result", "subtype": "success", "is_error": True, "api_error_status": 529, "result": ""}, "API error 529"),
+])
+def test_runs_that_fail_for_reasons_outside_the_agent_are_void(tmp_path, result_line, void):
+    result = run_replay(settings(), pristine_tree(tmp_path), tmp_path / "run0", tmp_path / ".culprit-replay-v", (),
+                        run=FakeRun(claude_stdout=json.dumps(result_line)), projects_dir=tmp_path / "p")
+    assert (result.void_reason is None) == (void is None)
+    if void:
+        assert void in result.void_reason
+
+
+def test_a_timed_out_or_resultless_run_is_void(tmp_path):
+    timed_out = run_replay(settings(), pristine_tree(tmp_path), tmp_path / "run0", tmp_path / ".culprit-replay-t", (),
+                           run=FakeRun(claude_raises=subprocess.TimeoutExpired(cmd="claude", timeout=1)),
+                           projects_dir=tmp_path / "p")
+    assert "timed out" in timed_out.void_reason

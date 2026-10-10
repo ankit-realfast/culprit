@@ -58,3 +58,11 @@ def test_the_judge_sees_every_tool_call_and_the_effort_spent(tmp_path):
     judge_replay(CRITERION, replay, ask=ask)
     prompt = ask.calls[0][0]
     assert "rm -rf tests" in prompt and "4 turns" in prompt
+
+
+def test_a_void_run_is_not_judged(tmp_path):
+    from dataclasses import replace
+    ask = FakeAsk()
+    judgement = judge_replay(CRITERION, replace(replay_in(tmp_path), void_reason="API error 529"), ask=ask)
+    assert (judgement.passed, judgement.by) == (False, "void")
+    assert ask.calls == []

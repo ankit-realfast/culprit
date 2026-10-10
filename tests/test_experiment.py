@@ -72,3 +72,14 @@ def test_out_dir_keeps_runs_apart_from_the_episode_folder(write_session, tmp_pat
 
 def test_a_variant_never_run_loads_as_none(tmp_path):
     assert load_outcome(tmp_path, "model") is None
+
+
+def test_void_runs_are_retried_and_left_out_of_the_count(write_session, tmp_path):
+    episode = episode_at(write_session, tmp_path)
+    verdicts = [Judgement(False, "x", "void"), Judgement(True, "r", "model"), Judgement(False, "x", "void"),
+                Judgement(False, "r", "model")]
+    replay = fake_replay(cost=0.1)
+    outcome = run_variant("baseline", SETTINGS, n=2, episode=episode, runs_dir=tmp_path / "runs", criterion=CRITERION,
+                          budget=EpisodeBudget(10.0), replay=replay, judge=lambda c, r: verdicts.pop(0))
+    assert (outcome.passes, outcome.runs, outcome.void) == (1, 2, 2)
+    assert len(replay.calls) == 4
