@@ -7,6 +7,8 @@ import shutil
 import sys
 from pathlib import Path
 
+from culprit.calibration import (MIN_KAPPA, MIN_LABELS, UnknownRun, agreement, next_unlabelled, record_label,
+                                 run_id, run_summary)
 from culprit.claude import ClaudeCallFailed, ask_claude
 from culprit.criterion import Criterion, approve_criterion, draft_criterion, load_criterion, save_criterion
 from culprit.diagnose import diagnose
@@ -16,6 +18,7 @@ from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget, run
 from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
 from culprit.replay import DEFAULT_REPLAY_BUDGET_USD, SetupScriptFailed, baseline_settings
 from culprit.sandbox import DEFAULT_FILE_HISTORY, apply_episode_originals, check_restore, restore
+from culprit.selftest import CONTROL_MIN_PASSES, is_control, run_selftest, selftest_accuracy
 from culprit.signals import FailureSignals
 from culprit.snapshot import load_snapshot, session_root
 from culprit.store import UnknownEpisode, episode_dir, read_symptom, record_symptom, save_candidates
@@ -30,7 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.handler(args)
     except (UnknownEpisode, EpisodeNotFound, FileNotFoundError, ClaudeCallFailed, BudgetExhausted,
-            SetupScriptFailed) as refusal:
+            SetupScriptFailed, UnknownRun) as refusal:
         print(f"culprit: {refusal}", file=sys.stderr)
         return 1
 
@@ -84,6 +87,28 @@ def build_parser() -> argparse.ArgumentParser:
     diagnose_parser.add_argument("--budget", type=float, default=40.0, help="spend cap in USD for this episode")
     diagnose_parser.add_argument("--replay-budget", type=float, default=DEFAULT_REPLAY_BUDGET_USD)
     diagnose_parser.set_defaults(handler=diagnose_command)
+
+    review = commands.add_parser("review", help="show the next judged replay you have not labelled")
+    review.add_argument("--runs", type=Path, default=DEFAULT_RUNS)
+    review.set_defaults(handler=review_command)
+
+    label = commands.add_parser("label", help="record your own pass/fail for one judged replay")
+    label.add_argument("run")
+    label.add_argument("verdict", choices=["pass", "fail"])
+    label.add_argument("--runs", type=Path, default=DEFAULT_RUNS)
+    label.set_defaults(handler=label_command)
+
+    calibration = commands.add_parser("calibration", help="how often the judge agrees with your labels")
+    calibration.add_argument("--runs", type=Path, default=DEFAULT_RUNS)
+    calibration.set_defaults(handler=calibration_command)
+
+    selftest = commands.add_parser("selftest", help="plant known faults into a control episode and score culprit")
+    selftest.add_argument("episode_id")
+    _projects_and_runs(selftest)
+    selftest.add_argument("--n", type=int, default=5)
+    selftest.add_argument("--budget-per-fault", type=float, default=40.0)
+    selftest.add_argument("--replay-budget", type=float, default=DEFAULT_REPLAY_BUDGET_USD)
+    selftest.set_defaults(handler=selftest_command)
     return parser
 
 
@@ -231,4 +256,54 @@ def diagnose_command(args: argparse.Namespace) -> int:
         print(f"together: {' + '.join(verdict.pair)}")
     for cause, reason in verdict.untested.items():
         print(f"{cause} untested: {reason}")
+    for line in trust_lines(args.runs):
+        print(line)
+    return 0
+
+
+def trust_lines(runs_dir: Path) -> list[str]:
+    result = agreement(runs_dir)
+    kappa = "not computable yet" if result.kappa is None else f"{result.kappa:.2f}"
+    state = "calibrated" if result.calibrated else f"uncalibrated (needs {MIN_LABELS} labels and kappa ≥ {MIN_KAPPA})"
+    correct, total = selftest_accuracy(runs_dir)
+    planted = f"selftest: {correct} of {total} planted faults named correctly" if total else "selftest: not run"
+    return [f"judge: {result.agreed} of {result.labelled} labels agree, kappa {kappa} — {state}", planted]
+
+
+def review_command(args: argparse.Namespace) -> int:
+    run_dir = next_unlabelled(args.runs)
+    if run_dir is None:
+        print("every judged replay is labelled")
+        return 0
+    print(f"{run_id(args.runs, run_dir)}\n{run_summary(run_dir)}")
+    print(f"\nlabel it: culprit label {run_id(args.runs, run_dir)} pass|fail")
+    return 0
+
+
+def label_command(args: argparse.Namespace) -> int:
+    record_label(args.runs, args.run, args.verdict == "pass")
+    print(f"labelled {args.run} {args.verdict}")
+    return 0
+
+
+def calibration_command(args: argparse.Namespace) -> int:
+    result = agreement(args.runs)
+    kappa = "not computable yet" if result.kappa is None else f"{result.kappa:.2f}"
+    print(f"{result.labelled} labelled, {result.agreed} agree with the judge, kappa {kappa}")
+    print("calibrated" if result.calibrated else f"uncalibrated: needs {MIN_LABELS} labels and kappa ≥ {MIN_KAPPA}")
+    return 0
+
+
+def selftest_command(args: argparse.Namespace) -> int:
+    episode, criterion = ready_to_replay(args)
+    if not is_control(args.runs, args.episode_id):
+        print(f"culprit: {args.episode_id} is not a control — its baseline must pass at least "
+              f"{CONTROL_MIN_PASSES} of 5 (run `culprit baseline {args.episode_id}`)", file=sys.stderr)
+        return 1
+    results = run_selftest(episode, criterion, baseline_settings(episode, args.replay_budget), runs_dir=args.runs,
+                           follow_ups=follow_up_prompts(args.projects, args.episode_id), n=args.n,
+                           budget_per_fault=args.budget_per_fault)
+    for result in results:
+        print(f"{result.fault}: expected {result.expected}, got {result.got} {'✓' if result.correct else '✗'}")
+    print(f"{sum(r.correct for r in results)} of {len(results)} planted faults named correctly")
     return 0
