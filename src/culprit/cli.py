@@ -33,7 +33,7 @@ from culprit.status import STAGES, EpisodeStatus, episode_status, next_step, que
 from culprit.store import (CANDIDATES_FILE, NotReady, UnknownEpisode, candidate_rows, confirm_step, display_id,
                            episode_dir, read_symptom, record_symptom, resolve_episode_id, save_candidates)
 from culprit.taxonomy import Symptom
-from culprit.verdict import load_verdict
+from culprit.verdict import load_verdict, numbers_line
 from culprit.triage import rank_candidates, summarize_session
 
 DEFAULT_PROJECTS = Path.home() / ".claude" / "projects"
@@ -429,6 +429,8 @@ def diagnose_command(args: argparse.Namespace) -> int:
                            env_script=env_script if env_script.exists() else None, n=RUNS_PER_VARIANT, budget=budget,
                            progress=progress)
     print(f"cause: {verdict.cause}\nevidence: {verdict.evidence}")
+    if numbers := numbers_line(verdict):
+        print(numbers)
     if verdict.pair:
         print(f"together: {' + '.join(verdict.pair)}")
     for cause, reason in verdict.untested.items():
@@ -541,6 +543,10 @@ def diagnose_queue(args: argparse.Namespace) -> int:
         summary = diagnose_all(args.runs, args.projects, n=RUNS_PER_VARIANT, per_episode_usd=EPISODE_CAP_USD,
                                total_usd=TOTAL_CAP_USD, replay_budget_usd=REPLAY_BUDGET_USD, progress=progress)
     print(f"diagnosed {len(summary.diagnosed)}: {', '.join(summary.diagnosed) or 'none'}")
+    for episode_id in summary.diagnosed:
+        verdict = load_verdict(episode_dir(args.runs, episode_id))
+        if verdict and (numbers := numbers_line(verdict)):
+            print(f"{display_id(args.runs, episode_id)} {numbers}")
     for episode_id, reason in summary.skipped.items():
         print(f"{episode_id} skipped: {reason}")
     for episode_id in summary.over_cap:

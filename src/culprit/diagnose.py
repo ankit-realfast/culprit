@@ -22,11 +22,9 @@ from culprit.oracles import build_variant, combine
 from culprit.replay import ReplaySettings, settings_from_json, settings_to_json
 from culprit.store import episode_dir
 from culprit.taxonomy import ORACLE_ORDER, Cause, Symptom
-from culprit.verdict import VERDICT_FILE, Verdict, beats, reproducible, save_verdict
+from culprit.verdict import BASELINE, COMBINED, VERDICT_FILE, Verdict, beats, reproducible, save_verdict
 
 VARIANTS_DIR = "variants"
-BASELINE = "baseline"
-COMBINED = "combined"
 NOT_RUN_REASON = "not run: an earlier cause already explained the failure"
 CRITERION_USED_FILE = "criterion_used.json"
 

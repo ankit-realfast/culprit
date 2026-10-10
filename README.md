@@ -34,6 +34,8 @@ more often than the unchanged one (one-sided Fisher exact test, p < 0.05 over 5 
    | Fable instead of the original model | **model** — change or route the model |
 
    If no single change works, it tries them together and in pairs: **multi-cause** or **unexplained**.
+   The verdict prints the numbers behind it, e.g. `harness: baseline 0/10 → 8/10, p = 0.0004`
+   (the report repeats them under each verdict).
 5. `report` ranks the changes by how many of your failures each would have fixed.
 
 ## Install

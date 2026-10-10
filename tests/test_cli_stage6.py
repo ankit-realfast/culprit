@@ -17,6 +17,10 @@ def test_diagnose_without_an_id_prints_the_summary_and_writes_the_report(tmp_pat
     runs.mkdir()
     (runs / "candidates.json").write_text("[]")
     seen = {}
+    save_verdict(runs / "a__1", Verdict("a:1", "wrong-result", "harness", "e",
+                                        {"baseline": {"variant": "baseline", "passes": 0, "runs": 5, "cost_usd": 1.0},
+                                         "harness": {"variant": "harness", "passes": 4, "runs": 5, "cost_usd": 1.0}},
+                                        {}))
 
     def fake_all(runs_dir, projects_dir, **kwargs):
         seen.update(kwargs)
@@ -28,7 +32,8 @@ def test_diagnose_without_an_id_prints_the_summary_and_writes_the_report(tmp_pat
     out = capsys.readouterr().out
     assert seen["total_usd"] == 400.0 and seen["per_episode_usd"] == 40.0 and seen["n"] == cli.RUNS_PER_VARIANT
     for expected in ["diagnosed 1", "b:1 skipped: not restored", "c:1 hit its $40.00 cap",
-                     "stopped at d:1", "$88.50", "rerun"]:
+                     "stopped at d:1", "$88.50", "rerun",
+                     "a:1 harness: baseline 0/5 → 4/5, p = 0.0238"]:
         assert expected in out
     assert "--" not in out  # no flag left to suggest
     assert (runs / "report.md").exists()

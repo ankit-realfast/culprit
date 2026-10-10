@@ -189,6 +189,10 @@ that fails, the cause is **Unexplained**; if it passes, pairs are tried in cause
 that beats the baseline is the **Multi-cause** verdict; if no pair does, the verdict is Multi-cause with
 the full set.
 
+Every verdict states the numbers behind it — the baseline's pass count, the winning variant's (the pair or
+`combined` for Multi-cause) and the Fisher p, e.g. `harness: baseline 0/10 → 8/10, p = 0.0004` — in
+`diagnose` output and under each verdict in the report. Verdicts with no winner show the baseline only.
+
 ---
 
 ## 4. Validity guards

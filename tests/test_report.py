@@ -88,3 +88,10 @@ def test_each_verdict_states_how_far_its_restore_can_be_trusted(tmp_path):
     assert "restore: snapshot agreed with the episode's record for 3 of 4 files; 2 unknown, 1 missing" in text
     for limit in ["yours or Claude Code's", "start of the episode"]:
         assert limit in text
+
+
+def test_each_verdict_shows_the_numbers_behind_it(tmp_path):
+    outcomes = {"baseline": {"variant": "baseline", "passes": 0, "runs": 10, "cost_usd": 1.0, "void": 0},
+                "harness": {"variant": "harness", "passes": 8, "runs": 10, "cost_usd": 1.0, "void": 0}}
+    save_verdict(tmp_path / "a__1", Verdict("a:1", "wrong-result", "harness", "e", outcomes, {}))
+    assert "harness: baseline 0/10 → 8/10, p = 0.0004" in render_report(collect(tmp_path), [])

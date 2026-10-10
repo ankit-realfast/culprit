@@ -36,13 +36,16 @@ def test_diagnose_passes_everything_through_and_prints_the_verdict(write_session
         seen.update(symptom=symptom.value, follow_ups=kwargs["follow_ups"], cap=kwargs["budget"].cap_usd,
                     env=kwargs["env_script"], n=kwargs["n"])
         return Verdict("s1:p1", "wrong-result", "harness", "harness passed 4/5 against the baseline's 0/5",
-                       {}, {"environment": "no environment fix supplied (culprit env-fix)"})
+                       {"baseline": {"variant": "baseline", "passes": 0, "runs": 5, "cost_usd": 1.0, "void": 0},
+                        "harness": {"variant": "harness", "passes": 4, "runs": 5, "cost_usd": 1.0, "void": 0}},
+                       {"environment": "no environment fix supplied (culprit env-fix)"})
 
     monkeypatch.setattr(cli, "diagnose", fake_diagnose)
     assert cli.main(["diagnose", "s1:p1"]) == 0
     out = capsys.readouterr().out
     assert seen == {"symptom": "wrong-result", "follow_ups": ["still wrong"], "cap": 40.0, "env": None, "n": cli.RUNS_PER_VARIANT}
     assert "cause: harness" in out and "4/5" in out and "environment untested" in out
+    assert "harness: baseline 0/5 → 4/5, p = 0.0238" in out
 
 
 def test_diagnose_before_confirm_names_confirm(write_session, tmp_path, capsys):

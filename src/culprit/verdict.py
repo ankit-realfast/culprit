@@ -11,6 +11,8 @@ from culprit.stats import fisher_one_sided
 
 SIGNIFICANCE = 0.05
 VERDICT_FILE = "verdict.json"
+BASELINE = "baseline"  # the unchanged replay
+COMBINED = "combined"  # every tested change at once
 
 
 @dataclass(frozen=True)
@@ -31,6 +33,25 @@ def beats(variant: VariantOutcome, baseline: VariantOutcome) -> bool:
 def reproducible(baseline: VariantOutcome) -> bool:
     """The failure reproduces unless the unchanged replay passes most of the time."""
     return baseline.passes * 2 <= baseline.runs
+
+
+def numbers_line(verdict: Verdict) -> str | None:
+    """The pass counts behind a verdict, e.g. `harness: baseline 0/10 → 8/10, p = 0.0004`; None without replays."""
+    baseline = verdict.outcomes.get(BASELINE)
+    if baseline is None:
+        return None
+    candidates = ("+".join(verdict.pair), COMBINED) if verdict.cause == "multi-cause" else (verdict.cause,)
+    p_of = {name: fisher_one_sided(verdict.outcomes[name]["passes"], verdict.outcomes[name]["runs"],
+                                   baseline["passes"], baseline["runs"])
+            for name in candidates if name in verdict.outcomes}
+    # the variant that beat the baseline; with two changes the pair may have been run and lost to `combined`
+    winner = next((name for name, p in p_of.items() if p < SIGNIFICANCE), None)
+    label = verdict.cause if winner in (None, verdict.cause) else f"{verdict.cause} ({winner})"
+    line = f"{label}: baseline {baseline['passes']}/{baseline['runs']}"
+    if winner is None:
+        return line
+    won, p = verdict.outcomes[winner], p_of[winner]
+    return f"{line} → {won['passes']}/{won['runs']}, p {'< 0.0001' if p < 0.0001 else f'= {p:.4f}'}"
 
 
 def save_verdict(folder: Path, verdict: Verdict) -> Path:

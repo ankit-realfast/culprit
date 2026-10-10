@@ -13,7 +13,7 @@ from pathlib import Path
 
 from culprit.selftest import SELFTEST_DIR
 from culprit.taxonomy import Cause, Symptom
-from culprit.verdict import load_verdict
+from culprit.verdict import load_verdict, numbers_line
 
 REPORT_FILE = "report.md"
 NOT_FIXES = ("misjudged", "not-reproducible", "unexplained")  # unexplained is listed for human review instead
@@ -52,6 +52,7 @@ class Row:
     pair: tuple[str, ...]
     untested: dict[str, str]
     restore: dict | None = None
+    numbers: str | None = None  # the pass counts and p behind the verdict
 
 
 @dataclass(frozen=True)
@@ -69,7 +70,7 @@ def collect(runs_dir: Path) -> list[Row]:
         if verdict is not None:
             restore = json.loads((folder / RESTORE_FILE).read_text()) if (folder / RESTORE_FILE).is_file() else None
             rows.append(Row(verdict.episode_id, verdict.symptom, verdict.cause, verdict.evidence, verdict.pair,
-                            verdict.untested, restore))
+                            verdict.untested, restore, numbers_line(verdict)))
     return rows
 
 
@@ -123,6 +124,8 @@ def render_report(rows: list[Row], trust: list[str]) -> str:
     lines += ["", "## Verdicts", ""]
     for row in rows:
         lines.append(f"- **{row.episode_id}** — {row.symptom} → **{row.cause}**: {row.evidence}")
+        if row.numbers:
+            lines.append(f"  - {row.numbers}")
         for cause, reason in row.untested.items():
             lines.append(f"  - {cause} untested: {reason}")
         if row.restore:
