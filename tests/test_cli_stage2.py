@@ -83,10 +83,11 @@ def test_criterion_approve_or_show_before_draft_is_not_ready(tmp_path, capsys):
     assert "culprit criterion draft" in capsys.readouterr().err
 
 
-def test_criterion_draft_refuses_to_overwrite_unless_forced(write_session, tmp_path, capsys, monkeypatch):
+def test_criterion_draft_never_overwrites_and_points_at_the_file(write_session, tmp_path, capsys, monkeypatch):
+    import pytest
     repo = tmp_path / "repo"
     repo.mkdir()
-    projects = projects_with_one_episode(write_session, tmp_path, repo)
+    projects_with_one_episode(write_session, tmp_path, repo)
     runs = tmp_path / "runs"
     monkeypatch.setattr(cli, "ask_claude", FakeAsk({"success_means": "first", "checks": [], "must_not": []}))
     cli.main(["criterion", "draft", "s1:p1"])
@@ -96,11 +97,11 @@ def test_criterion_draft_refuses_to_overwrite_unless_forced(write_session, tmp_p
     monkeypatch.setattr(cli, "ask_claude", second)
     assert cli.main(["criterion", "draft", "s1:p1"]) == 1
     err = capsys.readouterr().err
-    assert "culprit criterion show s1:p1" in err and "--force" in err
+    assert str(runs / "s1__p1" / "criterion.json") in err and "--force" not in err
     assert second.calls == [] and load_criterion(runs, "s1:p1").success_means == "first"
-    assert cli.main(["criterion", "draft", "s1:p1", "--force"]) == 0
-    assert load_criterion(runs, "s1:p1") .success_means == "second"
-    assert load_criterion(runs, "s1:p1").approved is False
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["criterion", "draft", "s1:p1", "--force"])
+    assert stopped.value.code == 2
 
 
 def test_triage_lists_unreplayable_candidates_after_every_replayable_one(write_session, tmp_path, capsys):

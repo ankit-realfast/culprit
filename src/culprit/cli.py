@@ -14,7 +14,7 @@ from culprit.batch import ENV_FIX_FILE, diagnose_all
 from culprit.calibration import (MIN_KAPPA, MIN_LABELS, UnknownRun, agreement, next_unlabelled, record_label,
                                  run_id, run_summary)
 from culprit.claude import ClaudeCallFailed, ask_claude
-from culprit.criterion import Criterion, approve_criterion, criterion_step, draft_criterion, load_criterion, save_criterion
+from culprit.criterion import CRITERION_FILE, Criterion, approve_criterion, criterion_step, draft_criterion, load_criterion, save_criterion
 from culprit.diagnose import diagnose, retire_if_criterion_changed
 from culprit.eligibility import project_hooks, replay_blockers
 from culprit.episodes import Episode, session_files
@@ -43,6 +43,7 @@ EXIT_REFUSED = 1
 EXIT_NOT_READY = 3
 EXIT_BUDGET = 4
 EXIT_INTERRUPTED = 130
+RUNS_PER_VARIANT = 5  # N: the baseline and each variant are replayed this many times
 # Built-in spend caps; each counts what the episode (or, for the total, every episode in runs/) already spent.
 REPLAY_BUDGET_USD = DEFAULT_REPLAY_BUDGET_USD  # one replay
 EPISODE_CAP_USD = 40.0  # one episode's baseline and oracles
@@ -104,7 +105,7 @@ EXAMPLE_RUN = """example run:
   culprit criterion draft #1               draft what success means, then edit it
   culprit criterion approve #1
   culprit restore #1                       rebuild the starting files
-  culprit baseline #1 --n 1                one cheap unchanged replay first
+  culprit baseline #1                      replay it unchanged
   culprit diagnose #1                      find the layer to change
   culprit report                           rank the changes across episodes
   culprit status                           where every episode stands, and what to run next
@@ -113,10 +114,9 @@ EXAMPLES = {
     "triage": "  culprit triage --top 40\n  CULPRIT_PROJECTS=~/other/projects CULPRIT_RUNS=~/work/runs culprit triage\n",
     "confirm": "  culprit confirm #1 wrong-result\n  culprit confirm 1a2b3c4d:5e6f7a8b no-failure\n",
     "status": "  culprit status\n  culprit status #1\n",
-    "criterion": "  culprit criterion draft #1\n  culprit criterion show #1\n  culprit criterion approve #1\n"
-                 "  culprit criterion draft #1 --force     replace an existing criterion\n",
+    "criterion": "  culprit criterion draft #1\n  culprit criterion show #1\n  culprit criterion approve #1\n",
     "restore": "  culprit restore #1\n",
-    "baseline": "  culprit baseline #1\n  culprit baseline #1 --n 1               one replay first\n",
+    "baseline": "  culprit baseline #1\n",
     "env-fix": "  culprit env-fix #1 fix-env.sh         run before Claude starts in the environment oracle\n",
     "diagnose": "  culprit diagnose #1\n",
     "review": "  culprit review\n",
@@ -158,7 +158,6 @@ def build_parser() -> argparse.ArgumentParser:
     criterion = add("criterion", "draft, show or approve what success means for an episode")
     criterion.add_argument("action", choices=["draft", "show", "approve"])
     criterion.add_argument("episode_id")
-    criterion.add_argument("--force", action="store_true", help="draft: replace an existing criterion")
     criterion.set_defaults(handler=criterion_command)
 
     restore_parser = add("restore", "rebuild an episode's starting files and check them")
@@ -167,7 +166,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     baseline = add("baseline", "replay the unchanged episode N times and judge each run")
     baseline.add_argument("episode_id")
-    baseline.add_argument("--n", type=int, default=5)
     _json_flag(baseline)
     baseline.set_defaults(handler=baseline_command)
 
@@ -178,7 +176,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     diagnose_parser = add("diagnose", "find what to change: run the oracles and decide the cause")
     diagnose_parser.add_argument("episode_id")
-    diagnose_parser.add_argument("--n", type=int, default=5)
     _json_flag(diagnose_parser)
     diagnose_parser.set_defaults(handler=diagnose_command)
 
@@ -196,14 +193,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     selftest = add("selftest", "plant known faults into a control episode and score culprit")
     selftest.add_argument("episode_id")
-    selftest.add_argument("--n", type=int, default=5)
     selftest.set_defaults(handler=selftest_command)
 
     report = add("report", "write runs/report.md from every stored verdict")
     report.set_defaults(handler=report_command, needs_store=True)
 
     batch = add("diagnose-all", "diagnose every prepared episode in the queue, then report")
-    batch.add_argument("--n", type=int, default=5)
     batch.set_defaults(handler=diagnose_all_command)
     width = max(map(len, summaries)) + 2
     parser.description = "Find what to change when a Claude Code episode fails.\n" + "".join(
@@ -340,10 +335,10 @@ def status_lines(status: EpisodeStatus) -> list[str]:
 
 def criterion_command(args: argparse.Namespace) -> int:
     if args.action == "draft":
-        if load_criterion(args.runs, args.episode_id) is not None and not args.force:
+        if load_criterion(args.runs, args.episode_id) is not None:
             shown = display_id(args.runs, args.episode_id)
             print(f"culprit: {shown} already has a criterion — view it with `culprit criterion show {shown}`; "
-                  f"`--force` replaces it with a new unapproved draft", file=sys.stderr)
+                  f"to change it, edit {episode_dir(args.runs, args.episode_id) / CRITERION_FILE}", file=sys.stderr)
             return EXIT_REFUSED
         episode = find_episode(args.projects, args.episode_id)
         follow_ups = follow_up_prompts(args.projects, args.episode_id)
@@ -426,13 +421,13 @@ def ready_to_replay(args: argparse.Namespace) -> tuple[Episode, Criterion]:
 def baseline_command(args: argparse.Namespace) -> int:
     episode, criterion = ready_to_replay(args)
     spent = stored_spend(episode_dir(args.runs, args.episode_id))
-    show_plan(plan_cost([REPLAY_BUDGET_USD], n=args.n, spent_usd=spent, cap_usd=EPISODE_CAP_USD))
+    show_plan(plan_cost([REPLAY_BUDGET_USD], n=RUNS_PER_VARIANT, spent_usd=spent, cap_usd=EPISODE_CAP_USD))
     if retire_if_criterion_changed(episode_dir(args.runs, args.episode_id), criterion):
         print("the criterion changed since the last runs: they were moved to superseded/ and will not be reused",
               file=sys.stderr)
     budget = EpisodeBudget(EPISODE_CAP_USD, spent_usd=spent)
     with ProgressPrinter() as progress:
-        outcome = run_variant("baseline", baseline_settings(episode, REPLAY_BUDGET_USD), n=args.n, episode=episode,
+        outcome = run_variant("baseline", baseline_settings(episode, REPLAY_BUDGET_USD), n=RUNS_PER_VARIANT, episode=episode,
                               runs_dir=args.runs, criterion=criterion, budget=budget, progress=progress)
     if args.json:
         emit({"episode_id": args.episode_id, "outcome": asdict(outcome), "next": next_step(args.runs, args.episode_id)})
@@ -464,11 +459,11 @@ def diagnose_command(args: argparse.Namespace) -> int:
     env_script = folder / ENV_FIX_FILE
     budget = EpisodeBudget(EPISODE_CAP_USD, spent_usd=stored_spend(folder))
     show_plan(diagnose_cost_for(folder, criterion, REPLAY_BUDGET_USD, model=episode.model, env_fix=env_script.exists(),
-                                n=args.n, spent_usd=budget.spent_usd, cap_usd=EPISODE_CAP_USD))
+                                n=RUNS_PER_VARIANT, spent_usd=budget.spent_usd, cap_usd=EPISODE_CAP_USD))
     with ProgressPrinter() as progress:
         verdict = diagnose(episode, criterion, symptom, baseline_settings(episode, REPLAY_BUDGET_USD),
                            runs_dir=args.runs, follow_ups=follow_up_prompts(args.projects, args.episode_id),
-                           env_script=env_script if env_script.exists() else None, n=args.n, budget=budget,
+                           env_script=env_script if env_script.exists() else None, n=RUNS_PER_VARIANT, budget=budget,
                            progress=progress)
     if args.json:
         correct, total = selftest_accuracy(args.runs)
@@ -542,10 +537,10 @@ def selftest_command(args: argparse.Namespace) -> int:
               f"{baseline.runs}, and a control must pass at least {CONTROL_MIN_PASSES} of 5", file=sys.stderr)
         return EXIT_REFUSED
     show_plan(selftest_cost(args.runs, args.episode_id, criterion, baseline_settings(episode, REPLAY_BUDGET_USD),
-                            n=args.n, budget_per_fault=FAULT_CAP_USD))
+                            n=RUNS_PER_VARIANT, budget_per_fault=FAULT_CAP_USD))
     with ProgressPrinter() as progress:
         results = run_selftest(episode, criterion, baseline_settings(episode, REPLAY_BUDGET_USD), runs_dir=args.runs,
-                               follow_ups=follow_up_prompts(args.projects, args.episode_id), n=args.n,
+                               follow_ups=follow_up_prompts(args.projects, args.episode_id), n=RUNS_PER_VARIANT,
                                budget_per_fault=FAULT_CAP_USD, progress=progress)
     for result in results:
         print(f"{result.fault}: expected {result.expected}, got {result.got} {'✓' if result.correct else '✗'}")
@@ -566,10 +561,10 @@ def report_command(args: argparse.Namespace) -> int:
 
 
 def diagnose_all_command(args: argparse.Namespace) -> int:
-    show_plan(batch_cost(args.runs, n=args.n, per_episode_usd=EPISODE_CAP_USD, total_usd=TOTAL_CAP_USD,
+    show_plan(batch_cost(args.runs, n=RUNS_PER_VARIANT, per_episode_usd=EPISODE_CAP_USD, total_usd=TOTAL_CAP_USD,
                          replay_budget_usd=REPLAY_BUDGET_USD))
     with ProgressPrinter() as progress:
-        summary = diagnose_all(args.runs, args.projects, n=args.n, per_episode_usd=EPISODE_CAP_USD,
+        summary = diagnose_all(args.runs, args.projects, n=RUNS_PER_VARIANT, per_episode_usd=EPISODE_CAP_USD,
                                total_usd=TOTAL_CAP_USD, replay_budget_usd=REPLAY_BUDGET_USD, progress=progress)
     print(f"diagnosed {len(summary.diagnosed)}: {', '.join(summary.diagnosed) or 'none'}")
     for episode_id, reason in summary.skipped.items():

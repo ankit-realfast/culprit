@@ -139,7 +139,7 @@ def test_a_baseline_no_oracle_could_beat_spends_nothing_more(write_session, tmp_
     run = scripted_run({"baseline": 2})
     verdict = run_diagnose(write_session, tmp_path, run)
     assert verdict.cause == "unexplained"
-    assert "not testable" in verdict.evidence
+    assert "not testable" in verdict.evidence and "--n" not in verdict.evidence
     assert [name for name, _ in run.calls] == ["baseline"]
 
 

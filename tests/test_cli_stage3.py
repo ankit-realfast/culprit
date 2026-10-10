@@ -1,3 +1,5 @@
+import pytest
+
 import culprit.cli as cli
 from culprit.criterion import Criterion, save_criterion
 from culprit.experiment import VariantOutcome
@@ -25,11 +27,11 @@ def test_baseline_runs_the_unchanged_episode_and_prints_the_pass_rate(write_sess
         return VariantOutcome(variant, 1, kwargs["n"], 3.1)
 
     monkeypatch.setattr(cli, "run_variant", fake_run_variant)
-    exit_code = cli.main(["baseline", "s1:p1", "--n", "4"])
+    exit_code = cli.main(["baseline", "s1:p1"])
     assert exit_code == 0
-    assert seen["variant"] == "baseline" and seen["n"] == 4 and seen["cap"] == 40.0
+    assert seen["variant"] == "baseline" and seen["n"] == cli.RUNS_PER_VARIANT and seen["cap"] == 40.0
     assert seen["settings"].prompt == "fix a"
-    assert "baseline: 1 of 4 passed" in capsys.readouterr().out
+    assert f"baseline: 1 of {cli.RUNS_PER_VARIANT} passed" in capsys.readouterr().out
 
 
 def test_baseline_names_the_missing_step(write_session, tmp_path, capsys):
@@ -88,7 +90,15 @@ def test_baseline_prints_a_line_on_stderr_for_each_finished_replay(write_session
         return VariantOutcome(variant, 1, 1, 2.84)
 
     monkeypatch.setattr(cli, "run_variant", fake_run_variant)
-    cli.main(["baseline", "s1:p1", "--n", "2"])
+    cli.main(["baseline", "s1:p1"])
     err = capsys.readouterr().err.splitlines()
     assert "baseline #1 of 2: pass, $0.84 (episode spent $1.34)" in err
     assert "baseline #2 of 2: void, not counted, $2.00 (episode spent $3.84)" in err
+
+
+@pytest.mark.parametrize("argv", [["baseline", "s1:p1", "--n", "1"], ["diagnose", "s1:p1", "--n", "1"],
+                                  ["selftest", "s1:p1", "--n", "1"], ["diagnose-all", "--n", "1"]])
+def test_the_run_count_is_not_a_flag(argv, capsys):
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(argv)
+    assert stopped.value.code == 2

@@ -20,7 +20,7 @@ more often than the unchanged one (one-sided Fisher exact test, p < 0.05 over 5 
 2. You `confirm` what went wrong: `stopped-short`, `wrong-result`, `ignored-instructions`, `wasteful`,
    or `no-failure`.
 3. `criterion draft` writes what success means from your follow-up messages; you edit and `approve` it.
-   Drafting again over an existing criterion needs `--force` (it replaces it with a new unapproved draft).
+   Drafting never overwrites an existing criterion; to change one, edit `runs/<episode>/criterion.json`.
 4. `restore` rebuilds the files the episode started from in a throwaway copy.
 5. `baseline` replays the episode unchanged 5 times. Passing 3+ times means the failure was luck.
 6. `diagnose` replays it with one layer improved at a time, cheapest fix first:
@@ -54,7 +54,7 @@ uv run culprit confirm <episode-id> wrong-result
 uv run culprit criterion draft <episode-id>     # edit runs/<episode>/criterion.json if needed
 uv run culprit criterion approve <episode-id>
 uv run culprit restore <episode-id>
-uv run culprit baseline <episode-id> --n 1   # one cheap run first; read runs/<episode>/replays/
+uv run culprit baseline <episode-id>          # read runs/<episode>/replays/
 uv run culprit diagnose <episode-id>
 uv run culprit report                           # writes runs/report.md
 uv run culprit status [<episode-id>]            # where each episode stands and what to run next
@@ -140,8 +140,8 @@ limited by what is left of the cap), then start without asking.
 ## Status
 
 Built and unit-tested (199 tests); a final review's critical and important findings are fixed. Triage
-and restore have run on real logs; no real episode has been replayed yet — start with one cheap baseline
-(`--n 1`) and read its output before anything larger.
+and restore have run on real logs; no real episode has been replayed yet — start with one baseline
+and read its output before anything larger.
 
 Design: [`docs/specs/2026-10-11-culprit-design.md`](docs/specs/2026-10-11-culprit-design.md) ·
 Plan: [`docs/plans/2026-10-11-culprit-plan.md`](docs/plans/2026-10-11-culprit-plan.md)

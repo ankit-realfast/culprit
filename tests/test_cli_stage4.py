@@ -39,7 +39,7 @@ def test_diagnose_passes_everything_through_and_prints_the_verdict(write_session
     monkeypatch.setattr(cli, "diagnose", fake_diagnose)
     assert cli.main(["diagnose", "s1:p1"]) == 0
     out = capsys.readouterr().out
-    assert seen == {"symptom": "wrong-result", "follow_ups": ["still wrong"], "cap": 40.0, "env": None, "n": 5}
+    assert seen == {"symptom": "wrong-result", "follow_ups": ["still wrong"], "cap": 40.0, "env": None, "n": cli.RUNS_PER_VARIANT}
     assert "cause: harness" in out and "4/5" in out and "environment untested" in out
 
 

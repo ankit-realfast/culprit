@@ -96,7 +96,7 @@ def diagnose(episode: Episode, criterion: Criterion, symptom: Symptom, base: Rep
     if baseline.runs == 0 or not beats(best_possible, baseline):
         return finish(Cause.UNEXPLAINED, f"not testable at N={n}: the baseline passed {_rate(baseline)}"
                       f"{f' with {baseline.void} void runs' if baseline.void else ''}, so even {n}/{n} could not "
-                      f"beat it — rerun with a larger --n")
+                      f"beat it")
 
     built: dict[Cause, ReplaySettings] = {}
     for position, cause in enumerate(ORACLE_ORDER):
