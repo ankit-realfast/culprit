@@ -328,8 +328,8 @@ def test_recorded_mcp_servers_are_replaced_by_the_stand_in(tmp_path):
     command = next(c for c, _ in run.calls if c[0] == "claude")
     config = json.loads(command[command.index("--mcp-config") + 1])
     stub = config["mcpServers"]["notes"]
-    assert stub["command"] == sys.executable and stub["args"][:2] == ["-m", "culprit.mcp_stub"]
-    assert json.loads(Path(stub["args"][2]).read_text()) == NOTES
+    assert stub["command"] == sys.executable and stub["args"][:3] == ["-m", "culprit.stubs", "mcp"]
+    assert json.loads(Path(stub["args"][3]).read_text()) == NOTES
     assert "--strict-mcp-config" in command
     assert "mcp__notes" in command[command.index("--allowedTools") + 1:]
 
@@ -350,8 +350,8 @@ def test_recorded_answers_switch_the_replay_to_culprits_permission_host(tmp_path
     assert command[command.index("--permission-prompt-tool") + 1] == "mcp__culprit_answers__answer"
     assert "none" not in command[command.index("--permission-prompts") + 1:command.index("--permission-prompts") + 2]
     host = json.loads(command[command.index("--mcp-config") + 1])["mcpServers"]["culprit_answers"]
-    assert host["command"] == sys.executable and host["args"][:2] == ["-m", "culprit.answer_host"]
-    assert json.loads(Path(host["args"][2]).read_text()) == answers
+    assert host["command"] == sys.executable and host["args"][:3] == ["-m", "culprit.stubs", "answers"]
+    assert json.loads(Path(host["args"][3]).read_text()) == answers
 
 
 def test_without_recorded_answers_every_permission_prompt_is_still_refused():

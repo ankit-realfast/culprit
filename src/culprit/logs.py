@@ -336,7 +336,8 @@ def session_root(session_file: Path) -> Path | None:
     return None
 
 
-# --- eligibility: Why an episode cannot be replayed in v1 (an empty list means it can), and which project hooks a replay runs. ---
+# --- eligibility ---
+# Why an episode cannot be replayed in v1 (an empty list means it can), and which project hooks a replay runs.
 
 PROJECT_SETTINGS = (".claude/settings.json", ".claude/settings.local.json")
 ASK_USER_TOOL = "AskUserQuestion"

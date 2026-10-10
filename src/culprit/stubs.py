@@ -1,18 +1,23 @@
-"""A stand-in MCP server that only replays results recorded in the original session.
+"""Stand-in MCP servers a replay connects to instead of real ones, each run as its own light process.
 
-A replay connects to this instead of the real server, so a tool that once sent a Slack message or an
-email answers with what it answered then and reaches nothing. A call the original session never made
-gets an error saying so, which the replay sees like any failing tool.
+Run as: python -m culprit.stubs mcp <recordings.json> <server name>
+    or: python -m culprit.stubs answers <answers.json>
 
-Run as: python -m culprit.mcp_stub <recordings.json> <server name>
-"""
+This module imports nothing heavier than logs, so a stand-in process starts fast."""
 
 from __future__ import annotations
 
 import json
 import sys
+from difflib import SequenceMatcher
 
-from culprit.logs import Episode, content_blocks
+from culprit.logs import ASK_USER_TOOL, Episode, content_blocks
+
+
+# --- mcp_stub: A stand-in MCP server that only replays results recorded in the original session. ---
+# A replay connects to this instead of the real server, so a tool that once sent a Slack message or an
+# email answers with what it answered then and reaches nothing. A call the original session never made
+# gets an error saying so, which the replay sees like any failing tool.
 
 MCP_PREFIX = "mcp__"
 SERVER_NAME = "culprit-replay-stub"
@@ -103,9 +108,63 @@ def _result_text(content) -> str:
     return ""
 
 
-def main() -> None:
-    recordings = json.loads(open(sys.argv[1]).read()).get(sys.argv[2], [])
+def mcp_main(args: list[str]) -> None:
+    """`mcp <recordings.json> <server name>`: serve one server's recorded results."""
+    recordings = json.loads(open(args[0]).read()).get(args[1], [])
     serve_stdio(lambda message: handle(message, recordings))
+
+
+# --- answer_host ---
+# The replay's permission host: answers AskUserQuestion with what you answered in the original session.
+# Claude Code offers AskUserQuestion headless only when a permission-prompt tool is configured
+# (verified live on 2.1.296: a PreToolUse hook is not enough). This MCP tool is that host. A question
+# close to one you answered gets your recorded answer; anything else is refused, exactly as a replay
+# with no human present refuses every permission prompt.
+
+SERVER = "culprit_answers"
+TOOL = "answer"
+PERMISSION_PROMPT_TOOL = f"mcp__{SERVER}__{TOOL}"
+SAME_QUESTION_RATIO = 0.6  # how close a replay's wording must be to a question you answered
+NO_HUMAN = "no human is present during a replay, so this permission prompt is refused"
+
+
+def decide(request: dict, answers: dict[str, str]) -> dict:
+    """The permission decision Claude Code expects back: allow with your answers, or deny with a reason."""
+    if request.get("tool_name") != ASK_USER_TOOL:
+        return {"behavior": "deny", "message": NO_HUMAN}
+    questions = (request.get("input") or {}).get("questions") or []
+    chosen = {}
+    for question in questions:
+        text = question.get("question", "")
+        best = max(answers, key=lambda known: _similarity(known, text), default=None)
+        if best is None or _similarity(best, text) < SAME_QUESTION_RATIO:
+            return {"behavior": "deny", "message": f"you were not asked anything like {text!r} in the original session"}
+        chosen[text] = answers[best]
+    return {"behavior": "allow", "updatedInput": {"questions": questions, "answers": chosen}}
+
+
+def _similarity(a: str, b: str) -> float:
+    return SequenceMatcher(None, a.lower().strip(), b.lower().strip()).ratio()
+
+
+def answers_main(args: list[str]) -> None:
+    """`answers <answers.json>`: serve the permission host."""
+    answers = json.loads(open(args[0]).read())
+    tools = [tool_spec(TOOL, "Answers permission prompts during a culprit replay.")]
+
+    def call(name: str, arguments: dict) -> dict:
+        return text_result(json.dumps(decide(arguments, answers)))
+
+    serve_stdio(lambda message: serve_message(message, tools, call))
+
+
+# --- entry point ---
+
+STAND_INS = {"mcp": mcp_main, "answers": answers_main}
+
+
+def main() -> None:
+    STAND_INS[sys.argv[1]](sys.argv[2:])
 
 
 if __name__ == "__main__":

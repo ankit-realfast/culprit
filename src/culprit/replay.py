@@ -17,10 +17,9 @@ import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from culprit.answer_host import PERMISSION_PROMPT_TOOL, SERVER as ANSWER_SERVER
+from culprit.stubs import MCP_PREFIX, PERMISSION_PROMPT_TOOL, SERVER as ANSWER_SERVER, recordings_from_episode
 from culprit import logs
 from culprit.logs import Episode, prompt_images, recorded_answers
-from culprit.mcp_stub import MCP_PREFIX, recordings_from_episode
 from culprit.sandbox import clone_tree
 
 NO_MCP_SERVERS = '{"mcpServers":{}}'
@@ -163,10 +162,12 @@ def _mcp_config(settings: ReplaySettings, recordings_file: Path | None, answers_
     answer host when the episode recorded answers to questions."""
     servers = {}
     if settings.mcp_recordings and recordings_file is not None:
-        servers = {server: {"command": sys.executable, "args": ["-m", "culprit.mcp_stub", str(recordings_file), server]}
+        servers = {server: {"command": sys.executable,
+                            "args": ["-m", "culprit.stubs", "mcp", str(recordings_file), server]}
                    for server in settings.mcp_recordings}
     if settings.recorded_answers and answers_file is not None:
-        servers[ANSWER_SERVER] = {"command": sys.executable, "args": ["-m", "culprit.answer_host", str(answers_file)]}
+        servers[ANSWER_SERVER] = {"command": sys.executable,
+                                  "args": ["-m", "culprit.stubs", "answers", str(answers_file)]}
     return json.dumps({"mcpServers": servers}) if servers else NO_MCP_SERVERS
 
 
