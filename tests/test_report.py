@@ -59,3 +59,20 @@ def test_a_report_with_no_verdicts_says_what_to_run(tmp_path):
     text = render_report(collect(tmp_path), ["judge: 0 of 0 labels agree", "selftest: not run"])
     assert "No verdicts yet" in text and "culprit diagnose" in text
     assert "| Symptom" not in text
+
+
+def test_unexplained_is_never_the_headline_fix_and_is_listed_for_review(tmp_path):
+    verdict(tmp_path, "a__1", "wrong-result", "unexplained")
+    verdict(tmp_path, "b__1", "wrong-result", "unexplained")
+    verdict(tmp_path, "c__1", "wrong-result", "model")
+    rows = collect(tmp_path)
+    assert [f.cause for f in fix_list(rows)] == ["model"]
+    text = render_report(rows, [])
+    assert "**Change model first:**" in text
+    assert "Needs your review" in text and "a:1" in text.split("Needs your review")[1]
+
+
+def test_a_report_with_only_unexplained_verdicts_makes_no_fix_claim(tmp_path):
+    verdict(tmp_path, "a__1", "wrong-result", "unexplained")
+    text = render_report(collect(tmp_path), [])
+    assert "Change unexplained" not in text

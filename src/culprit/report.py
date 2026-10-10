@@ -15,7 +15,7 @@ from culprit.taxonomy import Cause, Symptom
 from culprit.verdict import load_verdict
 
 REPORT_FILE = "report.md"
-NOT_FIXES = ("misjudged", "not-reproducible")
+NOT_FIXES = ("misjudged", "not-reproducible", "unexplained")  # unexplained is listed for human review instead
 FIX_ACTIONS = {
     "misjudged": "your label — it was not a failure",
     "not-reproducible": "nothing — the failure did not recur",
@@ -97,12 +97,17 @@ def render_report(rows: list[Row], trust: list[str]) -> str:
         lines.append(f"**Change {top.cause} first:** it explains {top.count} of {len(rows)} diagnosed episodes — "
                      f"change {top.action}.")
     else:
-        lines.append(f"**No change to make:** none of the {len(rows)} diagnosed episodes was a reproducible failure.")
+        lines.append(f"**No single change to make:** none of the {len(rows)} diagnosed episodes was explained by "
+                     f"one layer.")
     lines += ["", "## Fix list", "", "| Fix | Episodes | What you change |", "|---|---|---|"]
     lines += [f"| {fix.cause} | {fix.count} | {fix.action} |" for fix in fixes]
     cells = grid(rows)
     causes = [c.value for c in Cause if any(cause == c.value for _, cause in cells)]
     symptoms = [s for s in SYMPTOM_ROWS if any(symptom == s for symptom, _ in cells)]
+    unexplained = [row for row in rows if row.cause == "unexplained"]
+    if unexplained:
+        lines += ["", "## Needs your review", "",
+                  *[f"- **{row.episode_id}** — {row.evidence}" for row in unexplained]]
     lines += ["", "## Symptom × cause", "", "| Symptom | " + " | ".join(causes) + " |",
               "|---|" + "---|" * len(causes)]
     for symptom in symptoms:
