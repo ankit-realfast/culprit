@@ -76,3 +76,15 @@ def test_a_report_with_only_unexplained_verdicts_makes_no_fix_claim(tmp_path):
     verdict(tmp_path, "a__1", "wrong-result", "unexplained")
     text = render_report(collect(tmp_path), [])
     assert "Change unexplained" not in text
+
+
+def test_each_verdict_states_how_far_its_restore_can_be_trusted(tmp_path):
+    import json
+    verdict(tmp_path, "a__1", "wrong-result", "harness")
+    (tmp_path / "a__1" / "restore.json").write_text(json.dumps(
+        {"snapshot_agreed": 3, "checked": 4, "restored": 9, "unknown": 2, "missing_backups": 1, "outside_cwd": 0,
+         "set_from_episode": 4, "removed": 0}))
+    text = render_report(collect(tmp_path), [])
+    assert "restore: snapshot agreed with the episode's record for 3 of 4 files; 2 unknown, 1 missing" in text
+    for limit in ["yours or Claude Code's", "start of the episode"]:
+        assert limit in text

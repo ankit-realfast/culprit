@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -18,7 +19,7 @@ from culprit.episodes import Episode, episodes_from_session, session_files
 from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget, run_variant, stored_spend
 from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
 from culprit.replay import DEFAULT_REPLAY_BUDGET_USD, OriginalModified, SetupScriptFailed, baseline_settings
-from culprit.report import REPORT_FILE, collect, render_report
+from culprit.report import REPORT_FILE, RESTORE_FILE, collect, render_report
 from culprit.sandbox import DEFAULT_FILE_HISTORY, apply_episode_originals, check_restore, restore
 from culprit.selftest import CONTROL_MIN_PASSES, is_control, run_selftest, selftest_accuracy
 from culprit.signals import FailureSignals
@@ -220,6 +221,11 @@ def restore_command(args: argparse.Namespace) -> int:
     for mismatch in mismatches:
         print(f"  mismatch: {mismatch.path} ({mismatch.reason})")
     print(f"{written} file(s) set from the episode's own record, {removed} removed (created during the episode)")
+    trust = {"snapshot_agreed": checked - len(mismatches), "checked": checked, "restored": report.restored,
+             "unknown": len(report.unknown), "missing_backups": len(report.missing_backups),
+             "outside_cwd": len(report.outside_cwd), "set_from_episode": written, "removed": removed}
+    episode_dir(args.runs, args.episode_id).mkdir(parents=True, exist_ok=True)
+    (episode_dir(args.runs, args.episode_id) / RESTORE_FILE).write_text(json.dumps(trust, indent=2))
     hooks = project_hooks(Path(episode.cwd))
     print("project hooks that will run in every replay: " + "; ".join(hooks) if hooks else "no project hooks")
     return 0

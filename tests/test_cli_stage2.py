@@ -58,3 +58,20 @@ def test_restore_refuses_an_unreplayable_episode(write_session, tmp_path, capsys
     exit_code = cli.main(["restore", "s1:p1", "--projects", str(projects), "--runs", str(tmp_path / "runs")])
     assert exit_code == 1
     assert "no longer exists" in capsys.readouterr().err
+
+
+def test_restore_stores_its_trust_figures_for_the_report(write_session, tmp_path, capsys):
+    import json
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.py").write_text("new\n")
+    history = tmp_path / "file-history" / "s1"
+    history.mkdir(parents=True)
+    (history / "aaa@v1").write_text("old\n")
+    projects = projects_with_one_episode(write_session, tmp_path, repo)
+    runs = tmp_path / "runs"
+    cli.main(["restore", "s1:p1", "--projects", str(projects), "--runs", str(runs),
+              "--file-history", str(tmp_path / "file-history")])
+    stored = json.loads((runs / "s1__p1" / "restore.json").read_text())
+    assert stored == {"snapshot_agreed": 1, "checked": 1, "restored": 1, "unknown": 0, "missing_backups": 0,
+                      "outside_cwd": 0, "set_from_episode": 1, "removed": 0}

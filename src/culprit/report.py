@@ -6,6 +6,7 @@ verdict with its evidence, how far the verdicts can be trusted, and what culprit
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,7 +33,10 @@ KNOWN_LIMITS = (
     "Replays start in a new working directory, so the original project's auto-memory was not loaded.",
     "Episodes that used an MCP tool or asked you a question were not replayed.",
     "Causes marked untested below were not measured for that episode; a cheaper fix may exist there.",
+    "A harness verdict says what made it pass, not whether the fix is yours or Claude Code's.",
+    "Replays start from the start of the episode, not from the step where it went wrong.",
 )
+RESTORE_FILE = "restore.json"
 CAUSE_RANK = {cause.value: rank for rank, cause in enumerate(Cause)}
 SYMPTOM_ROWS = [s.value for s in Symptom]
 
@@ -45,6 +49,7 @@ class Row:
     evidence: str
     pair: tuple[str, ...]
     untested: dict[str, str]
+    restore: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -60,8 +65,9 @@ def collect(runs_dir: Path) -> list[Row]:
     for folder in sorted(p for p in runs_dir.iterdir() if p.is_dir() and p.name != SELFTEST_DIR) if runs_dir.is_dir() else []:
         verdict = load_verdict(folder)
         if verdict is not None:
+            restore = json.loads((folder / RESTORE_FILE).read_text()) if (folder / RESTORE_FILE).is_file() else None
             rows.append(Row(verdict.episode_id, verdict.symptom, verdict.cause, verdict.evidence, verdict.pair,
-                            verdict.untested))
+                            verdict.untested, restore))
     return rows
 
 
@@ -117,6 +123,10 @@ def render_report(rows: list[Row], trust: list[str]) -> str:
         lines.append(f"- **{row.episode_id}** — {row.symptom} → **{row.cause}**: {row.evidence}")
         for cause, reason in row.untested.items():
             lines.append(f"  - {cause} untested: {reason}")
+        if row.restore:
+            r = row.restore
+            lines.append(f"  - restore: snapshot agreed with the episode's record for {r['snapshot_agreed']} of "
+                         f"{r['checked']} files; {r['unknown']} unknown, {r['missing_backups']} missing")
     lines += ["", "## How far to trust this", "", *[f"- {line}" for line in trust],
               "", "## Known limits", "", *[f"- {limit}" for limit in KNOWN_LIMITS]]
     return "\n".join(lines) + "\n"
