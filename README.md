@@ -71,7 +71,8 @@ Each command that changes an episode ends with a `next:` line (on stderr) naming
 
 `<episode-id>` can be the full id, the queue row triage prints (`#3`), the short id it prints
 (`1a2b3c4d:5e6f7a8b`) or any prefix that matches one episode in the queue or in `runs/`. Suggested
-commands (`next:` lines, `status`, refusals) use the short id whenever it matches that one episode alone.
+commands (`next:` lines, `status`, refusals) and triage rows use the short id whenever it matches that one
+episode alone; `--json` output always carries the full id.
 
 Everything is stored in `runs/` in the current folder; set `CULPRIT_RUNS=/path/to/runs` to use another
 (`--runs` overrides both). `status`, `confirm`, `review`, `calibration` and `report` refuse (exit 3) when the store

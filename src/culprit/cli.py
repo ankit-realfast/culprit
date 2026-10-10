@@ -297,11 +297,12 @@ def triage_command(args: argparse.Namespace) -> int:
              "prompt_excerpt": c.summary.prompt_excerpt, "session_file": c.summary.session_file,
              "replay_blockers": _blockers_for(args.projects, c.summary.episode_id)} for c in candidates]})
         return 0
-    for candidate in candidates:
+    shown = [display_id(args.runs, c.summary.episode_id) for c in candidates]
+    id_width = max(map(len, shown), default=0)
+    for name, candidate in zip(shown, candidates):
         s = candidate.summary
         row = f"#{queue.index(s.episode_id) + 1}"
-        print(f"{row:>4} {candidate.score:>3}  {short_id(s.episode_id)}  {s.episode_id}  "
-              f"[{_evidence(s.signals)}]  {s.prompt_excerpt}")
+        print(f"{row:>4} {candidate.score:>3}  {name:<{id_width}}  [{_evidence(s.signals)}]  {s.prompt_excerpt}")
         if s.signals.api_errors:
             print(f"            {s.signals.api_errors} API errors — likely not reproducible")
         blockers = _blockers_for(args.projects, s.episode_id)

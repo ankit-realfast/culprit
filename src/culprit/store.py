@@ -80,7 +80,7 @@ def display_id(runs_dir: Path, episode_id: str) -> str:
 
 
 def candidate_rows(runs_dir: Path) -> list[dict]:
-    """The stored triage queue, highest score first; empty before the first triage."""
+    """The stored triage queue in row order (the latest ranking first); empty before the first triage."""
     path = runs_dir / CANDIDATES_FILE
     return json.loads(path.read_text()) if path.exists() else []
 
