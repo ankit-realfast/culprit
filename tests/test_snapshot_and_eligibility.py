@@ -110,3 +110,11 @@ def test_a_prompt_whose_image_data_is_missing_is_not_replayable(write_session, t
     episode = only_episode(write_session, [human([{"type": "image", "source": {}}, {"type": "text", "text": "fix"}],
                                                  "p1", cwd=str(tmp_path))])
     assert any("image" in b for b in replay_blockers(episode, {}))
+
+
+def test_a_question_whose_answer_was_recorded_does_not_block_a_replay(write_session, tmp_path):
+    answered = {"type": "user", "promptId": "p1", "toolUseResult": {"questions": [], "answers": {"Which db?": "Postgres"}},
+                "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}}
+    episode = only_episode(write_session, [human("x", "p1", cwd=str(tmp_path)), tool_use("AskUserQuestion", questions=[]),
+                                           answered])
+    assert not any("asked the human" in b for b in replay_blockers(episode, {}))

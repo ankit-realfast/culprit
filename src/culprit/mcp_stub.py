@@ -40,6 +40,21 @@ def recordings_from_episode(episode: Episode) -> dict[str, list[dict]]:
 
 def handle(message: dict, recordings: list[dict]) -> dict | None:
     """Answer one JSON-RPC message; None for a notification, which gets no reply."""
+    names = list(dict.fromkeys(recording["tool"] for recording in recordings))
+    tools = [{"name": name, "description": "Replays the result recorded in the original session.",
+              "inputSchema": {"type": "object", "additionalProperties": True}} for name in names]
+
+    def call(name: str, arguments: dict) -> dict:
+        match = next((r for r in recordings if r["tool"] == name and r["arguments"] == arguments), None)
+        if match is None:
+            return {"content": [{"type": "text", "text": NOT_RECORDED}], "isError": True}
+        return {"content": [{"type": "text", "text": match["text"]}], "isError": match["is_error"]}
+
+    return serve_message(message, tools, call)
+
+
+def serve_message(message: dict, tools: list[dict], call) -> dict | None:
+    """The MCP JSON-RPC envelope shared by culprit's stand-in servers: initialize, tools/list, tools/call."""
     method, request_id = message.get("method"), message.get("id")
     if request_id is None:
         return None
@@ -48,22 +63,26 @@ def handle(message: dict, recordings: list[dict]) -> dict | None:
         result = {"protocolVersion": version, "capabilities": {"tools": {}},
                   "serverInfo": {"name": SERVER_NAME, "version": "1"}}
     elif method == "tools/list":
-        names = list(dict.fromkeys(recording["tool"] for recording in recordings))
-        result = {"tools": [{"name": name, "description": "Replays the result recorded in the original session.",
-                             "inputSchema": {"type": "object", "additionalProperties": True}} for name in names]}
+        result = {"tools": tools}
     elif method == "tools/call":
         params = message.get("params") or {}
-        match = next((r for r in recordings
-                      if r["tool"] == params.get("name") and r["arguments"] == (params.get("arguments") or {})), None)
-        if match is None:
-            result = {"content": [{"type": "text", "text": NOT_RECORDED}], "isError": True}
-        else:
-            result = {"content": [{"type": "text", "text": match["text"]}], "isError": match["is_error"]}
+        result = call(params.get("name"), params.get("arguments") or {})
     elif method == "ping":
         result = {}
     else:
         return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": f"method not found: {method}"}}
     return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+
+def serve_stdio(answer) -> None:
+    """Read newline-delimited JSON-RPC from stdin and write each reply to stdout."""
+    for line in sys.stdin:
+        if not line.strip():
+            continue
+        reply = answer(json.loads(line))
+        if reply is not None:
+            sys.stdout.write(json.dumps(reply) + "\n")
+            sys.stdout.flush()
 
 
 def _result_text(content) -> str:
@@ -76,13 +95,7 @@ def _result_text(content) -> str:
 
 def main() -> None:
     recordings = json.loads(open(sys.argv[1]).read()).get(sys.argv[2], [])
-    for line in sys.stdin:
-        if not line.strip():
-            continue
-        reply = handle(json.loads(line), recordings)
-        if reply is not None:
-            sys.stdout.write(json.dumps(reply) + "\n")
-            sys.stdout.flush()
+    serve_stdio(lambda message: handle(message, recordings))
 
 
 if __name__ == "__main__":

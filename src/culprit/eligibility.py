@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 
+from culprit.answer_host import recorded_answers
 from culprit.episodes import Episode, content_blocks, tool_uses
 from culprit.snapshot import Tracked
 
@@ -34,8 +35,8 @@ def replay_blockers(episode: Episode, tracked: Tracked | None) -> list[str]:
     images = [b for b in content_blocks(episode.records[0]) if b.get("type") == "image"] if episode.records else []
     if any(not (image.get("source") or {}).get("data") for image in images):
         blockers.append("the prompt carried an image whose data the log did not keep, so a replay cannot resend it")
-    if ASK_USER_TOOL in names:
-        blockers.append("asked the human a question, which a replay cannot answer")
+    if ASK_USER_TOOL in names and not recorded_answers(episode):
+        blockers.append("asked the human a question whose answer the log did not keep, so a replay cannot answer it")
     return blockers
 
 

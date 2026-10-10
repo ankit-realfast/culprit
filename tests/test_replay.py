@@ -338,3 +338,23 @@ def test_culprit_claude_bin_chooses_the_claude_code_that_replays(monkeypatch):
     assert replay_command(settings())[0] == "claude"
     monkeypatch.setenv("CULPRIT_CLAUDE_BIN", "/opt/claude-2.1.250/bin/claude")
     assert replay_command(settings())[0] == "/opt/claude-2.1.250/bin/claude"
+
+
+def test_recorded_answers_switch_the_replay_to_culprits_permission_host(tmp_path):
+    import sys
+    answers = {"Which database?": "Postgres"}
+    run = FakeRun(claude_stdout=RESULT)
+    run_replay(settings(recorded_answers=answers), pristine_tree(tmp_path), tmp_path / "run0",
+               tmp_path / ".culprit-replay-ask", (), run=run, projects_dir=tmp_path / "p")
+    command = next(c for c, _ in run.calls if c[0] == "claude")
+    assert command[command.index("--permission-prompt-tool") + 1] == "mcp__culprit_answers__answer"
+    assert "none" not in command[command.index("--permission-prompts") + 1:command.index("--permission-prompts") + 2]
+    host = json.loads(command[command.index("--mcp-config") + 1])["mcpServers"]["culprit_answers"]
+    assert host["command"] == sys.executable and host["args"][:2] == ["-m", "culprit.answer_host"]
+    assert json.loads(Path(host["args"][2]).read_text()) == answers
+
+
+def test_without_recorded_answers_every_permission_prompt_is_still_refused():
+    command = replay_command(settings())
+    assert command[command.index("--permission-prompts") + 1] == "none"
+    assert "--permission-prompt-tool" not in command

@@ -18,6 +18,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from culprit.claude import NO_MCP_SERVERS
+from culprit.answer_host import PERMISSION_PROMPT_TOOL, recorded_answers
+from culprit.answer_host import SERVER as ANSWER_SERVER
 from culprit.episodes import Episode, content_blocks
 from culprit.mcp_stub import MCP_PREFIX, recordings_from_episode
 from culprit.sandbox import clone_tree
@@ -55,6 +57,7 @@ class ReplaySettings:
     max_budget_usd: float = DEFAULT_REPLAY_BUDGET_USD
     prompt_images: tuple[dict, ...] = ()  # image blocks the human attached, resent with the prompt
     mcp_recordings: dict = field(default_factory=dict)  # per MCP server, the calls the episode made and their results
+    recorded_answers: dict = field(default_factory=dict)  # question -> what the human answered in the original
 
 
 @dataclass(frozen=True)
@@ -97,7 +100,8 @@ def baseline_settings(episode: Episode, max_budget_usd: float = DEFAULT_REPLAY_B
     return ReplaySettings(prompt=episode.prompt_text, model=episode.model,
                           permission_mode=replay_permission_mode(episode.permission_mode),
                           max_budget_usd=max_budget_usd, prompt_images=images,
-                          mcp_recordings=recordings_from_episode(episode))
+                          mcp_recordings=recordings_from_episode(episode),
+                          recorded_answers=recorded_answers(episode))
 
 
 def full_prompt(settings: ReplaySettings) -> str:
@@ -117,7 +121,7 @@ def replay_prompt(settings: ReplaySettings, original_cwd: Path | None = None, wo
 
 def replay_command(settings: ReplaySettings, original_cwd: Path | None = None,
                    workdir: Path | None = None, memory_dir: Path | None = None,
-                   recordings_file: Path | None = None) -> list[str]:
+                   recordings_file: Path | None = None, answers_file: Path | None = None) -> list[str]:
     appended = settings.append_system_prompt
     if appended and original_cwd and workdir:
         appended = _point_at_clone(appended, original_cwd, workdir)
@@ -126,8 +130,8 @@ def replay_command(settings: ReplaySettings, original_cwd: Path | None = None,
         # at Claude Code itself rather than at your setup
         os.environ.get("CULPRIT_CLAUDE_BIN", "claude"), "-p",
         "--output-format", "stream-json", "--verbose",
-        "--strict-mcp-config", "--mcp-config", _mcp_config(settings, recordings_file),
-        "--permission-prompts", "none",
+        "--strict-mcp-config", "--mcp-config", _mcp_config(settings, recordings_file, answers_file),
+        *_permission_host(settings, answers_file),
         "--permission-mode", settings.permission_mode,
         "--no-session-persistence",
         "--max-budget-usd", f"{settings.max_budget_usd:.2f}",
@@ -152,13 +156,24 @@ def replay_command(settings: ReplaySettings, original_cwd: Path | None = None,
     return command
 
 
-def _mcp_config(settings: ReplaySettings, recordings_file: Path | None) -> str:
-    """No MCP server at all, or for an episode that used some, the stand-in in place of each one."""
-    if not settings.mcp_recordings or recordings_file is None:
-        return NO_MCP_SERVERS
-    servers = {server: {"command": sys.executable, "args": ["-m", "culprit.mcp_stub", str(recordings_file), server]}
-               for server in settings.mcp_recordings}
-    return json.dumps({"mcpServers": servers})
+def _mcp_config(settings: ReplaySettings, recordings_file: Path | None, answers_file: Path | None) -> str:
+    """No real MCP server ever: the stand-in in place of each server the episode used, plus culprit's
+    answer host when the episode recorded answers to questions."""
+    servers = {}
+    if settings.mcp_recordings and recordings_file is not None:
+        servers = {server: {"command": sys.executable, "args": ["-m", "culprit.mcp_stub", str(recordings_file), server]}
+                   for server in settings.mcp_recordings}
+    if settings.recorded_answers and answers_file is not None:
+        servers[ANSWER_SERVER] = {"command": sys.executable, "args": ["-m", "culprit.answer_host", str(answers_file)]}
+    return json.dumps({"mcpServers": servers}) if servers else NO_MCP_SERVERS
+
+
+def _permission_host(settings: ReplaySettings, answers_file: Path | None) -> list[str]:
+    """Nobody answers permission prompts, unless recorded answers exist: then culprit's answer host does,
+    which is the only way Claude Code offers AskUserQuestion headless (verified live on 2.1.296)."""
+    if settings.recorded_answers and answers_file is not None:
+        return ["--permission-prompts", "host", "--permission-prompt-tool", PERMISSION_PROMPT_TOOL]
+    return ["--permission-prompts", "none"]
 
 
 def _applied_settings(memory_dir: Path | None) -> dict:
@@ -225,6 +240,10 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
         memory_dir = (run_dir / "memory").resolve()
         shutil.rmtree(memory_dir, ignore_errors=True)
         shutil.copytree(original_memory, memory_dir)
+    answers_file = None
+    if settings.recorded_answers:
+        answers_file = (run_dir / "answers.json").resolve()
+        answers_file.write_text(json.dumps(settings.recorded_answers))
     recordings_file = None
     if settings.mcp_recordings:
         recordings_file = (run_dir / "mcp-recordings.json").resolve()
@@ -244,7 +263,8 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
             if setup.returncode != 0:
                 raise SetupScriptFailed(f"{settings.setup_script} exited {setup.returncode}: {setup.stderr[-500:]}")
         try:
-            completed = run(replay_command(settings, original_cwd, workdir, memory_dir, recordings_file), cwd=workdir,
+            completed = run(replay_command(settings, original_cwd, workdir, memory_dir, recordings_file, answers_file),
+                            cwd=workdir,
                             capture_output=True,
                             text=True, timeout=REPLAY_TIMEOUT_S, env=env,
                             input=_stdin_for(settings, replay_prompt(settings, original_cwd, workdir)))
@@ -351,4 +371,5 @@ def settings_from_json(data: dict) -> ReplaySettings:
     fields["disallowed_tools"] = tuple(fields.get("disallowed_tools") or ())
     fields["prompt_images"] = tuple(fields.get("prompt_images") or ())
     fields["mcp_recordings"] = dict(fields.get("mcp_recordings") or {})
+    fields["recorded_answers"] = dict(fields.get("recorded_answers") or {})
     return ReplaySettings(**fields)
