@@ -1,4 +1,4 @@
-from culprit.episodes import episodes_from_session, is_human_prompt, session_files
+from culprit.logs import episodes_from_session, is_human_prompt, session_files
 from records import assistant, human, interrupt, system, tool_result
 
 

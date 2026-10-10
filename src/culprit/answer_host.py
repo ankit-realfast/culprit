@@ -14,7 +14,7 @@ import json
 import sys
 from difflib import SequenceMatcher
 
-from culprit.eligibility import ASK_USER_TOOL
+from culprit.logs import ASK_USER_TOOL
 from culprit.mcp_stub import serve_message, serve_stdio, text_result, tool_spec
 
 SERVER = "culprit_answers"

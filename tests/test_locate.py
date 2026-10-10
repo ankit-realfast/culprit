@@ -1,7 +1,6 @@
 import pytest
 
-from culprit.episodes import episodes_from_session, tool_uses
-from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
+from culprit.logs import EpisodeNotFound, episodes_from_session, find_episode, follow_up_prompts, tool_uses
 from records import assistant, human, tool_use
 
 

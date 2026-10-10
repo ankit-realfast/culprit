@@ -17,12 +17,12 @@ from culprit.calibration import (MIN_KAPPA, MIN_LABELS, UnknownRun, agreement, n
 from culprit.claude import ClaudeCallFailed, ask_claude
 from culprit.criterion import CRITERION_FILE, Criterion, approve_criterion, criterion_step, draft_criterion, load_criterion, save_criterion
 from culprit.diagnose import diagnose, retire_if_criterion_changed
-from culprit.eligibility import project_hooks, replay_blockers
-from culprit import episodes
-from culprit.episodes import Episode, excerpt, session_files
+from culprit.logs import (Episode, EpisodeNotFound, FailureSignals, excerpt, find_episode, follow_up_prompts,
+                          load_snapshot, project_hooks, rank_candidates, replay_blockers, session_files, session_root,
+                          summarize_session)
+from culprit import logs
 from culprit.experiment import (BudgetExhausted, EpisodeBudget, VariantOutcome, load_outcome, pristine_dir, run_variant,
                                 stored_spend)
-from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
 from culprit.oracles import DRAFTED_CAUSES
 from culprit.preview import CostPlan, batch_cost, diagnose_cost, diagnose_cost_for, plan_cost
 from culprit.progress import ProgressPrinter
@@ -31,14 +31,11 @@ from culprit.report import REPORT_FILE, collect, render_report
 from culprit import sandbox
 from culprit.sandbox import apply_episode_originals, check_restore, episode_originals, restore, restore_from_git
 from culprit.selftest import control_min_passes, is_control, run_selftest, selftest_accuracy, selftest_cost
-from culprit.signals import FailureSignals
-from culprit.snapshot import load_snapshot, session_root
 from culprit.status import STAGES, EpisodeStatus, episode_status, next_step, queue_status
 from culprit.store import (RESTORE_FILE, NotReady, UnknownEpisode, confirm_step, display_id, episode_dir, queued_ids,
                            read_symptom, record_symptom, require_queue, resolve_episode_id, save_candidates, write_json)
 from culprit.taxonomy import ORACLE_ORDER, Cause, Symptom
 from culprit.verdict import BASELINE, load_verdict, numbers_line
-from culprit.triage import rank_candidates, summarize_session
 
 RUNS_ENV = "CULPRIT_RUNS"
 PROJECTS_ENV = "CULPRIT_PROJECTS"
@@ -97,7 +94,7 @@ def default_runs() -> Path:
 
 def default_projects() -> Path:
     """The session logs: $CULPRIT_PROJECTS when set, otherwise ~/.claude/projects."""
-    return Path(os.environ.get(PROJECTS_ENV) or episodes.DEFAULT_PROJECTS)
+    return Path(os.environ.get(PROJECTS_ENV) or logs.DEFAULT_PROJECTS)
 
 
 def require_store(runs_dir: Path) -> None:

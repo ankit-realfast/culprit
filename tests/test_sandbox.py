@@ -1,6 +1,6 @@
 import subprocess
 
-from culprit.episodes import episodes_from_session
+from culprit.logs import episodes_from_session
 from culprit.sandbox import (apply_episode_originals, check_restore, clone_tree, episode_originals, restore,
                              strip_git_remotes)
 from records import edit_result, human, write_result

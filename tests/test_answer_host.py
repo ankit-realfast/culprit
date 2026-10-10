@@ -3,8 +3,7 @@ import subprocess
 import sys
 
 from culprit.answer_host import decide
-from culprit.eligibility import recorded_answers
-from culprit.episodes import episodes_from_session
+from culprit.logs import episodes_from_session, recorded_answers
 from records import human
 
 ANSWERS = {"How should I kick off #251?": "u decide whatever is best", "Which database?": "Postgres"}

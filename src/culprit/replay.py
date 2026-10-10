@@ -17,11 +17,9 @@ import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from culprit.answer_host import PERMISSION_PROMPT_TOOL
-from culprit.answer_host import SERVER as ANSWER_SERVER
-from culprit import episodes
-from culprit.eligibility import recorded_answers
-from culprit.episodes import Episode, prompt_images
+from culprit.answer_host import PERMISSION_PROMPT_TOOL, SERVER as ANSWER_SERVER
+from culprit import logs
+from culprit.logs import Episode, prompt_images, recorded_answers
 from culprit.mcp_stub import MCP_PREFIX, recordings_from_episode
 from culprit.sandbox import clone_tree
 
@@ -256,7 +254,7 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
         recordings_file.write_text(json.dumps(settings.mcp_recordings))
     clone_tree(pristine, workdir)
     # Claude Code makes a folder for the clone among its projects; it is removed afterwards if left empty
-    project_folder = (projects_dir or episodes.DEFAULT_PROJECTS) / project_folder_name(workdir.resolve())
+    project_folder = (projects_dir or logs.DEFAULT_PROJECTS) / project_folder_name(workdir.resolve())
     # git must not climb out of the clone: beside a project inside a real repository it would find that
     # repository and a replay's `git commit` would land in it
     env = {**os.environ, "GIT_CEILING_DIRECTORIES": str(workdir.parent.resolve())}

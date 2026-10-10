@@ -2,11 +2,10 @@ import json
 
 import pytest
 
-from culprit.signals import FailureSignals
+from culprit.logs import Candidate, EpisodeSummary, FailureSignals
 from culprit.store import (NotReady, UnknownEpisode, episode_dir, read_symptom, record_symptom, resolve_episode_id,
                            save_candidates, short_id)
 from culprit.taxonomy import Symptom
-from culprit.triage import Candidate, EpisodeSummary
 
 
 def saved(runs_dir, *episode_ids):

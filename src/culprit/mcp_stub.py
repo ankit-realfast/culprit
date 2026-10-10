@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import sys
 
-from culprit.episodes import Episode, content_blocks
+from culprit.logs import Episode, content_blocks
 
 MCP_PREFIX = "mcp__"
 SERVER_NAME = "culprit-replay-stub"

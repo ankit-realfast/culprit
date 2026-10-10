@@ -2,7 +2,7 @@ import json
 import subprocess
 import sys
 
-from culprit.episodes import episodes_from_session
+from culprit.logs import episodes_from_session
 from culprit.mcp_stub import handle, recordings_from_episode
 from records import human
 

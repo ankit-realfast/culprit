@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from culprit.claude import Ask, as_messages, ask_claude
-from culprit.episodes import Episode
+from culprit.logs import Episode
 from culprit.store import NotReady, display_id, episode_dir, read_json, write_json
 
 CRITERION_FILE = "criterion.json"

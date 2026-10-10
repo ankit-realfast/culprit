@@ -12,7 +12,7 @@ from pathlib import Path
 
 from culprit.criterion import Criterion
 from culprit.diagnose import diagnose
-from culprit.episodes import Episode
+from culprit.logs import Episode
 from culprit.experiment import EpisodeBudget, Progress, load_outcome, scoped, stored_spend
 from culprit.preview import EMPTY, CostPlan, diagnose_cost_for
 from culprit.replay import ReplaySettings

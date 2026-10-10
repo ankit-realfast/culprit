@@ -3,7 +3,7 @@ from dataclasses import replace
 
 from culprit.criterion import Criterion
 from culprit.diagnose import NOT_RUN_REASON, diagnose
-from culprit.episodes import episodes_from_session
+from culprit.logs import episodes_from_session
 from culprit.experiment import EpisodeBudget, VariantOutcome
 from culprit.oracles import VariantBuild
 from culprit.replay import ReplaySettings

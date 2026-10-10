@@ -4,7 +4,7 @@ import pytest
 
 from culprit.criterion import (Criterion, approve_criterion, draft_criterion, drafting_prompt,
                                load_criterion, save_criterion)
-from culprit.episodes import episodes_from_session
+from culprit.logs import episodes_from_session
 from fakes import FakeAsk
 from records import human
 

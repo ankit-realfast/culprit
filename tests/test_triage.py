@@ -1,5 +1,4 @@
-from culprit.signals import FailureSignals
-from culprit.triage import EpisodeSummary, excerpt, percentile, rank_candidates, score
+from culprit.logs import EpisodeSummary, FailureSignals, excerpt, percentile, rank_candidates, score
 
 CLEAN = FailureSignals(False, 0, 0, 0, 10.0)
 

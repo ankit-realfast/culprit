@@ -3,7 +3,7 @@ import json
 import pytest
 
 from culprit.criterion import Criterion
-from culprit.episodes import episodes_from_session
+from culprit.logs import episodes_from_session
 from culprit.experiment import BudgetExhausted, EpisodeBudget, VariantOutcome, load_outcome, run_variant
 from culprit.judge import Judgement
 from culprit.replay import ReplayResult, ReplaySettings

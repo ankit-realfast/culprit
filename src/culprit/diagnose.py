@@ -14,7 +14,7 @@ from pathlib import Path
 
 from culprit.claude import CALL_CAP_USD, ask_claude
 from culprit.criterion import Criterion
-from culprit.episodes import Episode
+from culprit.logs import Episode
 from culprit.experiment import (CALLS_FILE, REPLAYS_DIR, SUPERSEDED_DIR, EpisodeBudget, Progress,
                                 VariantOutcome, load_outcome, pristine_dir, record_call_spend, run_variant)
 from culprit.oracles import build_variant, combine

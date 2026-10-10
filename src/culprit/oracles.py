@@ -11,7 +11,7 @@ from pathlib import Path
 
 from culprit.claude import Ask, ask_claude
 from culprit.criterion import Criterion
-from culprit.episodes import Episode, tool_uses
+from culprit.logs import Episode, tool_uses
 from culprit.leak import check_leak
 from culprit.replay import ReplaySettings
 from culprit.sandbox import target_inside

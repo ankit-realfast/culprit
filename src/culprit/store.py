@@ -7,7 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from culprit.taxonomy import Symptom
-from culprit.triage import Candidate
+from culprit.logs import Candidate
 
 CANDIDATES_FILE = "candidates.json"
 SYMPTOM_FILE = "symptom.json"

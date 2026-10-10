@@ -1,5 +1,4 @@
-from culprit.episodes import episodes_from_session
-from culprit.signals import FailureSignals, signals_for
+from culprit.logs import FailureSignals, episodes_from_session, signals_for
 from records import assistant, human, interrupt, system, tool_result
 
 

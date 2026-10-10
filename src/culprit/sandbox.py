@@ -14,8 +14,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from culprit.episodes import Episode
-from culprit.snapshot import Tracked
+from culprit.logs import Episode, Tracked
 
 DEFAULT_FILE_HISTORY = Path.home() / ".claude" / "file-history"
 

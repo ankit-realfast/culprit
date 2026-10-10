@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Callable
 
 from culprit.criterion import Criterion
-from culprit.episodes import Episode
+from culprit.logs import Episode
 from culprit.claude import CALL_CAP_USD
 from culprit.judge import Judgement, judge_replay
 from culprit.replay import MEMORY_DIR, RESULT_FILE, ReplaySettings, replay_workdir, run_replay
