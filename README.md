@@ -1,53 +1,40 @@
 # culprit
 
-When a Claude Code task fails, culprit tells you what to change — your prompt, your environment, your
-agent setup (CLAUDE.md, rules, skills), the harness (tools, MCP, settings, context) or the model — by
-re-running the task with one of those changed at a time and seeing which change makes it pass.
+When a Claude Code task fails, culprit tells you which layer to change: your prompt, your environment,
+your agent setup (CLAUDE.md, rules, skills), the harness (tools, MCP, settings, context) or the model.
+It re-runs the task with one layer changed at a time. A layer is the cause only if its runs pass
+clearly more often than unchanged runs (10 each, one-sided Fisher exact test, p < 0.05). No model
+guesses the cause.
 
-It does not ask a model to guess the cause. A cause is proven only when the changed run passes clearly
-more often than the unchanged one (one-sided Fisher exact test, p < 0.05 over 10 runs each).
+## How it decides
 
-## How a diagnosis works
-
-1. `triage` splits your Claude Code logs (`~/.claude/projects/*.jsonl`) into episodes — one prompt and
-   everything until your next prompt — and ranks the likely failures from interrupts, tool errors,
-   compactions and slow turns. Each run merges into the stored queue (`runs/candidates.json`), so episodes queued earlier are kept: the rows it prints become
-   queue rows #1..#n, and earlier episodes it no longer shows follow them (`culprit status` lists all).
-   Episodes a replay cannot use (say, their working directory is gone) come after every replayable one,
-   with the reason printed under the row.
-2. You `confirm` what went wrong: `stopped-short`, `wrong-result`, `ignored-instructions`, `wasteful`,
-   or `no-failure`. confirm then drafts what success means from your follow-up messages and prints it.
-   With no episode id, `culprit confirm` walks the queue in order (in a terminal): for each episode not yet
-   done it shows the row (prompt, evidence, why it cannot be replayed) and what you said next, so you
-   can judge whether you were correcting Claude, asks the symptom (or s to skip, q to
-   quit), drafts the criterion and asks you to approve it, edit it later or skip, then restores the
-   starting files when a replay can use the episode. Episodes already past a step skip it.
-   One at a time: `culprit confirm <episode-id> <symptom>` records and drafts; edit
-   `runs/<episode>/criterion.json` if it is wrong, then run the same `confirm` again to approve it.
-   A criterion is never redrafted over; to change one, edit its file.
-3. `diagnose` rebuilds the files the episode started from in a throwaway copy (once), then replays the
-   episode unchanged 10 times. Passing 6+ times means the failure was luck.
-4. Otherwise it replays it with one layer improved at a time, cheapest fix first:
+1. **Triage.** Your logs (`~/.claude/projects/*.jsonl`) are split into episodes: one prompt and
+   everything until your next prompt. Episodes are ranked by interrupts, tool errors, compactions and
+   slow turns. Episodes that can't be replayed are listed last, with the reason.
+2. **Confirm.** You say what went wrong (`stopped-short`, `wrong-result`, `ignored-instructions`,
+   `wasteful` or `no-failure`) and approve a drafted success criterion.
+3. **Baseline.** The episode's starting files are rebuilt in a throwaway copy and the episode is
+   replayed unchanged 10 times. If 6 or more pass, the failure was luck (**not-reproducible**).
+4. **Oracles.** The episode is replayed with one layer improved at a time, cheapest first:
 
    | Change | Verdict if it now passes |
    |---|---|
-   | prompt restated clearly | **task** — change how you ask |
-   | your fix script runs first | **environment** — fix the repo or infrastructure |
-   | better standing instructions | **agent-setup** — change CLAUDE.md, rules, skills |
-   | all tools, relevant files preloaded, double budget | **harness** — change tools, MCP, settings |
-   | Fable instead of the original model | **model** — change or route the model |
+   | prompt restated clearly | **task**: change how you ask |
+   | your fix script runs first | **environment**: fix the repo or infrastructure |
+   | better standing instructions | **agent-setup**: change CLAUDE.md, rules, skills |
+   | all tools, relevant files preloaded, double budget | **harness**: change tools, MCP, settings |
+   | Fable instead of the original model | **model**: change or route the model |
 
-   If no single change works, it tries them together and in pairs: **multi-cause** or **unexplained**.
-   The verdict prints the numbers behind it, e.g. `harness: baseline 0/10 → 8/10, p = 0.0004`
-   (the report repeats them under each verdict).
-5. `report` leads with what to fix first: the single-layer changes ranked by how many of your failures each
-   would have fixed, then the layers that only worked changed together, then the episodes left for your
-   review, the symptom × cause grid and how far to trust it all.
+   If no single change works, the changes are tried together and in pairs: **multi-cause**, or
+   **unexplained** if nothing works. Each verdict shows its numbers, e.g.
+   `harness: baseline 0/10 → 8/10, p = 0.0004`.
+5. **Report.** The report starts with what to fix first: single-layer fixes ranked by how many failures
+   each fixes. Then come layers that only work together, episodes left for your review, the
+   symptom × cause grid, and how far to trust the results.
 
 ## Install
 
-Requires macOS (APFS clones), Python ≥ 3.11, [uv](https://docs.astral.sh/uv/), and the `claude` CLI
-logged in.
+Needs macOS (APFS clones), Python ≥ 3.11, [uv](https://docs.astral.sh/uv/) and a logged-in `claude` CLI.
 
 ```bash
 uv sync
@@ -57,102 +44,74 @@ uv run pytest -q
 ## Use
 
 ```bash
-uv run culprit triage --top 40
-uv run culprit confirm                             # walk the queue: symptom, criterion, restore
-uv run culprit confirm <episode-id> wrong-result   # or one episode: drafts the criterion; edit runs/<episode>/criterion.json
-uv run culprit confirm <episode-id> wrong-result   # again, to approve it
-uv run culprit diagnose <episode-id>               # restore, baseline, oracles; read runs/<episode>/replays/
-uv run culprit diagnose                            # every confirmed episode in the queue, then the report
-uv run culprit report                              # writes runs/report.md
-uv run culprit status [<episode-id>]            # where each episode stands and what to run next
+uv run culprit triage --top 40     # rank likely failures into the queue
+uv run culprit confirm             # walk the queue: symptom, criterion, restore (needs a terminal)
+uv run culprit diagnose 1          # one episode (queue row 1): baseline, oracles, verdict
+uv run culprit diagnose            # every confirmed episode, then the report
+uv run culprit report              # write runs/report.md
+uv run culprit status [1]          # where episodes stand and the next command
 ```
 
-`culprit --help` lists the commands by group (workflow, human review, trust) with this run-through;
-`culprit <command> --help` ends with examples.
-
-For scripts, `status --json` prints one JSON document on stdout and nothing else: every episode's stage,
-criterion, runs, spend, verdict and next step, plus the judge agreement and selftest accuracy.
-
-`diagnose` and `selftest` print a line on stderr as each replay finishes:
-its result, its cost and what the episode has spent so far. While a replay runs, a
-`… still running` line every 30 s shows it is alive.
-
-Each command that changes an episode ends with a `next:` line (on stderr) naming the step that follows;
-`culprit status` shows the same for every queued episode.
-
-`<episode-id>` can be the full id, the queue row triage prints (`#3`), the short id it prints
-(`1a2b3c4d:5e6f7a8b`) or any prefix that matches one episode in the queue or in `runs/`. Suggested
-commands (`next:` lines, `status`, refusals) and triage rows use the short id whenever it matches that one
-episode alone; `status --json` and `runs/candidates.json` always carry the full id.
-
-Everything is stored in `runs/` in the current folder; set `CULPRIT_RUNS=/path/to/runs` to use another.
-Session logs are read from `~/.claude/projects`; set `CULPRIT_PROJECTS=/path/to/projects` to read others.
-`status`, `confirm`, `review` and `report` refuse (exit 3) when the store
-does not exist rather than create an empty one.
-
-Batch: `uv run culprit diagnose` with no episode id restores and diagnoses every confirmed episode in the
-queue, sharing a $17,000 total, then writes the report.
-
-Trust: `culprit review` shows each judged replay you have not labelled and asks pass, fail, skip or quit
-(it needs a terminal). `culprit status` and the report show how often the judge agrees with you
-(calibrated at ≥ 20 labels and Cohen's kappa ≥ 0.6).
-`culprit selftest <episode-id>` takes an episode that normally passes (replaying its baseline first if it
-has none), plants a known fault in each layer and reports how often culprit names it.
-
-Exit codes: 0 done · 1 refused or failed · 2 bad arguments · 3 not ready (a step that must come first
-is missing; the message names it) · 4 spend cap reached · 130 stopped with Ctrl-C (the replay in
-flight is killed and its copy deleted; finished replays are kept, so rerunning the same command resumes).
+- **Naming episodes:** use the triage row number (`3`), the short id (`1a2b3c4d:5e6f7a8b`), any unique prefix,
+  or the full id.
+- **Confirming one episode:** `confirm <episode> <symptom>` drafts the criterion. Edit
+  `runs/<episode>/criterion.json` if it's wrong, then run the same command again to approve it.
+- **Trust:** `review` asks you pass/fail on judged replays. The judge counts as calibrated at ≥ 20 labels
+  and Cohen's kappa ≥ 0.6, and `status` and the report show its agreement. `selftest <episode>` plants a
+  known fault in each layer of an episode that normally passes, and scores whether culprit names it.
+- **Environment fix:** `env-fix <episode> <script>` supplies the script the environment oracle runs first.
+- **Settings:** set `CULPRIT_RUNS` to change the store (default `./runs`) and `CULPRIT_PROJECTS` to change
+  the logs (default `~/.claude/projects`). `CULPRIT_CLAUDE_BIN` picks the Claude Code build for replays.
+- **Output:** results go to stdout. Progress (one line per replay, plus a heartbeat every 30 s) and
+  `next:` hints go to stderr. `status --json` prints one JSON document.
+- **Exit codes:** 0 done · 1 refused or failed · 2 bad arguments · 3 a prior step is missing · 4 spend
+  cap reached · 130 Ctrl-C. Finished replays are kept, so rerunning the command resumes.
 
 ## Cost
 
-Each replay runs 10 times per variant and is capped at $2. A typical diagnosis is about 60 replays (the
-baseline and the first few oracles); the caps are a safety net sized so the worst case never hits them:
-$850 per episode (every oracle, combined and every pair, all void retries), $650 per selftest planted fault,
-and $17,000 in total for `diagnose` with no id (20 episodes at worst case). Judge and drafting calls are capped at
-$0.50 each and charged at that cap. Caps are built in and count everything already spent, so resuming
-never doubles them; the total covers every batch in `runs/`.
-Runs that fail for reasons outside the agent (API errors, culprit's own cap, timeouts) are not counted
-and are retried. If no result could beat the baseline at N runs, culprit stops before the oracles and
-says "not testable".
+| Cap | Value |
+|---|---|
+| Per replay | $2 (harness variants $4) |
+| Per judge or drafting call | $0.50, charged at the cap |
+| Per episode | $850 |
+| Per selftest fault | $650 |
+| `diagnose` with no id, in total | $17,000 |
 
-Before it spends anything, `diagnose` and `selftest` print on stderr the most
-they could run (every variant with all its void retries, plus drafting calls) and spend (that worst case,
-limited by what is left of the cap), then start without asking.
+- **Typical diagnosis:** about 60 replays. The episode and selftest caps cover the worst case (every
+  variant, every retry), so they never cut a diagnosis short.
+- **What caps count:** caps include money already spent, so resuming never double-spends.
+- **Plan printed first:** before spending, culprit prints the most it could spend.
+- **Void runs:** runs that fail outside the agent (API error, timeout) don't count and are retried.
+- **Not testable:** if no result could beat the baseline, culprit stops before running any oracles.
 
 ## Safety
 
-- Replays run in a copy placed beside your project (`.culprit-replay-<id>`), deleted afterwards.
-- No real MCP server ever connects. An episode that used MCP tools gets a stand-in for each server
-  that answers only with the results recorded in your log, so Slack, Gmail and similar are never reached.
-- Shell commands run in Claude Code's OS-enforced Bash sandbox: they can write only in the copy and the
-  temp folder, with no unsandboxed fallback.
-- Git remotes are stripped from the copy; `git push` and `gh` are denied; git cannot climb out of the
-  copy into a parent repository. Episodes in a git worktree or submodule are refused.
-- Paths to your project in the prompt are rewritten to the copy, file tools are denied on your project,
-  and if anything in your project still changes during a replay culprit stops and names the files.
-- Episodes run in your home folder, in a folder containing culprit, or beside an unwritable parent are
-  refused. `runs/` is gitignored and never committed.
+- Replays run in a copy beside your project (`.culprit-replay-<id>`), deleted afterwards. File tools are
+  denied on your project, and culprit stops if your project changes during a replay.
+- Shell commands run in Claude Code's OS sandbox and can write only to the copy and the temp folder.
+- Git remotes are stripped, and `git push` and `gh` are denied. Worktrees and submodules are refused.
+- MCP servers never connect. A stand-in answers with the results recorded in your log.
+- Episodes in your home folder, in a folder containing culprit, or under an unwritable parent are refused.
+- `runs/` holds your session content and is gitignored.
 
-## What replays reproduce, and where they fall short
+## Limits
 
-- **Images** you attached are resent with the prompt. An image the log did not keep blocks the replay.
-- **Questions Claude asked you** are answered with your recorded answer when the replay asks something
-  close (similarity ≥ 0.6); anything else is refused, as a replay with nobody present would be.
-- **MCP tools** answer from the log; a call the original session never made fails in the replay.
-- **Files** are restored from Claude Code's snapshots and the episode's own edits; for a project in git,
-  everything else is rolled back to the last commit before the episode. Outside git, files nothing
-  recorded are as they are today.
-- **Claude's project memory** is a copy of today's notes, not the notes as they were then.
-- **Replays start at the beginning of the episode**, not at the step where it went wrong.
-- **A harness verdict** says what made it pass, not whether the fix is yours or Claude Code's. To narrow
-  it, replay on another Claude Code build: `CULPRIT_CLAUDE_BIN=/path/to/claude uv run culprit diagnose …`;
-  a verdict that flips between builds points at Claude Code.
+- **Files:** restored from Claude Code's snapshots and the episode's own edits. In git, everything else
+  is rolled back to the last commit before the episode. Outside git, unrecorded files are as they are
+  today.
+- **Memory:** Claude's project memory is today's copy, not the copy from the time of the episode.
+- **Questions Claude asked you:** answered with your recorded answer if the replay asks something similar
+  (similarity ≥ 0.6). Anything else is refused.
+- **MCP calls:** a call the original session never made fails.
+- **Images:** an image the log didn't keep blocks the replay.
+- **Starting point:** replays start at the beginning of the episode, not at the failing step.
+- **Harness verdicts:** don't say whether the fix is yours or Claude Code's. Replaying on another build
+  (`CULPRIT_CLAUDE_BIN`) narrows it.
 
 ## Status
 
-Built and unit-tested (340 tests); a final review's critical and important findings are fixed. Triage
-and restore have run on real logs; no real episode has been replayed yet — start with one
-`diagnose` and read its output before anything larger.
+Built and unit-tested. Triage and restore have run on real logs. No real episode has been replayed yet,
+so start with one `diagnose` and read its output.
 
 Design: [`docs/specs/2026-10-11-culprit-design.md`](docs/specs/2026-10-11-culprit-design.md) ·
 Plan: [`docs/plans/2026-10-11-culprit-plan.md`](docs/plans/2026-10-11-culprit-plan.md)
