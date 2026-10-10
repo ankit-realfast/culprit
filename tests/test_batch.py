@@ -102,3 +102,43 @@ def test_the_total_budget_stops_the_batch_and_names_where(tmp_path):
     assert fake.calls[1][1] == 30.0  # the second episode only got what was left of the total
     assert summary.stopped_at == "c:1"
     assert summary.diagnosed == ["a:1", "b:1"]
+
+
+def test_a_total_that_runs_out_inside_an_episode_is_reported_as_the_stop(tmp_path):
+    runs = tmp_path / "runs"
+    queue(runs, "a:1", "b:1")
+    prepare(runs, "a:1")
+    prepare(runs, "b:1")
+    summary = run(runs, spending_diagnose({"a:1": 9.0}, raises=("a:1",)), total=11.0)
+    assert summary.stopped_at == "a:1"
+    assert summary.over_cap == []
+
+
+def test_the_total_counts_what_earlier_batches_spent(tmp_path):
+    runs = tmp_path / "runs"
+    queue(runs, "a:1")
+    prepare(runs, "a:1")
+    old = runs / "z__9" / "replays" / "baseline" / "0"
+    old.mkdir(parents=True)
+    (old / "result.json").write_text(json.dumps({"cost_usd": 399.0}))
+    fake = spending_diagnose({})
+    summary = run(runs, fake, total=400.0)
+    assert summary.stopped_at == "a:1" and fake.calls == []
+
+
+def test_one_failing_episode_does_not_end_the_batch(tmp_path):
+    from culprit.claude import ClaudeCallFailed
+    runs = tmp_path / "runs"
+    queue(runs, "a:1", "b:1")
+    prepare(runs, "a:1")
+    prepare(runs, "b:1")
+    base = spending_diagnose({})
+
+    def flaky(episode, *args, **kwargs):
+        if episode.episode_id == "a:1":
+            raise ClaudeCallFailed("judge overloaded")
+        return base(episode, *args, **kwargs)
+
+    summary = run(runs, flaky)
+    assert "judge overloaded" in summary.skipped["a:1"]
+    assert summary.diagnosed == ["b:1"]

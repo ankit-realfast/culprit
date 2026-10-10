@@ -47,3 +47,13 @@ def test_non_json_output_raises_with_stderr(tmp_path):
 
     with pytest.raises(ClaudeCallFailed, match="not a valid JSON Schema"):
         ask_claude("q", SCHEMA, run=run, cwd=tmp_path)
+
+
+def test_a_call_that_times_out_raises_the_named_error(tmp_path):
+    import subprocess
+
+    def run(command, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="claude", timeout=600)
+
+    with pytest.raises(ClaudeCallFailed, match="timed out"):
+        ask_claude("q", SCHEMA, run=run, cwd=tmp_path)

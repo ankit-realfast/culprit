@@ -41,8 +41,11 @@ def structured_call_command(prompt: str, schema: dict, model: str, max_budget_us
 def ask_claude(prompt: str, schema: dict, model: str = DRAFTING_MODEL, max_budget_usd: float = 0.50,
                run=subprocess.run, cwd: Path = CALLS_DIR) -> dict:
     cwd.mkdir(parents=True, exist_ok=True)
-    completed = run(structured_call_command(prompt, schema, model, max_budget_usd),
-                    capture_output=True, text=True, timeout=CALL_TIMEOUT_S, cwd=cwd)
+    try:
+        completed = run(structured_call_command(prompt, schema, model, max_budget_usd),
+                        capture_output=True, text=True, timeout=CALL_TIMEOUT_S, cwd=cwd)
+    except subprocess.TimeoutExpired:
+        raise ClaudeCallFailed(f"claude timed out after {CALL_TIMEOUT_S}s") from None
     try:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError:
