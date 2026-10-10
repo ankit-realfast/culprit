@@ -18,7 +18,7 @@ from culprit.judge import JUDGE_CALL_CAP_USD
 from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
 from culprit.replay import SetupScriptFailed, baseline_settings
 from culprit.selftest import SELFTEST_DIR
-from culprit.store import CANDIDATES_FILE, episode_dir, read_symptom, short_id
+from culprit.store import CANDIDATES_FILE, confirm_step, display_id, episode_dir, read_symptom, short_id
 from culprit.verdict import load_verdict
 
 ENV_FIX_FILE = "env-fix.sh"
@@ -34,13 +34,14 @@ class BatchSummary:
 
 
 def readiness_problem(runs_dir: Path, episode_id: str) -> str | None:
+    shown = display_id(runs_dir, episode_id)
     if read_symptom(runs_dir, episode_id) is None:
-        return f"not confirmed — run `culprit confirm {episode_id} <symptom>`"
+        return f"not confirmed — {confirm_step(runs_dir, episode_id)}"
     criterion = load_criterion(runs_dir, episode_id)
     if criterion is None or not criterion.approved:
-        return f"no approved criterion — {criterion_step(criterion, episode_id)}"
+        return f"no approved criterion — {criterion_step(criterion, shown)}"
     if not (episode_dir(runs_dir, episode_id) / PRISTINE_DIR).is_dir():
-        return f"not restored — run `culprit restore {episode_id}`"
+        return f"not restored — run `culprit restore {shown}`"
     return None
 
 

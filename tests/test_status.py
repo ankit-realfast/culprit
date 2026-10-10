@@ -3,7 +3,7 @@ import json
 import culprit.cli as cli
 from culprit.criterion import Criterion, save_criterion
 from culprit.status import episode_status, next_step, queue_status
-from culprit.store import episode_dir
+from culprit.store import episode_dir, short_id
 from culprit.verdict import Verdict, save_verdict
 
 ID = "aaaaaaaa1111:bbbbbbbb2222"
@@ -56,12 +56,12 @@ def test_each_stage_names_the_first_missing_step(tmp_path):
     assert stages == ["queued", "confirmed", "criterion drafted", "criterion approved", "restored", "baselined",
                       "diagnosed"]
     hints = [hint for _, hint in steps]
-    assert f"culprit confirm {ID} <symptom>" in hints[0]
-    assert f"culprit criterion draft {ID}" in hints[1]
-    assert f"culprit criterion approve {ID}" in hints[2] and "draft" not in hints[2]
-    assert f"culprit restore {ID}" in hints[3]
-    assert f"culprit baseline {ID}" in hints[4]
-    assert f"culprit diagnose {ID}" in hints[5]
+    assert f"culprit confirm {short_id(ID)} <symptom>" in hints[0]
+    assert f"culprit criterion draft {short_id(ID)}" in hints[1]
+    assert f"culprit criterion approve {short_id(ID)}" in hints[2] and "draft" not in hints[2]
+    assert f"culprit restore {short_id(ID)}" in hints[3]
+    assert f"culprit baseline {short_id(ID)}" in hints[4]
+    assert f"culprit diagnose {short_id(ID)}" in hints[5]
     assert "culprit report" in hints[6]
 
 
@@ -88,7 +88,7 @@ def test_status_without_an_id_prints_one_line_per_episode(tmp_path, capsys):
     assert cli.main(["status", "--runs", str(runs)]) == 0
     out = capsys.readouterr().out.splitlines()
     assert len(out) == 1
-    assert "aaaaaaaa:bbbbbbbb" in out[0] and "confirmed" in out[0] and f"culprit criterion draft {ID}" in out[0]
+    assert "aaaaaaaa:bbbbbbbb" in out[0] and "confirmed" in out[0] and f"culprit criterion draft {short_id(ID)}" in out[0]
 
 
 def test_status_with_an_id_shows_criterion_restore_runs_spend_and_verdict(tmp_path, capsys):

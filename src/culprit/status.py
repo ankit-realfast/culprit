@@ -9,7 +9,7 @@ from pathlib import Path
 from culprit.criterion import Criterion, criterion_step, load_criterion
 from culprit.experiment import OUTCOME_FILE, PRISTINE_DIR, REPLAYS_DIR, VariantOutcome, load_outcome, stored_spend
 from culprit.report import RESTORE_FILE
-from culprit.store import candidate_rows, confirm_step, episode_dir, known_episode_ids, read_symptom
+from culprit.store import candidate_rows, confirm_step, display_id, episode_dir, known_episode_ids, read_symptom
 from culprit.verdict import Verdict, load_verdict
 
 STAGES = ("not queued", "queued", "confirmed", "criterion drafted", "criterion approved", "restored", "baselined",
@@ -35,13 +35,14 @@ def episode_status(runs_dir: Path, episode_id: str) -> EpisodeStatus:
     symptom = read_symptom(runs_dir, episode_id)
     criterion = load_criterion(runs_dir, episode_id)
     verdict = load_verdict(folder)
+    shown = display_id(runs_dir, episode_id)
     steps = [  # (stage reached once done, done?, what to run when it is not)
         ("confirmed", symptom is not None, lambda: confirm_step(runs_dir, episode_id)),
-        ("criterion drafted", criterion is not None, lambda: criterion_step(criterion, episode_id)),
-        ("criterion approved", bool(criterion and criterion.approved), lambda: criterion_step(criterion, episode_id)),
-        ("restored", (folder / PRISTINE_DIR).is_dir(), lambda: f"run `culprit restore {episode_id}`"),
-        ("baselined", load_outcome(folder, "baseline") is not None, lambda: f"run `culprit baseline {episode_id}`"),
-        ("diagnosed", verdict is not None, lambda: f"run `culprit diagnose {episode_id}`"),
+        ("criterion drafted", criterion is not None, lambda: criterion_step(criterion, shown)),
+        ("criterion approved", bool(criterion and criterion.approved), lambda: criterion_step(criterion, shown)),
+        ("restored", (folder / PRISTINE_DIR).is_dir(), lambda: f"run `culprit restore {shown}`"),
+        ("baselined", load_outcome(folder, "baseline") is not None, lambda: f"run `culprit baseline {shown}`"),
+        ("diagnosed", verdict is not None, lambda: f"run `culprit diagnose {shown}`"),
     ]
     stage, hint = ("queued" if queued else "not queued"), None
     if verdict is not None:  # a verdict can come without a baseline (no-failure), so it settles the stage alone

@@ -70,6 +70,15 @@ def resolve_episode_id(runs_dir: Path, text: str) -> str:
     raise UnknownEpisode(f"{text} matches {len(matches)} episodes: {', '.join(matches)}")
 
 
+def display_id(runs_dir: Path, episode_id: str) -> str:
+    """The id to show in a suggested command: the short id when it leads back to this episode alone, else the full id."""
+    shown = short_id(episode_id)
+    try:
+        return shown if resolve_episode_id(runs_dir, shown) == episode_id else episode_id
+    except (UnknownEpisode, NotReady):
+        return episode_id
+
+
 def candidate_rows(runs_dir: Path) -> list[dict]:
     """The stored triage queue, highest score first; empty before the first triage."""
     path = runs_dir / CANDIDATES_FILE
@@ -99,10 +108,11 @@ def record_symptom(runs_dir: Path, episode_id: str, symptom: Symptom) -> Path:
 
 def confirm_step(runs_dir: Path, episode_id: str) -> str:
     """The command that records a symptom; confirm only accepts queued episodes, so name triage when needed."""
+    shown = display_id(runs_dir, episode_id)
     if episode_id in {row["summary"]["episode_id"] for row in candidate_rows(runs_dir)}:
-        return f"run `culprit confirm {episode_id} <symptom>`"
+        return f"run `culprit confirm {shown} <symptom>`"
     return (f"it is not in the triage queue — run `culprit triage` until it is listed, "
-            f"then `culprit confirm {episode_id} <symptom>`")
+            f"then `culprit confirm {shown} <symptom>`")
 
 
 def read_symptom(runs_dir: Path, episode_id: str) -> Symptom | None:

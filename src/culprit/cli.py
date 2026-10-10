@@ -30,7 +30,8 @@ from culprit.selftest import CONTROL_MIN_PASSES, is_control, run_selftest, selft
 from culprit.signals import FailureSignals
 from culprit.snapshot import load_snapshot, session_root
 from culprit.status import EpisodeStatus, episode_status, next_step, queue_status
-from culprit.store import (NotReady, UnknownEpisode, candidate_rows, confirm_step, episode_dir, read_symptom, record_symptom,
+from culprit.store import (NotReady, UnknownEpisode, candidate_rows, confirm_step, display_id, episode_dir, read_symptom,
+                           record_symptom,
                            resolve_episode_id, save_candidates, short_id)
 from culprit.taxonomy import Symptom
 from culprit.triage import EpisodeSummary, rank_candidates
@@ -386,8 +387,9 @@ def status_lines(status: EpisodeStatus) -> list[str]:
 def criterion_command(args: argparse.Namespace) -> int:
     if args.action == "draft":
         if load_criterion(args.runs, args.episode_id) is not None and not args.force:
-            print(f"culprit: {args.episode_id} already has a criterion — view it with `culprit criterion show "
-                  f"{args.episode_id}`; `--force` replaces it with a new unapproved draft", file=sys.stderr)
+            shown = display_id(args.runs, args.episode_id)
+            print(f"culprit: {shown} already has a criterion — view it with `culprit criterion show {shown}`; "
+                  f"`--force` replaces it with a new unapproved draft", file=sys.stderr)
             return EXIT_REFUSED
         episode = find_episode(args.projects, args.episode_id)
         follow_ups = follow_up_prompts(args.projects, args.episode_id)
@@ -402,7 +404,8 @@ def criterion_command(args: argparse.Namespace) -> int:
         return 0
     criterion = load_criterion(args.runs, args.episode_id)
     if criterion is None:
-        raise NotReady(f"no criterion for {args.episode_id} — run `culprit criterion draft {args.episode_id}` first")
+        shown = display_id(args.runs, args.episode_id)
+        raise NotReady(f"no criterion for {shown} — run `culprit criterion draft {shown}` first")
     state = "approved" if criterion.approved else "draft, not approved"
     print(f"[{state}]\nsuccess means: {criterion.success_means}")
     for check in criterion.checks:
@@ -458,10 +461,11 @@ def ready_to_replay(args: argparse.Namespace) -> tuple[Episode, Criterion]:
     """The episode and its approved criterion, once restore has built the pristine copy; refuses otherwise."""
     episode = find_episode(args.projects, args.episode_id)
     criterion = load_criterion(args.runs, args.episode_id)
+    shown = display_id(args.runs, args.episode_id)
     if criterion is None or not criterion.approved:
-        raise NotReady(f"no approved criterion for {args.episode_id} — {criterion_step(criterion, args.episode_id)}")
+        raise NotReady(f"no approved criterion for {shown} — {criterion_step(criterion, shown)}")
     if not (episode_dir(args.runs, args.episode_id) / PRISTINE_DIR).is_dir():
-        raise NotReady(f"{args.episode_id} has no restored copy — run `culprit restore {args.episode_id}` first")
+        raise NotReady(f"{shown} has no restored copy — run `culprit restore {shown}` first")
     return episode, criterion
 
 
@@ -502,7 +506,8 @@ def diagnose_command(args: argparse.Namespace) -> int:
     episode, criterion = ready_to_replay(args)
     symptom = read_symptom(args.runs, args.episode_id)
     if symptom is None:
-        raise NotReady(f"{args.episode_id} has no confirmed symptom — {confirm_step(args.runs, args.episode_id)}")
+        raise NotReady(f"{display_id(args.runs, args.episode_id)} has no confirmed symptom — "
+                       f"{confirm_step(args.runs, args.episode_id)}")
     folder = episode_dir(args.runs, args.episode_id)
     env_script = folder / ENV_FIX_FILE
     budget = EpisodeBudget(args.budget, spent_usd=stored_spend(folder))
@@ -580,8 +585,9 @@ def selftest_command(args: argparse.Namespace) -> int:
     episode, criterion = ready_to_replay(args)
     if not is_control(args.runs, args.episode_id):
         baseline = load_outcome(episode_dir(args.runs, args.episode_id), "baseline")
+        shown = display_id(args.runs, args.episode_id)
         if baseline is None:
-            raise NotReady(f"{args.episode_id} has no baseline — run `culprit baseline {args.episode_id}` first; "
+            raise NotReady(f"{shown} has no baseline — run `culprit baseline {shown}` first; "
                            f"a control must pass at least {CONTROL_MIN_PASSES} of 5")
         print(f"culprit: {args.episode_id} is not a control — its baseline passed {baseline.passes} of "
               f"{baseline.runs}, and a control must pass at least {CONTROL_MIN_PASSES} of 5", file=sys.stderr)
