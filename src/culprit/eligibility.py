@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
-from culprit.episodes import Episode, tool_uses
+from culprit.episodes import Episode, content_blocks, tool_uses
 from culprit.snapshot import Tracked
 
 ASK_USER_TOOL = "AskUserQuestion"
@@ -19,6 +20,12 @@ def replay_blockers(episode: Episode, tracked: Tracked | None) -> list[str]:
         blockers.append("no working directory was recorded")
     elif not Path(episode.cwd).is_dir():
         blockers.append(f"working directory {episode.cwd} no longer exists")
+    elif Path(episode.cwd).resolve() == Path.home().resolve():
+        blockers.append("working directory is the home directory; copying it would copy ~/.claude and ~/.ssh")
+    elif Path(__file__).resolve().is_relative_to(Path(episode.cwd).resolve()):
+        blockers.append("working directory contains culprit itself; a copy would copy culprit's own runs")
+    elif not os.access(Path(episode.cwd).resolve().parent, os.W_OK):
+        blockers.append("the working directory's parent is not writable, so no replay copy can sit beside it")
     elif (Path(episode.cwd) / ".git").is_file():
         blockers.append("working directory is a git worktree or submodule: its .git file points at another "
                         "repository, so a copy would still write into that repository")
@@ -27,6 +34,8 @@ def replay_blockers(episode: Episode, tracked: Tracked | None) -> list[str]:
     names = {use.get("name", "") for use in tool_uses(episode)}
     if any(name.startswith(MCP_TOOL_PREFIX) for name in names):
         blockers.append("used an MCP tool, and v1 replays connect no MCP server")
+    if episode.records and any(block.get("type") == "image" for block in content_blocks(episode.records[0])):
+        blockers.append("the prompt carried an image, which a replay cannot pass on")
     if ASK_USER_TOOL in names:
         blockers.append("asked the human a question, which a replay cannot answer")
     return blockers

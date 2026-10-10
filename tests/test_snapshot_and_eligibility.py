@@ -70,3 +70,35 @@ def test_a_git_worktree_or_submodule_working_directory_is_not_replayable(write_s
     subprocess.run(["git", "-C", str(main_repo), "worktree", "add", "-q", str(worktree)], check=True)
     episode = only_episode(write_session, [human("x", "p1", cwd=str(worktree))])
     assert any("worktree or submodule" in b for b in replay_blockers(episode, {}))
+
+
+def test_the_home_directory_is_not_replayable(write_session, tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: home)
+    episode = only_episode(write_session, [human("x", "p1", cwd=str(home))])
+    assert any("home directory" in b for b in replay_blockers(episode, {}))
+
+
+def test_a_directory_containing_culprit_itself_is_not_replayable(write_session):
+    import culprit
+    culprit_repo = Path(culprit.__file__).resolve().parents[2]
+    episode = only_episode(write_session, [human("x", "p1", cwd=str(culprit_repo.parent))])
+    assert any("contains culprit" in b for b in replay_blockers(episode, {}))
+
+
+def test_a_directory_whose_parent_is_not_writable_is_not_replayable(write_session, tmp_path):
+    parent = tmp_path / "read-only"
+    (parent / "proj").mkdir(parents=True)
+    parent.chmod(0o555)
+    try:
+        episode = only_episode(write_session, [human("x", "p1", cwd=str(parent / "proj"))])
+        assert any("not writable" in b for b in replay_blockers(episode, {}))
+    finally:
+        parent.chmod(0o755)
+
+
+def test_a_prompt_with_an_image_is_not_replayable(write_session, tmp_path):
+    episode = only_episode(write_session, [human([{"type": "image", "source": {}}, {"type": "text", "text": "fix this"}],
+                                                 "p1", cwd=str(tmp_path))])
+    assert any("image" in b for b in replay_blockers(episode, {}))
