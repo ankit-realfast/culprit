@@ -17,18 +17,14 @@ from culprit.taxonomy import Cause, Symptom
 from culprit.verdict import load_verdict, numbers_line
 
 REPORT_FILE = "report.md"
-# not single-layer fixes: unexplained is listed for human review, multi-cause under the causes that interact
-NOT_FIXES = ("misjudged", "not-reproducible", "unexplained", "multi-cause")
+# what to change for each cause a single layer explains; the other causes are not fixes: unexplained is listed
+# for human review, multi-cause under the causes that interact, misjudged and not-reproducible need nothing
 FIX_ACTIONS = {
-    "misjudged": "your label — it was not a failure",
-    "not-reproducible": "nothing — the failure did not recur",
     "task": "how you ask: scope and success criteria in the prompt",
     "environment": "the repo or infrastructure the agent runs in",
     "agent-setup": "standing instructions: CLAUDE.md, rules, skills, subagent definitions",
     "harness": "Claude Code's setup: tools, MCP servers, hooks, settings, context handling",
     "model": "the model: --model, or route these tasks to Fable",
-    "multi-cause": "two layers together",
-    "unexplained": "nothing single — review these by hand",
 }
 KNOWN_LIMITS = (
     "Restores are exact for files Claude Code edited; in git projects other files come from the last commit "
@@ -88,7 +84,7 @@ def grid(rows: list[Row]) -> dict[tuple[str, str], int]:
 def fix_list(rows: list[Row]) -> list[Fix]:
     by_cause: dict[str, list[Row]] = {}
     for row in rows:
-        if row.cause not in NOT_FIXES:
+        if row.cause in FIX_ACTIONS:
             by_cause.setdefault(row.cause, []).append(row)
     fixes = [Fix(cause, len(members), tuple(row.episode_id for row in members), FIX_ACTIONS[cause])
              for cause, members in by_cause.items()]
