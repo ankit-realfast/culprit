@@ -25,7 +25,7 @@ def test_baseline_runs_the_unchanged_episode_and_prints_the_pass_rate(write_sess
         return VariantOutcome(variant, 1, kwargs["n"], 3.1)
 
     monkeypatch.setattr(cli, "run_variant", fake_run_variant)
-    exit_code = cli.main(["baseline", "s1:p1", "--projects", str(projects), "--runs", str(runs), "--n", "4",
+    exit_code = cli.main(["baseline", "--yes", "s1:p1", "--projects", str(projects), "--runs", str(runs), "--n", "4",
                           "--budget", "12"])
     assert exit_code == 0
     assert seen["variant"] == "baseline" and seen["n"] == 4 and seen["cap"] == 12.0
@@ -35,14 +35,14 @@ def test_baseline_runs_the_unchanged_episode_and_prints_the_pass_rate(write_sess
 
 def test_baseline_names_the_missing_step(write_session, tmp_path, capsys):
     projects, runs = setup_episode(write_session, tmp_path, approved=False)
-    assert cli.main(["baseline", "s1:p1", "--projects", str(projects), "--runs", str(runs)]) == 3
+    assert cli.main(["baseline", "--yes", "s1:p1", "--projects", str(projects), "--runs", str(runs)]) == 3
     err = capsys.readouterr().err
     assert "culprit criterion approve" in err and "criterion draft" not in err
 
 
 def test_baseline_before_restore_names_restore(write_session, tmp_path, capsys):
     projects, runs = setup_episode(write_session, tmp_path, restored=False)
-    assert cli.main(["baseline", "s1:p1", "--projects", str(projects), "--runs", str(runs)]) == 3
+    assert cli.main(["baseline", "--yes", "s1:p1", "--projects", str(projects), "--runs", str(runs)]) == 3
     assert "culprit restore" in capsys.readouterr().err
 
 
@@ -59,7 +59,7 @@ def test_baseline_counts_what_the_episode_already_spent(write_session, tmp_path,
         return VariantOutcome(variant, 0, 1, 0.0)
 
     monkeypatch.setattr(cli, "run_variant", fake_run_variant)
-    cli.main(["baseline", "s1:p1", "--projects", str(projects), "--runs", str(runs)])
+    cli.main(["baseline", "--yes", "s1:p1", "--projects", str(projects), "--runs", str(runs)])
     assert seen["spent"] == 3.0
 
 
@@ -71,7 +71,7 @@ def test_baseline_over_budget_exits_4(write_session, tmp_path, capsys, monkeypat
         raise BudgetExhausted("the next run could spend $3.20")
 
     monkeypatch.setattr(cli, "run_variant", over)
-    assert cli.main(["baseline", "s1:p1", "--projects", str(projects), "--runs", str(runs)]) == 4
+    assert cli.main(["baseline", "--yes", "s1:p1", "--projects", str(projects), "--runs", str(runs)]) == 4
     assert "$3.20" in capsys.readouterr().err
 
 
@@ -89,7 +89,7 @@ def test_baseline_prints_a_line_on_stderr_for_each_finished_replay(write_session
         return VariantOutcome(variant, 1, 1, 2.84)
 
     monkeypatch.setattr(cli, "run_variant", fake_run_variant)
-    cli.main(["baseline", "s1:p1", "--projects", str(projects), "--runs", str(runs), "--n", "2"])
+    cli.main(["baseline", "--yes", "s1:p1", "--projects", str(projects), "--runs", str(runs), "--n", "2"])
     err = capsys.readouterr().err.splitlines()
     assert "baseline #1 of 2: pass, $0.84 (episode spent $1.34)" in err
     assert "baseline #2 of 2: void, not counted, $2.00 (episode spent $3.84)" in err

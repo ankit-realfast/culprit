@@ -23,7 +23,7 @@ def test_diagnose_all_prints_the_summary_and_writes_the_report(tmp_path, capsys,
                             over_cap=["c:1"], stopped_at="d:1", spent_usd=88.5)
 
     monkeypatch.setattr(cli, "diagnose_all", fake_all)
-    assert cli.main(["diagnose-all", "--runs", str(runs), "--projects", str(tmp_path / "projects"),
+    assert cli.main(["diagnose-all", "--yes", "--runs", str(runs), "--projects", str(tmp_path / "projects"),
                      "--total", "100"]) == 0
     out = capsys.readouterr().out
     assert seen["total_usd"] == 100.0 and seen["per_episode_usd"] == 40.0 and seen["n"] == 5

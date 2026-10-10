@@ -89,6 +89,12 @@ Runs that fail for reasons outside the agent (API errors, culprit's own cap, tim
 and are retried. If no result could beat the baseline at N runs, culprit stops before the oracles and
 says "not testable".
 
+Before it spends anything, `baseline`, `diagnose`, `selftest` and `diagnose-all` print the most they
+could run (every variant with all its void retries, plus drafting calls) and spend (that worst case,
+limited by what is left of the cap), then ask `proceed? [y/N]`. `--dry-run` prints that plan and stops;
+`--yes` skips the question. Without a terminal to ask on (scripts, CI) they refuse with exit 3 unless
+given `--yes`.
+
 ## Safety
 
 - Replays run in a copy placed beside your project (`.culprit-replay-<id>`), deleted afterwards.
