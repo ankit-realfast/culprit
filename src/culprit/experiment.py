@@ -11,7 +11,7 @@ from pathlib import Path
 
 from culprit.criterion import Criterion
 from culprit.episodes import Episode
-from culprit.judge import JUDGE_CALL_CAP_USD, judge_replay
+from culprit.judge import JUDGE_CALL_CAP_USD, Judgement, judge_replay
 from culprit.replay import ReplaySettings, replay_workdir, run_replay
 from culprit.store import episode_dir
 
@@ -19,6 +19,7 @@ REPLAYS_DIR = "replays"
 PRISTINE_DIR = "pristine"
 OUTCOME_FILE = "outcome.json"
 JUDGEMENT_FILE = "judgement.json"
+RESULT_FILE = "result.json"
 MAX_VOID_RETRIES = 5  # extra attempts per variant when runs fail for reasons outside the agent
 
 
@@ -59,17 +60,23 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
     cost = 0.0
     attempt = 0
     while counted < n and attempt < n + MAX_VOID_RETRIES:
-        i = attempt
+        run_dir = variant_dir / str(attempt)
         attempt += 1
-        budget.ensure_room(settings.max_budget_usd + JUDGE_CALL_CAP_USD)
-        run_dir = variant_dir / str(i)
-        result = replay(settings, episode_folder / PRISTINE_DIR, run_dir, replay_workdir(episode), criterion.checks,
-                        original_cwd=Path(episode.cwd))
-        judgement = judge(criterion, result)
-        spent = result.cost_usd + (JUDGE_CALL_CAP_USD if judgement.by == "model" else 0.0)
-        budget.spend(spent)
-        cost += result.cost_usd
-        (run_dir / JUDGEMENT_FILE).write_text(json.dumps(asdict(judgement), indent=2))
+        if (run_dir / RESULT_FILE).is_file() and (run_dir / JUDGEMENT_FILE).is_file():
+            # paid for before a stop: reuse it rather than pay again
+            cost += float(json.loads((run_dir / RESULT_FILE).read_text()).get("cost_usd") or 0)
+            judgement = Judgement(**json.loads((run_dir / JUDGEMENT_FILE).read_text()))
+        else:
+            budget.ensure_room(settings.max_budget_usd + JUDGE_CALL_CAP_USD)
+            result = replay(settings, episode_folder / PRISTINE_DIR, run_dir, replay_workdir(episode),
+                            criterion.checks, original_cwd=Path(episode.cwd))
+            budget.spend(result.cost_usd)  # charged before judging, so a judge failure cannot lose it
+            cost += result.cost_usd
+            judgement = judge(criterion, result)
+            if judgement.by == "model":
+                budget.spend(JUDGE_CALL_CAP_USD)
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / JUDGEMENT_FILE).write_text(json.dumps(asdict(judgement), indent=2))
         if judgement.by == "void":
             void += 1
             continue

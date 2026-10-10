@@ -83,3 +83,18 @@ def test_void_runs_are_retried_and_left_out_of_the_count(write_session, tmp_path
                           budget=EpisodeBudget(10.0), replay=replay, judge=lambda c, r: verdicts.pop(0))
     assert (outcome.passes, outcome.runs, outcome.void) == (1, 2, 2)
     assert len(replay.calls) == 4
+
+
+def test_runs_already_paid_for_are_reused_after_a_stop(write_session, tmp_path):
+    episode = episode_at(write_session, tmp_path)
+    runs = tmp_path / "runs"
+    done = episode_dir(runs, episode.episode_id) / "replays" / "baseline" / "0"
+    done.mkdir(parents=True)
+    (done / "result.json").write_text(json.dumps({"cost_usd": 0.3}))
+    (done / "judgement.json").write_text(json.dumps({"passed": True, "reason": "r", "by": "model"}))
+    replay = fake_replay(cost=0.25)
+    outcome = run_variant("baseline", SETTINGS, n=2, episode=episode, runs_dir=runs, criterion=CRITERION,
+                          budget=EpisodeBudget(10.0), replay=replay, judge=judge_sequence(False))
+    assert (outcome.passes, outcome.runs) == (1, 2)
+    assert len(replay.calls) == 1
+    assert outcome.cost_usd == 0.55
