@@ -181,3 +181,17 @@ def _remove_if_only_empty_memory(project_folder: Path) -> None:
         for entry in entries:
             entry.rmdir()
         project_folder.rmdir()
+
+
+def settings_to_json(settings: ReplaySettings) -> dict:
+    data = asdict(settings)
+    data["setup_script"] = str(settings.setup_script) if settings.setup_script else None
+    data["disallowed_tools"] = list(settings.disallowed_tools)
+    return data
+
+
+def settings_from_json(data: dict) -> ReplaySettings:
+    fields = dict(data)
+    fields["setup_script"] = Path(fields["setup_script"]) if fields.get("setup_script") else None
+    fields["disallowed_tools"] = tuple(fields.get("disallowed_tools") or ())
+    return ReplaySettings(**fields)

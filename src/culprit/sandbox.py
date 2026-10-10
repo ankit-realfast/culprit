@@ -62,7 +62,7 @@ def restore(episode: Episode, tracked: Tracked, destination: Path,
     missing: list[str] = []
     outside: list[str] = []
     for tracked_path, backup_name in tracked.items():
-        target = _target_inside(cwd, destination, tracked_path, relative_base=session_root)
+        target = target_inside(cwd, destination, tracked_path, relative_base=session_root)
         if target is None:
             outside.append(tracked_path)
             continue
@@ -104,7 +104,7 @@ def apply_episode_originals(episode: Episode, workdir: Path) -> tuple[int, int]:
     cwd = Path(episode.cwd)
     written = removed = 0
     for path, original in episode_originals(episode).items():
-        target = _target_inside(cwd, workdir, path)
+        target = target_inside(cwd, workdir, path)
         if target is None:
             continue
         if original is None:
@@ -126,7 +126,7 @@ def check_restore(episode: Episode, workdir: Path) -> tuple[int, list[RestoreMis
     checked = 0
     mismatches: list[RestoreMismatch] = []
     for path, original in episode_originals(episode).items():
-        target = _target_inside(cwd, workdir, path)
+        target = target_inside(cwd, workdir, path)
         if target is None:
             continue
         checked += 1
@@ -140,7 +140,7 @@ def check_restore(episode: Episode, workdir: Path) -> tuple[int, list[RestoreMis
     return checked, mismatches
 
 
-def _target_inside(cwd: Path, destination: Path, tracked_path: str,
+def target_inside(cwd: Path, destination: Path, tracked_path: str,
                    relative_base: Path | None = None) -> Path | None:
     """Where a path from the episode lands in the restored copy, or None if it falls outside it.
 
