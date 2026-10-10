@@ -103,3 +103,23 @@ def test_criterion_draft_refuses_to_overwrite_unless_forced(write_session, tmp_p
     assert cli.main(["criterion", "draft", "s1:p1", "--force", "--projects", str(projects), "--runs", str(runs)]) == 0
     assert load_criterion(runs, "s1:p1") .success_means == "second"
     assert load_criterion(runs, "s1:p1").approved is False
+
+
+def test_triage_lists_unreplayable_candidates_after_every_replayable_one(write_session, tmp_path, capsys):
+    from records import system
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_session([human("cannot replay", "p9", session_id="s9", cwd=str(tmp_path / "gone")), interrupt("p9"),
+                   system("compact_boundary"), system("compact_boundary")], name="s9.jsonl")
+    write_session([snapshot("u-p1", {"a.py": "aaa@v1"}), human("can replay", "p1", cwd=str(repo)), interrupt("p1")],
+                  name="s1.jsonl")
+    runs = tmp_path / "runs"
+    assert cli.main(["triage", "--projects", str(tmp_path / "projects"), "--runs", str(runs)]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    rows = [line for line in lines if line.lstrip().startswith("#")]
+    assert "s1:p1" in rows[0] and rows[0].lstrip().startswith("#1 ")
+    assert "s9:p9" in rows[1] and rows[1].lstrip().startswith("#2 ")
+    assert "not replayable: working directory" in lines[lines.index(rows[1]) + 1]
+    assert cli.main(["confirm", "#1", "wasteful", "--runs", str(runs)]) == 0
+    from culprit.store import read_symptom
+    assert read_symptom(runs, "s1:p1").value == "wasteful"

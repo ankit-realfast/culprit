@@ -287,7 +287,10 @@ def triage_command(args: argparse.Namespace) -> int:
         for session_file in session_files(args.projects)
         for episode in episodes_from_session(session_file)
     ]
-    candidates = rank_candidates(summaries, args.top)
+    ranked = rank_candidates(summaries, args.top)
+    blockers = {c.summary.episode_id: _blockers_for(args.projects, c.summary.episode_id) for c in ranked}
+    # A row a replay cannot use goes after every row it can; the sort is stable, so score order holds within each.
+    candidates = sorted(ranked, key=lambda c: bool(blockers[c.summary.episode_id]))
     path = save_candidates(args.runs, candidates)
     queue = [row["summary"]["episode_id"] for row in candidate_rows(args.runs)]
     if args.json:
@@ -295,7 +298,7 @@ def triage_command(args: argparse.Namespace) -> int:
             {"row": queue.index(c.summary.episode_id) + 1, "episode_id": c.summary.episode_id,
              "short_id": short_id(c.summary.episode_id), "score": c.score, "signals": asdict(c.summary.signals),
              "prompt_excerpt": c.summary.prompt_excerpt, "session_file": c.summary.session_file,
-             "replay_blockers": _blockers_for(args.projects, c.summary.episode_id)} for c in candidates]})
+             "replay_blockers": blockers[c.summary.episode_id]} for c in candidates]})
         return 0
     shown = [display_id(args.runs, c.summary.episode_id) for c in candidates]
     id_width = max(map(len, shown), default=0)
@@ -305,9 +308,8 @@ def triage_command(args: argparse.Namespace) -> int:
         print(f"{row:>4} {candidate.score:>3}  {name:<{id_width}}  [{_evidence(s.signals)}]  {s.prompt_excerpt}")
         if s.signals.api_errors:
             print(f"            {s.signals.api_errors} API errors — likely not reproducible")
-        blockers = _blockers_for(args.projects, s.episode_id)
-        if blockers:
-            print(f"            not replayable: {'; '.join(blockers)}")
+        if blockers[s.episode_id]:
+            print(f"            not replayable: {'; '.join(blockers[s.episode_id])}")
     print(f"{len(summaries)} episodes scanned; top {len(candidates)} merged into {path} ({len(queue)} queued); "
           f"refer to an episode by its #row, short id or any unique prefix")
     if len(queue) > len(candidates):

@@ -168,7 +168,7 @@ claude -p "<episode or variant prompt>" \
 
 An episode is replayable only if its `cwd` still exists and is not the home folder, a folder containing
 culprit, a git worktree or submodule, or beside an unwritable parent; its snapshot exists; any question it
-asked has a recorded answer; and any image it carried was kept in the log. `triage` prints the blocking reason under every queued candidate, and `restore` refuses with the reasons; `restore` also lists every hook the project's own settings define, because those hooks run in every replay.
+asked has a recorded answer; and any image it carried was kept in the log. `triage` lists blocked candidates after every replayable one and prints the blocking reason under each, and `restore` refuses with the reasons; `restore` also lists every hook the project's own settings define, because those hooks run in every replay.
 
 ### The oracles, concretely
 

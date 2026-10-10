@@ -13,6 +13,8 @@ more often than the unchanged one (one-sided Fisher exact test, p < 0.05 over 5 
    everything until your next prompt — and ranks the likely failures. Each run merges into the stored
    queue (`runs/candidates.json`), so episodes queued earlier are kept: the rows it prints become
    queue rows #1..#n, and earlier episodes it no longer shows follow them (`culprit status` lists all).
+   Episodes a replay cannot use (say, their working directory is gone) come after every replayable one,
+   with the reason printed under the row.
 2. You `confirm` what went wrong: `stopped-short`, `wrong-result`, `ignored-instructions`, `wasteful`,
    or `no-failure`.
 3. `criterion draft` writes what success means from your follow-up messages; you edit and `approve` it.
