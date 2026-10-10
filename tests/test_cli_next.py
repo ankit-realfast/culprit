@@ -53,7 +53,7 @@ def test_baseline_names_diagnose_next(write_session, tmp_path, capsys, monkeypat
 
     monkeypatch.setattr(cli, "run_variant", fake_run_variant)
     capsys.readouterr()
-    assert cli.main(["baseline", "--yes", "s1:p1"]) == 0
+    assert cli.main(["baseline", "s1:p1"]) == 0
     assert last_err_line(capsys) == "next: run `culprit diagnose s1:p1`"
 
 
@@ -75,7 +75,7 @@ def test_diagnose_and_env_fix_name_their_next_step(write_session, tmp_path, caps
         return verdict
 
     monkeypatch.setattr(cli, "diagnose", fake_diagnose)
-    assert cli.main(["diagnose", "--yes", "s1:p1"]) == 0
+    assert cli.main(["diagnose", "s1:p1"]) == 0
     assert last_err_line(capsys) == "next: run `culprit report`"
 
 

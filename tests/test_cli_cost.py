@@ -46,75 +46,55 @@ def spy(monkeypatch):
     return calls
 
 
-def test_dry_run_prints_the_plan_and_runs_nothing(write_session, tmp_path, capsys, spy):
-    flags = ready(write_session, tmp_path)
-    assert cli.main(["baseline", "s1:p1", *flags, "--n", "5", "--replay-budget", "3", "--budget", "100",
-                     "--dry-run"]) == 0
-    out = capsys.readouterr().out
-    assert "up to 10 replays" in out and "at most $35.00 more" in out
-    assert spy == []
+@pytest.mark.parametrize("argv", [
+    ["baseline", "s1:p1", "--yes"], ["baseline", "s1:p1", "-y"], ["baseline", "s1:p1", "--dry-run"],
+    ["baseline", "s1:p1", "--budget", "3"], ["diagnose", "s1:p1", "--replay-budget", "3"],
+    ["selftest", "s1:p1", "--budget-per-fault", "3"], ["diagnose-all", "--per-episode", "3"],
+    ["diagnose-all", "--total", "3"]])
+def test_spend_is_not_set_or_confirmed_by_flags(argv, capsys):
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(argv)
+    assert stopped.value.code == 2
 
 
-def test_without_a_terminal_and_without_yes_nothing_runs_and_it_exits_3(write_session, tmp_path, capsys,
-                                                                        monkeypatch, spy):
-    flags = ready(write_session, tmp_path)
-    monkeypatch.setattr(cli, "stdin_is_tty", lambda: False)
-    assert cli.main(["baseline", "s1:p1", *flags]) == 3
-    err = capsys.readouterr().err
-    assert "--yes" in err and "up to" in err
-    assert spy == []
+@pytest.mark.parametrize("tty", [True, False])
+def test_the_plan_is_printed_on_stderr_and_nothing_is_asked(write_session, tmp_path, capsys, monkeypatch, spy, tty):
+    ready(write_session, tmp_path)
+    monkeypatch.setattr(cli, "stdin_is_tty", lambda: tty)
 
+    def no_questions():
+        raise AssertionError("asked a question before spending")
 
-def test_yes_runs_without_asking(write_session, tmp_path, monkeypatch, spy):
-    flags = ready(write_session, tmp_path)
-    monkeypatch.setattr(cli, "stdin_is_tty", lambda: False)
-    assert cli.main(["baseline", "s1:p1", *flags, "--yes"]) == 0
+    monkeypatch.setattr("builtins.input", no_questions)
+    assert cli.main(["baseline", "s1:p1"]) == 0
+    captured = capsys.readouterr()
+    assert "up to 10 replays" in captured.err and "cap $40.00" in captured.err
+    assert "up to" not in captured.out
     assert spy == ["baseline"]
 
 
-@pytest.mark.parametrize("answer, code, ran", [("y", 0, ["baseline"]), ("", 1, []), ("no", 1, [])])
-def test_at_a_terminal_it_asks_first(write_session, tmp_path, capsys, monkeypatch, spy, answer, code, ran):
-    flags = ready(write_session, tmp_path)
-    monkeypatch.setattr(cli, "stdin_is_tty", lambda: True)
-    asked = []
-    monkeypatch.setattr("builtins.input", lambda: asked.append(True) or answer)
-    assert cli.main(["baseline", "s1:p1", *flags]) == code
-    assert asked == [True] and spy == ran
-    assert "proceed? [y/N] " in capsys.readouterr().err  # asked on stderr, so stdout stays clean
-
-
-def test_dry_run_does_not_retire_runs_judged_against_an_older_criterion(write_session, tmp_path, spy):
-    flags = ready(write_session, tmp_path)
-    folder = episode_dir(tmp_path / "runs", "s1:p1")
-    (folder / "criterion_used.json").write_text('{"key": "older"}')
-    (folder / "replays" / "baseline").mkdir(parents=True)
-    assert cli.main(["baseline", "s1:p1", *flags, "--dry-run"]) == 0
-    assert (folder / "replays").is_dir() and not (folder / "superseded").exists()
-
-
-def test_diagnose_dry_run_counts_every_variant(write_session, tmp_path, capsys, spy):
-    flags = ready(write_session, tmp_path)
-    assert cli.main(["diagnose", "s1:p1", *flags, "--dry-run"]) == 0
-    out = capsys.readouterr().out
+def test_diagnose_plan_counts_every_variant(write_session, tmp_path, capsys, spy):
+    ready(write_session, tmp_path)
+    assert cli.main(["diagnose", "s1:p1"]) == 0
     # no env-fix: baseline + 4 oracles + combined + 6 pairs, 10 attempts each
-    assert "up to 120 replays and 8 drafting calls" in out
-    assert spy == []
+    assert "up to 120 replays and 8 drafting calls" in capsys.readouterr().err
+    assert spy == ["diagnose"]
 
 
-def test_selftest_dry_run_sums_every_planted_fault(write_session, tmp_path, capsys, spy):
-    flags = ready(write_session, tmp_path, control=True)
-    assert cli.main(["selftest", "s1:p1", *flags, "--dry-run"]) == 0
-    out = capsys.readouterr().out
-    assert "up to 600 replays" in out and "cap $200.00" in out
-    assert spy == []
+def test_selftest_plan_sums_every_planted_fault(write_session, tmp_path, capsys, spy):
+    ready(write_session, tmp_path, control=True)
+    assert cli.main(["selftest", "s1:p1"]) == 0
+    err = capsys.readouterr().err
+    assert "up to 600 replays" in err and "cap $200.00" in err
+    assert spy == ["selftest"]
 
 
-def test_diagnose_all_dry_run_covers_only_ready_episodes_within_the_total(write_session, tmp_path, capsys, spy):
-    flags = ready(write_session, tmp_path)
+def test_diagnose_all_plan_covers_only_ready_episodes_within_the_total(write_session, tmp_path, capsys, spy):
+    ready(write_session, tmp_path)
     runs = tmp_path / "runs"
     (runs / "candidates.json").write_text(json.dumps([{"summary": {"episode_id": "s1:p1"}, "score": 3},
                                                       {"summary": {"episode_id": "s2:p1"}, "score": 2}]))
-    assert cli.main(["diagnose-all", *flags, "--total", "25", "--dry-run"]) == 0
-    out = capsys.readouterr().out
-    assert "up to 120 replays" in out and "at most $25.00 more" in out
-    assert spy == []
+    assert cli.main(["diagnose-all"]) == 0
+    err = capsys.readouterr().err
+    assert "up to 120 replays" in err and "at most $40.00 more" in err and "cap $400.00" in err
+    assert spy == ["diagnose-all"]

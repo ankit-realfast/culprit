@@ -50,23 +50,17 @@ def test_status_json_for_the_queue_and_for_one_episode(write_session, tmp_path, 
 def test_baseline_json(write_session, tmp_path, capsys, monkeypatch):
     flags = ready(write_session, tmp_path)
     monkeypatch.setattr(cli, "run_variant", lambda variant, settings, **k: VariantOutcome(variant, 1, k["n"], 3.1))
-    assert cli.main(["baseline", "s1:p1", *flags, "--yes", "--json"]) == 0
+    assert cli.main(["baseline", "s1:p1", *flags, "--json"]) == 0
     data = only_json(capsys)
     assert data["outcome"] == {"variant": "baseline", "passes": 1, "runs": 5, "cost_usd": 3.1, "void": 0}
     assert data["episode_id"] == "s1:p1" and "next" in data
-
-
-def test_a_dry_run_with_json_prints_the_plan_as_json(write_session, tmp_path, capsys):
-    flags = ready(write_session, tmp_path)
-    assert cli.main(["baseline", "s1:p1", *flags, "--dry-run", "--json"]) == 0
-    assert only_json(capsys)["plan"]["replays"] == 10
 
 
 def test_diagnose_json(write_session, tmp_path, capsys, monkeypatch):
     flags = ready(write_session, tmp_path)
     monkeypatch.setattr(cli, "diagnose", lambda *a, **k: Verdict("s1:p1", "wrong-result", "harness", "4/5", {},
                                                                   {"environment": "no fix"}))
-    assert cli.main(["diagnose", "s1:p1", *flags, "--yes", "--json"]) == 0
+    assert cli.main(["diagnose", "s1:p1", *flags, "--json"]) == 0
     data = only_json(capsys)
     assert data["verdict"]["cause"] == "harness" and data["verdict"]["untested"] == {"environment": "no fix"}
     assert data["judge"]["calibrated"] is False and data["selftest"] == {"correct": 0, "total": 0}

@@ -23,11 +23,11 @@ def test_diagnose_all_prints_the_summary_and_writes_the_report(tmp_path, capsys,
                             over_cap=["c:1"], stopped_at="d:1", spent_usd=88.5)
 
     monkeypatch.setattr(cli, "diagnose_all", fake_all)
-    assert cli.main(["diagnose-all", "--yes",
-                     "--total", "100"]) == 0
+    assert cli.main(["diagnose-all"]) == 0
     out = capsys.readouterr().out
-    assert seen["total_usd"] == 100.0 and seen["per_episode_usd"] == 40.0 and seen["n"] == 5
+    assert seen["total_usd"] == 400.0 and seen["per_episode_usd"] == 40.0 and seen["n"] == 5
     for expected in ["diagnosed 1", "b:1 skipped: not restored", "c:1 hit its $40.00 cap",
                      "stopped at d:1", "$88.50", "rerun"]:
         assert expected in out
+    assert "--" not in out  # no flag left to suggest
     assert (runs / "report.md").exists()

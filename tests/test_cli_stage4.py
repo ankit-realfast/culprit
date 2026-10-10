@@ -37,7 +37,7 @@ def test_diagnose_passes_everything_through_and_prints_the_verdict(write_session
                        {}, {"environment": "no environment fix supplied (culprit env-fix)"})
 
     monkeypatch.setattr(cli, "diagnose", fake_diagnose)
-    assert cli.main(["diagnose", "--yes", "s1:p1"]) == 0
+    assert cli.main(["diagnose", "s1:p1"]) == 0
     out = capsys.readouterr().out
     assert seen == {"symptom": "wrong-result", "follow_ups": ["still wrong"], "cap": 40.0, "env": None, "n": 5}
     assert "cause: harness" in out and "4/5" in out and "environment untested" in out
@@ -45,11 +45,11 @@ def test_diagnose_passes_everything_through_and_prints_the_verdict(write_session
 
 def test_diagnose_before_confirm_names_confirm(write_session, tmp_path, capsys):
     projects, runs = ready(write_session, tmp_path, confirm=False)
-    assert cli.main(["diagnose", "--yes", "s1:p1"]) == 3
+    assert cli.main(["diagnose", "s1:p1"]) == 3
     assert "culprit confirm" in capsys.readouterr().err
 
 
 def test_diagnose_before_confirm_names_triage_when_the_episode_is_not_queued(write_session, tmp_path, capsys):
     projects, runs = ready(write_session, tmp_path, confirm=False)
-    cli.main(["diagnose", "--yes", "s1:p1"])
+    cli.main(["diagnose", "s1:p1"])
     assert "culprit triage" in capsys.readouterr().err

@@ -1,4 +1,4 @@
-"""The most a replaying command can run and spend, worked out before it starts so the person can say yes first.
+"""The most a replaying command can run and spend, worked out and printed before it starts.
 
 Every count follows the real code path: each variant runs up to n + MAX_VOID_RETRIES replays, each replay is
 capped at its settings' budget plus one judge call, and drafting a task or instructions costs model calls.
