@@ -10,8 +10,10 @@ more often than the unchanged one (one-sided Fisher exact test, p < 0.05 over 5 
 ## How a diagnosis works
 
 1. `triage` splits your Claude Code logs (`~/.claude/projects/*.jsonl`) into episodes — one prompt and
-   everything until your next prompt — and ranks the likely failures. Each run merges into the stored
-   queue (`runs/candidates.json`), so episodes queued earlier are kept: the rows it prints become
+   everything until your next prompt — and ranks the likely failures. The strongest sign is your next
+   prompt correcting Claude ("no, still broken", "why are we…", "undo that"); the row shows it as
+   `corrected: …`. Interrupts, tool errors, compactions and slow turns order the rest. Each run merges
+   into the stored queue (`runs/candidates.json`), so episodes queued earlier are kept: the rows it prints become
    queue rows #1..#n, and earlier episodes it no longer shows follow them (`culprit status` lists all).
    Episodes a replay cannot use (say, their working directory is gone) come after every replayable one,
    with the reason printed under the row.

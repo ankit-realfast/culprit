@@ -114,3 +114,13 @@ def test_triage_rows_are_numbered_contiguously_when_kept_episodes_are_not_shown(
     assert rows == ["#1", "#2"]
     assert main(["confirm", "#1", "wasteful", "--runs", str(runs)]) == 0
     assert read_symptom(runs, "s2:p4").value == "wasteful"
+
+
+def test_triage_ranks_a_corrected_episode_first_and_shows_the_correction(write_session, tmp_path, capsys):
+    write_session([human("noisy but fine", "p1", session_id="s1"), interrupt("p1"), system("compact_boundary"),
+                   human("fix the login page", "p2", session_id="s1"), assistant(),
+                   human("no, still broken", "p3", session_id="s1"), assistant()])
+    main(["triage", "--projects", str(tmp_path / "projects"), "--runs", str(tmp_path / "runs")])
+    rows = [line for line in capsys.readouterr().out.splitlines() if line.lstrip().startswith("#")]
+    assert "s1:p2" in rows[0] and "[corrected: no, still broken" in rows[0]
+    assert "s1:p1" in rows[1]

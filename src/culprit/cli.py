@@ -17,7 +17,7 @@ from culprit.claude import ClaudeCallFailed, ask_claude
 from culprit.criterion import Criterion, approve_criterion, criterion_step, draft_criterion, load_criterion, save_criterion
 from culprit.diagnose import diagnose, retire_if_criterion_changed
 from culprit.eligibility import project_hooks, replay_blockers
-from culprit.episodes import Episode, episodes_from_session, session_files
+from culprit.episodes import Episode, session_files
 from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget, load_outcome, run_variant, stored_spend
 from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
 from culprit.preview import CostPlan, batch_cost, diagnose_cost_for, plan_cost, selftest_cost
@@ -34,7 +34,7 @@ from culprit.store import (NotReady, UnknownEpisode, candidate_rows, confirm_ste
                            record_symptom,
                            resolve_episode_id, save_candidates, short_id)
 from culprit.taxonomy import Symptom
-from culprit.triage import EpisodeSummary, rank_candidates
+from culprit.triage import rank_candidates, summarize_session
 
 DEFAULT_PROJECTS = Path.home() / ".claude" / "projects"
 RUNS_ENV = "CULPRIT_RUNS"
@@ -282,11 +282,7 @@ def approve_spend(args: argparse.Namespace, plan: CostPlan) -> int | None:
 
 
 def triage_command(args: argparse.Namespace) -> int:
-    summaries = [
-        EpisodeSummary.from_episode(episode)
-        for session_file in session_files(args.projects)
-        for episode in episodes_from_session(session_file)
-    ]
+    summaries = [summary for session_file in session_files(args.projects) for summary in summarize_session(session_file)]
     ranked = rank_candidates(summaries, args.top)
     blockers = {c.summary.episode_id: _blockers_for(args.projects, c.summary.episode_id) for c in ranked}
     # A row a replay cannot use goes after every row it can; the sort is stable, so score order holds within each.
@@ -323,7 +319,7 @@ def _blockers_for(projects: Path, episode_id: str) -> list[str]:
 
 
 def _evidence(signals: FailureSignals) -> str:
-    parts = []
+    parts = [f"corrected: {signals.corrected}"] if signals.corrected else []
     if signals.interrupted:
         parts.append("interrupted")
     if signals.tool_errors:

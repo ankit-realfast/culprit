@@ -61,6 +61,11 @@ def text_of(record: dict) -> str:
     return "\n".join(block.get("text", "") for block in content_blocks(record) if block.get("type") == "text")
 
 
+def excerpt(text: str, limit: int = 80) -> str:
+    one_line = " ".join(text.split())
+    return one_line if len(one_line) <= limit else one_line[: limit - 1] + "…"
+
+
 def is_interrupt(record: dict) -> bool:
     return record.get("type") == "user" and INTERRUPT_MARKER in text_of(record)
 
