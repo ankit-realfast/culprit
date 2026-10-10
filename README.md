@@ -53,6 +53,9 @@ uv run culprit diagnose <episode-id>
 uv run culprit report                           # writes runs/report.md
 ```
 
+`<episode-id>` can be the full id, the queue row triage prints (`#3`), the short id it prints
+(`1a2b3c4d:5e6f7a8b`) or any prefix that matches one episode in the queue or in `runs/`.
+
 Batch: `uv run culprit diagnose-all --per-episode 40 --total 400` diagnoses every prepared episode.
 
 Trust: label replays with `culprit review` / `culprit label <run> pass|fail`; `culprit calibration`

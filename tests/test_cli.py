@@ -49,3 +49,14 @@ def test_a_second_triage_keeps_the_queue_and_says_how_many_are_queued(write_sess
     assert "s2:p3" in out and "s1:p2" not in out
     assert "2 queued" in out
     assert main(["confirm", "s1:p2", "stopped-short", "--runs", str(runs)]) == 0
+
+
+def test_triage_numbers_rows_and_commands_take_the_number(write_session, tmp_path, capsys):
+    write_session([human("went wrong", "p2", session_id="s1"), interrupt("p2")])
+    runs = tmp_path / "runs"
+    main(["triage", "--projects", str(tmp_path / "projects"), "--runs", str(runs)])
+    assert "#1 " in capsys.readouterr().out
+    assert main(["confirm", "#1", "wasteful", "--runs", str(runs)]) == 0
+    assert read_symptom(runs, "s1:p2").value == "wasteful"
+    assert main(["confirm", "s1", "stopped-short", "--runs", str(runs)]) == 0
+    assert read_symptom(runs, "s1:p2").value == "stopped-short"

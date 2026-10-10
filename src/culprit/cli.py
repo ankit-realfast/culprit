@@ -25,7 +25,8 @@ from culprit.sandbox import (DEFAULT_FILE_HISTORY, apply_episode_originals, chec
 from culprit.selftest import CONTROL_MIN_PASSES, is_control, run_selftest, selftest_accuracy
 from culprit.signals import FailureSignals
 from culprit.snapshot import load_snapshot, session_root
-from culprit.store import NotReady, UnknownEpisode, candidate_rows, episode_dir, read_symptom, record_symptom, save_candidates
+from culprit.store import (NotReady, UnknownEpisode, candidate_rows, episode_dir, read_symptom, record_symptom,
+                           resolve_episode_id, save_candidates, short_id)
 from culprit.taxonomy import Symptom
 from culprit.triage import EpisodeSummary, rank_candidates
 
@@ -39,6 +40,8 @@ EXIT_BUDGET = 4
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if getattr(args, "episode_id", None):
+            args.episode_id = resolve_episode_id(args.runs, args.episode_id)
         return args.handler(args)
     except NotReady as missing:
         print(f"culprit: {missing}", file=sys.stderr)
@@ -151,14 +154,17 @@ def triage_command(args: argparse.Namespace) -> int:
     ]
     candidates = rank_candidates(summaries, args.top)
     path = save_candidates(args.runs, candidates)
+    queue = [row["summary"]["episode_id"] for row in candidate_rows(args.runs)]
     for candidate in candidates:
         s = candidate.summary
-        print(f"{candidate.score:>3}  {s.episode_id}  [{_evidence(s.signals)}]  {s.prompt_excerpt}")
+        row = f"#{queue.index(s.episode_id) + 1}"
+        print(f"{row:>4} {candidate.score:>3}  {short_id(s.episode_id)}  {s.episode_id}  "
+              f"[{_evidence(s.signals)}]  {s.prompt_excerpt}")
         blockers = _blockers_for(args.projects, s.episode_id)
         if blockers:
-            print(f"       not replayable: {'; '.join(blockers)}")
-    print(f"{len(summaries)} episodes scanned; top {len(candidates)} merged into {path} "
-          f"({len(candidate_rows(args.runs))} queued)")
+            print(f"            not replayable: {'; '.join(blockers)}")
+    print(f"{len(summaries)} episodes scanned; top {len(candidates)} merged into {path} ({len(queue)} queued); "
+          f"refer to an episode by its #row, short id or any unique prefix")
     return 0
 
 

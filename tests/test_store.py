@@ -3,7 +3,8 @@ import json
 import pytest
 
 from culprit.signals import FailureSignals
-from culprit.store import UnknownEpisode, episode_dir, read_symptom, record_symptom, save_candidates
+from culprit.store import (NotReady, UnknownEpisode, episode_dir, read_symptom, record_symptom, resolve_episode_id,
+                           save_candidates, short_id)
 from culprit.taxonomy import Symptom
 from culprit.triage import Candidate, EpisodeSummary
 
@@ -65,3 +66,41 @@ def test_a_new_triage_keeps_queued_episodes_and_takes_the_new_score(tmp_path):
         Candidate(EpisodeSummary("abc:p3", "/s.jsonl", "prompt", FailureSignals(True, 0, 0, 0, 1.0)), 1)])
     rows = json.loads(path.read_text())
     assert [(r["summary"]["episode_id"], r["score"]) for r in rows] == [("abc:p2", 8), ("abc:p1", 5), ("abc:p3", 1)]
+
+
+def test_resolve_takes_a_queue_row_number(tmp_path):
+    saved(tmp_path, "aaaa1111-x:p1", "bbbb2222-y:p2")
+    assert resolve_episode_id(tmp_path, "#2") == "bbbb2222-y:p2"
+    with pytest.raises(UnknownEpisode, match="#3"):
+        resolve_episode_id(tmp_path, "#3")
+
+
+def test_resolve_a_row_number_before_triage_is_not_ready(tmp_path):
+    with pytest.raises(NotReady, match="culprit triage"):
+        resolve_episode_id(tmp_path, "#1")
+
+
+def test_resolve_takes_a_unique_prefix_from_the_queue_or_a_folder(tmp_path):
+    saved(tmp_path, "aaaa1111-x:p1")
+    (tmp_path / "cccc3333-z__p9").mkdir()
+    assert resolve_episode_id(tmp_path, "aaaa") == "aaaa1111-x:p1"
+    assert resolve_episode_id(tmp_path, "cccc") == "cccc3333-z:p9"
+
+
+def test_resolve_lists_every_match_when_a_prefix_is_ambiguous(tmp_path):
+    saved(tmp_path, "aaaa1111-x:p1", "aaaa1111-x:p2")
+    with pytest.raises(UnknownEpisode, match="aaaa1111-x:p1.*aaaa1111-x:p2"):
+        resolve_episode_id(tmp_path, "aaaa")
+
+
+def test_resolve_refuses_text_that_matches_nothing(tmp_path):
+    with pytest.raises(UnknownEpisode, match="no episode in .* matches zzz"):
+        resolve_episode_id(tmp_path, "zzz")
+
+
+def test_resolve_passes_a_full_id_through_and_expands_a_short_one(tmp_path):
+    saved(tmp_path, "aaaa1111-session:pppp2222-prompt")
+    assert resolve_episode_id(tmp_path, "not:queued") == "not:queued"
+    assert resolve_episode_id(tmp_path, "aaaa1111-session:pppp2222-prompt") == "aaaa1111-session:pppp2222-prompt"
+    assert resolve_episode_id(tmp_path, "aaaa1111:pppp2222") == "aaaa1111-session:pppp2222-prompt"
+    assert short_id("aaaa1111-session:pppp2222-prompt") == "aaaa1111:pppp2222"
