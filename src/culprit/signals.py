@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from culprit.episodes import Episode, content_blocks, is_interrupt
 
@@ -29,13 +30,32 @@ def signals_for(episode: Episode) -> FailureSignals:
         ),
         api_errors=_count_system(records, "api_error"),
         compactions=_count_system(records, "compact_boundary"),
-        duration_s=sum(
-            record.get("durationMs") or 0
-            for record in records
-            if record.get("type") == "system" and record.get("subtype") == "turn_duration"
-        )
-        / 1000,
+        duration_s=_duration_s(records),
     )
+
+
+def _duration_s(records: tuple[dict, ...]) -> float:
+    """Claude Code writes turn_duration only for turns that finish; an interrupted turn has none, so
+    fall back to the span from the prompt to the last timestamped record."""
+    turns = [
+        record.get("durationMs") or 0
+        for record in records
+        if record.get("type") == "system" and record.get("subtype") == "turn_duration"
+    ]
+    if turns:
+        return sum(turns) / 1000
+    times = [t for t in (_parse_time(record.get("timestamp")) for record in records) if t is not None]
+    return (max(times) - min(times)).total_seconds() if len(times) >= 2 else 0.0
+
+
+def _parse_time(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def _count_system(records: tuple[dict, ...], subtype: str) -> int:

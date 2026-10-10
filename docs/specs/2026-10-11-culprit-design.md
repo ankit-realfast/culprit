@@ -120,7 +120,7 @@ state; v1 uses `claude -p` in a throwaway directory and revisits Harbor if isola
 | # | Unit | One job | Input → output |
 |---|---|---|---|
 | 1 | episodes | Split sessions into episodes | `.jsonl` → `Episode{prompt, transcript, model, cwd, branch, snapshot ref, signals}` |
-| 2 | triage | Rank failure candidates for the human to confirm, from interrupts, tool errors, compactions and slow turns; API errors are infrastructure failures, so they add nothing to the score and a row that has them is marked likely not reproducible | Episodes → confirmed episodes, each with a Symptom (human-confirmed; this is the Misjudged check) |
+| 2 | triage | Rank failure candidates for the human to confirm, from interrupts, tool errors, compactions and slow turns (an interrupted turn logs no duration, so it is timed from its first to its last timestamp); API errors are infrastructure failures, so they add nothing to the score and a row that has them is marked likely not reproducible | Episodes → confirmed episodes, each with a Symptom (human-confirmed; this is the Misjudged check) |
 | 3 | criterion | Draft what success means, from the human's follow-up messages | Episode → success criterion the human approves |
 | 4 | sandbox | Restore the episode's starting state in a throwaway directory | Episode → directory |
 | 5 | oracles | Build one variant per cause | Episode → variants: task, environment, agent setup, harness, model |
