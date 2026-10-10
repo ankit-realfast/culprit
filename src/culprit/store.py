@@ -45,7 +45,7 @@ def short_id(episode_id: str) -> str:
 
 def known_episode_ids(runs_dir: Path) -> list[str]:
     """Ids in the triage queue (queue order), then ids that have only an episode folder."""
-    ids = [row["summary"]["episode_id"] for row in candidate_rows(runs_dir)]
+    ids = queued_ids(runs_dir)
     if runs_dir.is_dir():
         folders = sorted(p.name.replace("__", ":", 1) for p in runs_dir.iterdir() if p.is_dir() and "__" in p.name)
         ids += [i for i in folders if i not in ids]
@@ -58,9 +58,7 @@ def resolve_episode_id(runs_dir: Path, text: str) -> str:
     A full id passes through unchanged even when nothing in runs/ knows it yet.
     """
     if text.startswith("#") and text[1:].isdigit():
-        rows = candidate_rows(runs_dir)
-        if not rows:
-            raise NotReady(f"{runs_dir / CANDIDATES_FILE} does not exist — run `culprit triage` first")
+        rows = require_queue(runs_dir)
         if not 1 <= int(text[1:]) <= len(rows):
             raise UnknownEpisode(f"{text} is not in the queue: it has {len(rows)} rows")
         return rows[int(text[1:]) - 1]["summary"]["episode_id"]
@@ -96,6 +94,18 @@ def candidate_rows(runs_dir: Path) -> list[dict]:
     return read_json(runs_dir / CANDIDATES_FILE, [])
 
 
+def require_queue(runs_dir: Path) -> list[dict]:
+    """candidate_rows for a step that needs triage to have run first."""
+    if not (runs_dir / CANDIDATES_FILE).is_file():
+        raise NotReady(f"{runs_dir / CANDIDATES_FILE} does not exist — run `culprit triage` first")
+    return candidate_rows(runs_dir)
+
+
+def queued_ids(runs_dir: Path) -> list[str]:
+    """Episode ids in the triage queue, in row order."""
+    return [row["summary"]["episode_id"] for row in candidate_rows(runs_dir)]
+
+
 def save_candidates(runs_dir: Path, candidates: list[Candidate]) -> Path:
     """Merge a new ranking into the stored queue by episode id, so a later triage never drops an episode
     already queued or confirmed. The new ranking comes first, in its own order, so the rows triage prints
@@ -107,7 +117,8 @@ def save_candidates(runs_dir: Path, candidates: list[Candidate]) -> Path:
 
 
 def record_symptom(runs_dir: Path, episode_id: str, symptom: Symptom) -> Path:
-    if episode_id not in _candidate_ids(runs_dir):
+    require_queue(runs_dir)
+    if episode_id not in queued_ids(runs_dir):
         raise UnknownEpisode(f"{episode_id} is not in {runs_dir / CANDIDATES_FILE}")
     return write_json(episode_dir(runs_dir, episode_id) / SYMPTOM_FILE,
                       {"episode_id": episode_id, "symptom": symptom.value})
@@ -116,7 +127,7 @@ def record_symptom(runs_dir: Path, episode_id: str, symptom: Symptom) -> Path:
 def confirm_step(runs_dir: Path, episode_id: str) -> str:
     """The command that records a symptom; confirm only accepts queued episodes, so name triage when needed."""
     shown = display_id(runs_dir, episode_id)
-    if episode_id in {row["summary"]["episode_id"] for row in candidate_rows(runs_dir)}:
+    if episode_id in queued_ids(runs_dir):
         return f"run `culprit confirm {shown} <symptom>`"
     return (f"it is not in the triage queue — run `culprit triage` until it is listed, "
             f"then `culprit confirm {shown} <symptom>`")
@@ -130,9 +141,3 @@ def read_symptom(runs_dir: Path, episode_id: str) -> Symptom | None:
 def load_restore(folder: Path) -> dict | None:
     return read_json(folder / RESTORE_FILE)
 
-
-def _candidate_ids(runs_dir: Path) -> set[str]:
-    path = runs_dir / CANDIDATES_FILE
-    if not path.exists():
-        raise NotReady(f"{path} does not exist — run `culprit triage` first")
-    return {row["summary"]["episode_id"] for row in json.loads(path.read_text())}

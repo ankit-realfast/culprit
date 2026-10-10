@@ -7,7 +7,7 @@ from pathlib import Path
 
 from culprit.criterion import Criterion, criterion_step, load_criterion
 from culprit.experiment import PRISTINE_DIR, VariantOutcome, load_outcome, load_outcomes, stored_spend
-from culprit.store import (candidate_rows, confirm_step, display_id, episode_dir, known_episode_ids, load_restore,
+from culprit.store import (confirm_step, display_id, episode_dir, known_episode_ids, load_restore, queued_ids,
                            read_symptom)
 from culprit.verdict import BASELINE, Verdict, load_verdict
 
@@ -30,7 +30,7 @@ class EpisodeStatus:
 
 def episode_status(runs_dir: Path, episode_id: str) -> EpisodeStatus:
     folder = episode_dir(runs_dir, episode_id)
-    queued = episode_id in {row["summary"]["episode_id"] for row in candidate_rows(runs_dir)}
+    queued = episode_id in queued_ids(runs_dir)
     symptom = read_symptom(runs_dir, episode_id)
     criterion = load_criterion(runs_dir, episode_id)
     verdict = load_verdict(folder)

@@ -33,8 +33,8 @@ from culprit.selftest import control_min_passes, is_control, run_selftest, selft
 from culprit.signals import FailureSignals
 from culprit.snapshot import load_snapshot, session_root
 from culprit.status import STAGES, EpisodeStatus, episode_status, next_step, queue_status
-from culprit.store import (CANDIDATES_FILE, RESTORE_FILE, NotReady, UnknownEpisode, candidate_rows, confirm_step, display_id,
-                           episode_dir, read_symptom, record_symptom, resolve_episode_id, save_candidates, write_json)
+from culprit.store import (RESTORE_FILE, NotReady, UnknownEpisode, confirm_step, display_id, episode_dir, queued_ids,
+                           read_symptom, record_symptom, require_queue, resolve_episode_id, save_candidates, write_json)
 from culprit.taxonomy import ORACLE_ORDER, Cause, Symptom
 from culprit.verdict import BASELINE, load_verdict, numbers_line
 from culprit.triage import rank_candidates, summarize_session
@@ -212,7 +212,7 @@ def triage_command(args: argparse.Namespace) -> int:
     # A row a replay cannot use goes after every row it can; the sort is stable, so score order holds within each.
     candidates = sorted(ranked, key=lambda c: bool(blockers[c.summary.episode_id]))
     path = save_candidates(args.runs, candidates)
-    queue = [row["summary"]["episode_id"] for row in candidate_rows(args.runs)]
+    queue = queued_ids(args.runs)
     shown = [display_id(args.runs, c.summary.episode_id) for c in candidates]
     id_width = max(map(len, shown), default=0)
     for name, candidate in zip(shown, candidates):
@@ -303,9 +303,7 @@ def confirm_queue(args: argparse.Namespace) -> int:
     if not stdin_is_tty():
         raise NotReady("confirm with no episode asks about each queued episode, so it needs a terminal — "
                        "otherwise run `culprit confirm <episode-id> <symptom>`")
-    rows = candidate_rows(args.runs)
-    if not rows:
-        raise NotReady(f"{args.runs / CANDIDATES_FILE} does not exist — run `culprit triage` first")
+    rows = require_queue(args.runs)
     shown_any = False
     for position, row in enumerate(rows, 1):
         episode_id = row["summary"]["episode_id"]
@@ -654,10 +652,8 @@ def report_command(args: argparse.Namespace) -> int:
 
 def diagnose_queue(args: argparse.Namespace) -> int:
     """Every confirmed episode in the queue: restore the ones not yet restored, diagnose them all, then report."""
-    if not (args.runs / CANDIDATES_FILE).is_file():
-        raise NotReady(f"{args.runs / CANDIDATES_FILE} does not exist — run `culprit triage` first")
-    for row in candidate_rows(args.runs):
-        episode_id = row["summary"]["episode_id"]
+    require_queue(args.runs)
+    for episode_id in queued_ids(args.runs):
         folder = episode_dir(args.runs, episode_id)
         criterion = load_criterion(args.runs, episode_id)
         if (folder / PRISTINE_DIR).is_dir() or load_verdict(folder) is not None \

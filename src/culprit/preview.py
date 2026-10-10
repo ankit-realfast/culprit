@@ -20,7 +20,7 @@ from culprit.experiment import MAX_VOID_RETRIES, load_outcome, stored_spend
 from culprit.oracles import DRAFTED_CAUSES, FABLE_PREFIX, HARNESS_BUDGET_MULTIPLIER, MAX_DRAFT_ATTEMPTS
 from culprit.replay import ReplaySettings
 from culprit.selftest import SELFTEST_DIR, PlantedFault, plant, selftest_dir
-from culprit.store import candidate_rows, episode_dir
+from culprit.store import episode_dir, queued_ids
 from culprit.taxonomy import ORACLE_ORDER, Cause
 from culprit.verdict import BASELINE, COMBINED, load_verdict
 
@@ -120,8 +120,7 @@ def batch_cost(runs_dir: Path, *, n: int, per_episode_usd: float, total_usd: flo
     spent = sum(stored_spend(folder) for folder in runs_dir.iterdir()
                 if folder.is_dir() and folder.name != SELFTEST_DIR) if runs_dir.is_dir() else 0.0
     plan = EMPTY
-    for row in candidate_rows(runs_dir):
-        episode_id = row["summary"]["episode_id"]
+    for episode_id in queued_ids(runs_dir):
         folder = episode_dir(runs_dir, episode_id)
         if load_verdict(folder) is not None or readiness_problem(runs_dir, episode_id):
             continue

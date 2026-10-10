@@ -6,7 +6,6 @@ stops and names the next episode, and rerunning resumes, because finished verdic
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -17,7 +16,7 @@ from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget, Pro
 from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
 from culprit.replay import SetupScriptFailed, baseline_settings
 from culprit.selftest import SELFTEST_DIR
-from culprit.store import CANDIDATES_FILE, confirm_step, display_id, episode_dir, read_symptom, short_id
+from culprit.store import confirm_step, display_id, episode_dir, queued_ids, read_symptom, require_queue, short_id
 from culprit.verdict import load_verdict
 
 ENV_FIX_FILE = "env-fix.sh"
@@ -50,7 +49,8 @@ def diagnose_all(runs_dir: Path, projects_dir: Path, *, n: int, per_episode_usd:
                  follow=follow_up_prompts, progress: Progress | None = None) -> BatchSummary:
     summary = BatchSummary()
     smallest_useful_usd = replay_budget_usd + CALL_CAP_USD  # one replay and its judgement
-    queued = [row["summary"]["episode_id"] for row in json.loads((runs_dir / CANDIDATES_FILE).read_text())]
+    require_queue(runs_dir)
+    queued = queued_ids(runs_dir)
     # the total covers every batch ever run in this folder, not just this one
     remaining = total_usd - sum(stored_spend(folder) for folder in runs_dir.iterdir()
                                 if folder.is_dir() and folder.name != SELFTEST_DIR)
