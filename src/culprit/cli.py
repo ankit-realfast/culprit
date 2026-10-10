@@ -7,7 +7,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from culprit.batch import ENV_FIX_FILE
+from culprit.batch import ENV_FIX_FILE, diagnose_all
 from culprit.calibration import (MIN_KAPPA, MIN_LABELS, UnknownRun, agreement, next_unlabelled, record_label,
                                  run_id, run_summary)
 from culprit.claude import ClaudeCallFailed, ask_claude
@@ -18,6 +18,7 @@ from culprit.episodes import Episode, episodes_from_session, session_files
 from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget, run_variant
 from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
 from culprit.replay import DEFAULT_REPLAY_BUDGET_USD, SetupScriptFailed, baseline_settings
+from culprit.report import REPORT_FILE, collect, render_report
 from culprit.sandbox import DEFAULT_FILE_HISTORY, apply_episode_originals, check_restore, restore
 from culprit.selftest import CONTROL_MIN_PASSES, is_control, run_selftest, selftest_accuracy
 from culprit.signals import FailureSignals
@@ -25,6 +26,7 @@ from culprit.snapshot import load_snapshot, session_root
 from culprit.store import UnknownEpisode, episode_dir, read_symptom, record_symptom, save_candidates
 from culprit.taxonomy import Symptom
 from culprit.triage import EpisodeSummary, rank_candidates
+
 DEFAULT_PROJECTS = Path.home() / ".claude" / "projects"
 DEFAULT_RUNS = Path("runs")
 
@@ -110,6 +112,18 @@ def build_parser() -> argparse.ArgumentParser:
     selftest.add_argument("--budget-per-fault", type=float, default=40.0)
     selftest.add_argument("--replay-budget", type=float, default=DEFAULT_REPLAY_BUDGET_USD)
     selftest.set_defaults(handler=selftest_command)
+
+    report = commands.add_parser("report", help="write runs/report.md from every stored verdict")
+    report.add_argument("--runs", type=Path, default=DEFAULT_RUNS)
+    report.set_defaults(handler=report_command)
+
+    batch = commands.add_parser("diagnose-all", help="diagnose every prepared episode in the queue, then report")
+    _projects_and_runs(batch)
+    batch.add_argument("--n", type=int, default=5)
+    batch.add_argument("--per-episode", type=float, default=40.0)
+    batch.add_argument("--total", type=float, default=400.0)
+    batch.add_argument("--replay-budget", type=float, default=DEFAULT_REPLAY_BUDGET_USD)
+    batch.set_defaults(handler=diagnose_all_command)
     return parser
 
 
@@ -306,4 +320,31 @@ def selftest_command(args: argparse.Namespace) -> int:
     for result in results:
         print(f"{result.fault}: expected {result.expected}, got {result.got} {'✓' if result.correct else '✗'}")
     print(f"{sum(r.correct for r in results)} of {len(results)} planted faults named correctly")
+    return 0
+
+
+def write_report(runs_dir: Path) -> str:
+    text = render_report(collect(runs_dir), trust_lines(runs_dir))
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    (runs_dir / REPORT_FILE).write_text(text)
+    return text
+
+
+def report_command(args: argparse.Namespace) -> int:
+    print(write_report(args.runs), end="")
+    return 0
+
+
+def diagnose_all_command(args: argparse.Namespace) -> int:
+    summary = diagnose_all(args.runs, args.projects, n=args.n, per_episode_usd=args.per_episode,
+                           total_usd=args.total, replay_budget_usd=args.replay_budget)
+    print(f"diagnosed {len(summary.diagnosed)}: {', '.join(summary.diagnosed) or 'none'}")
+    for episode_id, reason in summary.skipped.items():
+        print(f"{episode_id} skipped: {reason}")
+    for episode_id in summary.over_cap:
+        print(f"{episode_id} hit its ${args.per_episode:.2f} cap — rerun with a larger --per-episode to resume it")
+    if summary.stopped_at:
+        print(f"stopped at {summary.stopped_at}: the ${args.total:.2f} total is spent — rerun to continue from there")
+    write_report(args.runs)
+    print(f"spent ${summary.spent_usd:.2f}; report written to {args.runs / REPORT_FILE}")
     return 0
