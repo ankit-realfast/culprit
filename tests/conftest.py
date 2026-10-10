@@ -15,3 +15,17 @@ def write_session(tmp_path):
         return path
 
     return write
+
+
+@pytest.fixture(autouse=True)
+def isolated_from_real_data(tmp_path, monkeypatch):
+    """No test may read the real session logs or write the repo's runs/: defaults point inside tmp_path."""
+    import culprit.cli as cli
+    import culprit.replay as replay
+
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    monkeypatch.delenv("CULPRIT_RUNS", raising=False)
+    monkeypatch.setattr(cli, "DEFAULT_PROJECTS", tmp_path / "no-real-projects")
+    monkeypatch.setattr(replay, "DEFAULT_PROJECTS", tmp_path / "no-real-projects")
