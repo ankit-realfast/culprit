@@ -29,7 +29,7 @@ from culprit.sandbox import (DEFAULT_FILE_HISTORY, apply_episode_originals, chec
 from culprit.selftest import CONTROL_MIN_PASSES, is_control, run_selftest, selftest_accuracy
 from culprit.signals import FailureSignals
 from culprit.snapshot import load_snapshot, session_root
-from culprit.status import EpisodeStatus, episode_status, next_step, queue_status
+from culprit.status import STAGES, EpisodeStatus, episode_status, next_step, queue_status
 from culprit.store import (NotReady, UnknownEpisode, candidate_rows, confirm_step, display_id, episode_dir, read_symptom,
                            record_symptom,
                            resolve_episode_id, save_candidates, short_id)
@@ -358,8 +358,11 @@ def status_command(args: argparse.Namespace) -> int:
         return 0
     if not statuses:
         print("nothing queued — run `culprit triage`")
-    for status in statuses:
-        print(f"{short_id(status.episode_id)}  {status.stage:<18}  next: {status.next_step}")
+    shown = [display_id(args.runs, status.episode_id) for status in statuses]
+    id_width = max(map(len, shown), default=0)
+    stage_width = max(map(len, STAGES))
+    for name, status in zip(shown, statuses):
+        print(f"{name:<{id_width}}  {status.stage:<{stage_width}}  next: {status.next_step}")
     return 0
 
 

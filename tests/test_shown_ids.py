@@ -64,3 +64,14 @@ def test_refusals_name_the_short_id(write_session, tmp_path, capsys):
     assert cli.main(["diagnose", A, *flags]) == 3
     assert "culprit confirm aaaaaaaa:bbbbbbbb" in capsys.readouterr().err
     assert "culprit confirm cccccccc:dddddddd" in readiness_problem(runs, B)
+
+
+def test_status_rows_line_up_whatever_the_id_lengths(tmp_path, capsys):
+    runs = tmp_path / "runs"
+    queue(runs, A, TWIN, "s1:p1", B)
+    assert cli.main(["status", "--runs", str(runs)]) == 0
+    rows = capsys.readouterr().out.splitlines()
+    assert len(rows) == 4
+    assert len({row.index("next:") for row in rows}) == 1
+    assert len({row.index("queued") for row in rows}) == 1
+    assert rows[0].startswith(A) and rows[2].startswith("s1:p1 ") and rows[3].startswith("cccccccc:dddddddd ")
