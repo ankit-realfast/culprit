@@ -16,7 +16,7 @@ from culprit.criterion import Criterion, approve_criterion, draft_criterion, loa
 from culprit.diagnose import diagnose, retire_if_criterion_changed
 from culprit.eligibility import project_hooks, replay_blockers
 from culprit.episodes import Episode, episodes_from_session, session_files
-from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget, run_variant, stored_spend
+from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget, load_outcome, run_variant, stored_spend
 from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
 from culprit.replay import DEFAULT_REPLAY_BUDGET_USD, OriginalModified, SetupScriptFailed, baseline_settings
 from culprit.report import REPORT_FILE, RESTORE_FILE, collect, render_report
@@ -25,22 +25,31 @@ from culprit.sandbox import (DEFAULT_FILE_HISTORY, apply_episode_originals, chec
 from culprit.selftest import CONTROL_MIN_PASSES, is_control, run_selftest, selftest_accuracy
 from culprit.signals import FailureSignals
 from culprit.snapshot import load_snapshot, session_root
-from culprit.store import UnknownEpisode, candidate_rows, episode_dir, read_symptom, record_symptom, save_candidates
+from culprit.store import NotReady, UnknownEpisode, candidate_rows, episode_dir, read_symptom, record_symptom, save_candidates
 from culprit.taxonomy import Symptom
 from culprit.triage import EpisodeSummary, rank_candidates
 
 DEFAULT_PROJECTS = Path.home() / ".claude" / "projects"
 DEFAULT_RUNS = Path("runs")
+EXIT_REFUSED = 1
+EXIT_NOT_READY = 3
+EXIT_BUDGET = 4
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.handler(args)
-    except (UnknownEpisode, EpisodeNotFound, FileNotFoundError, ClaudeCallFailed, BudgetExhausted,
+    except NotReady as missing:
+        print(f"culprit: {missing}", file=sys.stderr)
+        return EXIT_NOT_READY
+    except BudgetExhausted as spent:
+        print(f"culprit: {spent}", file=sys.stderr)
+        return EXIT_BUDGET
+    except (UnknownEpisode, EpisodeNotFound, FileNotFoundError, ClaudeCallFailed,
             SetupScriptFailed, UnknownRun, OriginalModified) as refusal:
         print(f"culprit: {refusal}", file=sys.stderr)
-        return 1
+        return EXIT_REFUSED
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -191,7 +200,7 @@ def criterion_command(args: argparse.Namespace) -> int:
         return 0
     criterion = load_criterion(args.runs, args.episode_id)
     if criterion is None:
-        raise FileNotFoundError(f"no criterion for {args.episode_id} — run `culprit criterion draft {args.episode_id}` first")
+        raise NotReady(f"no criterion for {args.episode_id} — run `culprit criterion draft {args.episode_id}` first")
     state = "approved" if criterion.approved else "draft, not approved"
     print(f"[{state}]\nsuccess means: {criterion.success_means}")
     for check in criterion.checks:
@@ -247,10 +256,10 @@ def ready_to_replay(args: argparse.Namespace) -> tuple[Episode, Criterion]:
     episode = find_episode(args.projects, args.episode_id)
     criterion = load_criterion(args.runs, args.episode_id)
     if criterion is None or not criterion.approved:
-        raise FileNotFoundError(f"no approved criterion for {args.episode_id} — run "
+        raise NotReady(f"no approved criterion for {args.episode_id} — run "
                                 f"`culprit criterion draft {args.episode_id}` then `culprit criterion approve {args.episode_id}`")
     if not (episode_dir(args.runs, args.episode_id) / PRISTINE_DIR).is_dir():
-        raise FileNotFoundError(f"{args.episode_id} has no restored copy — run `culprit restore {args.episode_id}` first")
+        raise NotReady(f"{args.episode_id} has no restored copy — run `culprit restore {args.episode_id}` first")
     return episode, criterion
 
 
@@ -279,7 +288,7 @@ def diagnose_command(args: argparse.Namespace) -> int:
     episode, criterion = ready_to_replay(args)
     symptom = read_symptom(args.runs, args.episode_id)
     if symptom is None:
-        raise FileNotFoundError(f"{args.episode_id} has no confirmed symptom — run `culprit confirm {args.episode_id} <symptom>` first")
+        raise NotReady(f"{args.episode_id} has no confirmed symptom — run `culprit confirm {args.episode_id} <symptom>` first")
     env_script = episode_dir(args.runs, args.episode_id) / ENV_FIX_FILE
     verdict = diagnose(episode, criterion, symptom, baseline_settings(episode, args.replay_budget),
                        runs_dir=args.runs, follow_ups=follow_up_prompts(args.projects, args.episode_id),
@@ -331,9 +340,13 @@ def calibration_command(args: argparse.Namespace) -> int:
 def selftest_command(args: argparse.Namespace) -> int:
     episode, criterion = ready_to_replay(args)
     if not is_control(args.runs, args.episode_id):
-        print(f"culprit: {args.episode_id} is not a control — its baseline must pass at least "
-              f"{CONTROL_MIN_PASSES} of 5 (run `culprit baseline {args.episode_id}`)", file=sys.stderr)
-        return 1
+        baseline = load_outcome(episode_dir(args.runs, args.episode_id), "baseline")
+        if baseline is None:
+            raise NotReady(f"{args.episode_id} has no baseline — run `culprit baseline {args.episode_id}` first; "
+                           f"a control must pass at least {CONTROL_MIN_PASSES} of 5")
+        print(f"culprit: {args.episode_id} is not a control — its baseline passed {baseline.passes} of "
+              f"{baseline.runs}, and a control must pass at least {CONTROL_MIN_PASSES} of 5", file=sys.stderr)
+        return EXIT_REFUSED
     results = run_selftest(episode, criterion, baseline_settings(episode, args.replay_budget), runs_dir=args.runs,
                            follow_ups=follow_up_prompts(args.projects, args.episode_id), n=args.n,
                            budget_per_fault=args.budget_per_fault)

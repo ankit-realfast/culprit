@@ -45,5 +45,5 @@ def test_diagnose_passes_everything_through_and_prints_the_verdict(write_session
 
 def test_diagnose_before_confirm_names_confirm(write_session, tmp_path, capsys):
     projects, runs = ready(write_session, tmp_path, confirm=False)
-    assert cli.main(["diagnose", "s1:p1", "--projects", str(projects), "--runs", str(runs)]) == 1
+    assert cli.main(["diagnose", "s1:p1", "--projects", str(projects), "--runs", str(runs)]) == 3
     assert "culprit confirm" in capsys.readouterr().err

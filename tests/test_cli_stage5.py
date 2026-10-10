@@ -47,8 +47,14 @@ def test_selftest_refuses_an_episode_that_is_not_a_control(write_session, tmp_pa
         raise AssertionError("selftest spent money on an episode that is not a control")
 
     monkeypatch.setattr(cli, "run_selftest", must_not_run)
+    assert cli.main(["selftest", "s1:p1", "--projects", str(tmp_path / "projects"), "--runs", str(runs)]) == 3
+    assert "culprit baseline" in capsys.readouterr().err
+    outcome = episode_dir(runs, "s1:p1") / "replays" / "baseline" / "outcome.json"
+    outcome.parent.mkdir(parents=True)
+    outcome.write_text('{"variant": "baseline", "passes": 1, "runs": 5, "cost_usd": 1.0}')
     assert cli.main(["selftest", "s1:p1", "--projects", str(tmp_path / "projects"), "--runs", str(runs)]) == 1
-    assert "control" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "control" in err and "1 of 5" in err
 
 
 def test_selftest_prints_each_fault_and_the_accuracy(write_session, tmp_path, capsys, monkeypatch):

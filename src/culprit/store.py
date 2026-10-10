@@ -17,6 +17,10 @@ class UnknownEpisode(ValueError):
     pass
 
 
+class NotReady(FileNotFoundError):
+    """A step that must come first has not been done; the message names the command that does it."""
+
+
 def episode_dir(runs_dir: Path, episode_id: str) -> Path:
     return runs_dir / episode_id.replace(":", "__")
 
@@ -58,5 +62,5 @@ def read_symptom(runs_dir: Path, episode_id: str) -> Symptom | None:
 def _candidate_ids(runs_dir: Path) -> set[str]:
     path = runs_dir / CANDIDATES_FILE
     if not path.exists():
-        raise FileNotFoundError(f"{path} does not exist — run `culprit triage` first")
+        raise NotReady(f"{path} does not exist — run `culprit triage` first")
     return {row["summary"]["episode_id"] for row in json.loads(path.read_text())}

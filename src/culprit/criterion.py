@@ -11,7 +11,7 @@ from pathlib import Path
 
 from culprit.claude import Ask, ask_claude
 from culprit.episodes import Episode
-from culprit.store import episode_dir
+from culprit.store import NotReady, episode_dir
 
 CRITERION_FILE = "criterion.json"
 CRITERION_SCHEMA = {
@@ -80,7 +80,7 @@ def load_criterion(runs_dir: Path, episode_id: str) -> Criterion | None:
 def approve_criterion(runs_dir: Path, episode_id: str) -> Criterion:
     criterion = load_criterion(runs_dir, episode_id)
     if criterion is None:
-        raise FileNotFoundError(f"no criterion for {episode_id} — run `culprit criterion draft {episode_id}` first")
+        raise NotReady(f"no criterion for {episode_id} — run `culprit criterion draft {episode_id}` first")
     approved = replace(criterion, approved=True)
     save_criterion(runs_dir, episode_id, approved)
     return approved

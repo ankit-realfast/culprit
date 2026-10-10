@@ -60,6 +60,9 @@ shows how often the judge agrees with you (calibrated at ≥ 20 labels and Cohen
 `culprit selftest <episode-id>` plants a known fault in each layer of an episode that normally passes
 and reports how often culprit names it.
 
+Exit codes: 0 done · 1 refused or failed · 2 bad arguments · 3 not ready (a step that must come first
+is missing; the message names it) · 4 spend cap reached.
+
 ## Cost
 
 Each replay is capped at $2; a full diagnosis is about 30 replays, capped at $40 per episode by

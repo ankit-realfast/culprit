@@ -35,13 +35,13 @@ def test_baseline_runs_the_unchanged_episode_and_prints_the_pass_rate(write_sess
 
 def test_baseline_names_the_missing_step(write_session, tmp_path, capsys):
     projects, runs = setup_episode(write_session, tmp_path, approved=False)
-    assert cli.main(["baseline", "s1:p1", "--projects", str(projects), "--runs", str(runs)]) == 1
+    assert cli.main(["baseline", "s1:p1", "--projects", str(projects), "--runs", str(runs)]) == 3
     assert "culprit criterion approve" in capsys.readouterr().err
 
 
 def test_baseline_before_restore_names_restore(write_session, tmp_path, capsys):
     projects, runs = setup_episode(write_session, tmp_path, restored=False)
-    assert cli.main(["baseline", "s1:p1", "--projects", str(projects), "--runs", str(runs)]) == 1
+    assert cli.main(["baseline", "s1:p1", "--projects", str(projects), "--runs", str(runs)]) == 3
     assert "culprit restore" in capsys.readouterr().err
 
 
@@ -60,3 +60,15 @@ def test_baseline_counts_what_the_episode_already_spent(write_session, tmp_path,
     monkeypatch.setattr(cli, "run_variant", fake_run_variant)
     cli.main(["baseline", "s1:p1", "--projects", str(projects), "--runs", str(runs)])
     assert seen["spent"] == 3.0
+
+
+def test_baseline_over_budget_exits_4(write_session, tmp_path, capsys, monkeypatch):
+    from culprit.experiment import BudgetExhausted
+    projects, runs = setup_episode(write_session, tmp_path)
+
+    def over(*args, **kwargs):
+        raise BudgetExhausted("the next run could spend $3.20")
+
+    monkeypatch.setattr(cli, "run_variant", over)
+    assert cli.main(["baseline", "s1:p1", "--projects", str(projects), "--runs", str(runs)]) == 4
+    assert "$3.20" in capsys.readouterr().err

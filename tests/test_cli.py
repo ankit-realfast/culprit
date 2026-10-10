@@ -24,9 +24,17 @@ def test_confirm_records_a_symptom_for_a_queued_episode(write_session, tmp_path,
     assert read_symptom(runs, "s1:p2").value == "stopped-short"
 
 
-def test_confirm_refuses_an_unknown_episode_with_exit_1(tmp_path, capsys):
-    assert main(["confirm", "nope:p9", "wasteful", "--runs", str(tmp_path / "runs")]) == 1
+def test_confirm_before_triage_is_not_ready_with_exit_3(tmp_path, capsys):
+    (tmp_path / "runs").mkdir()
+    assert main(["confirm", "nope:p9", "wasteful", "--runs", str(tmp_path / "runs")]) == 3
     assert "culprit triage" in capsys.readouterr().err
+
+
+def test_confirm_refuses_an_unknown_episode_with_exit_1(write_session, tmp_path, capsys):
+    write_session([human("went wrong", "p2", session_id="s1"), interrupt("p2")])
+    runs = tmp_path / "runs"
+    main(["triage", "--projects", str(tmp_path / "projects"), "--runs", str(runs)])
+    assert main(["confirm", "s1:p2nope", "wasteful", "--runs", str(runs)]) == 1
 
 
 def test_a_second_triage_keeps_the_queue_and_says_how_many_are_queued(write_session, tmp_path, capsys):

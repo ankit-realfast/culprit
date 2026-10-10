@@ -75,3 +75,11 @@ def test_restore_stores_its_trust_figures_for_the_report(write_session, tmp_path
     stored = json.loads((runs / "s1__p1" / "restore.json").read_text())
     assert stored == {"git_commit": None, "set_from_git": 0, "removed_by_git": 0, "snapshot_agreed": 1, "checked": 1, "restored": 1, "unknown": 0, "missing_backups": 0,
                       "outside_cwd": 0, "set_from_episode": 1, "removed": 0}
+
+
+def test_criterion_approve_or_show_before_draft_is_not_ready(tmp_path, capsys):
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    assert cli.main(["criterion", "approve", "s1:p1", "--runs", str(runs)]) == 3
+    assert cli.main(["criterion", "show", "s1:p1", "--runs", str(runs)]) == 3
+    assert "culprit criterion draft" in capsys.readouterr().err
