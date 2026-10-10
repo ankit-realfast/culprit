@@ -47,3 +47,9 @@ def test_diagnose_before_confirm_names_confirm(write_session, tmp_path, capsys):
     projects, runs = ready(write_session, tmp_path, confirm=False)
     assert cli.main(["diagnose", "s1:p1", "--projects", str(projects), "--runs", str(runs)]) == 3
     assert "culprit confirm" in capsys.readouterr().err
+
+
+def test_diagnose_before_confirm_names_triage_when_the_episode_is_not_queued(write_session, tmp_path, capsys):
+    projects, runs = ready(write_session, tmp_path, confirm=False)
+    cli.main(["diagnose", "s1:p1", "--projects", str(projects), "--runs", str(runs)])
+    assert "culprit triage" in capsys.readouterr().err

@@ -83,3 +83,23 @@ def test_criterion_approve_or_show_before_draft_is_not_ready(tmp_path, capsys):
     assert cli.main(["criterion", "approve", "s1:p1", "--runs", str(runs)]) == 3
     assert cli.main(["criterion", "show", "s1:p1", "--runs", str(runs)]) == 3
     assert "culprit criterion draft" in capsys.readouterr().err
+
+
+def test_criterion_draft_refuses_to_overwrite_unless_forced(write_session, tmp_path, capsys, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    projects = projects_with_one_episode(write_session, tmp_path, repo)
+    runs = tmp_path / "runs"
+    monkeypatch.setattr(cli, "ask_claude", FakeAsk({"success_means": "first", "checks": [], "must_not": []}))
+    cli.main(["criterion", "draft", "s1:p1", "--projects", str(projects), "--runs", str(runs)])
+    cli.main(["criterion", "approve", "s1:p1", "--runs", str(runs)])
+    capsys.readouterr()
+    second = FakeAsk({"success_means": "second", "checks": [], "must_not": []})
+    monkeypatch.setattr(cli, "ask_claude", second)
+    assert cli.main(["criterion", "draft", "s1:p1", "--projects", str(projects), "--runs", str(runs)]) == 1
+    err = capsys.readouterr().err
+    assert "culprit criterion show s1:p1" in err and "--force" in err
+    assert second.calls == [] and load_criterion(runs, "s1:p1").success_means == "first"
+    assert cli.main(["criterion", "draft", "s1:p1", "--force", "--projects", str(projects), "--runs", str(runs)]) == 0
+    assert load_criterion(runs, "s1:p1") .success_means == "second"
+    assert load_criterion(runs, "s1:p1").approved is False

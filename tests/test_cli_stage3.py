@@ -36,7 +36,8 @@ def test_baseline_runs_the_unchanged_episode_and_prints_the_pass_rate(write_sess
 def test_baseline_names_the_missing_step(write_session, tmp_path, capsys):
     projects, runs = setup_episode(write_session, tmp_path, approved=False)
     assert cli.main(["baseline", "s1:p1", "--projects", str(projects), "--runs", str(runs)]) == 3
-    assert "culprit criterion approve" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "culprit criterion approve" in err and "criterion draft" not in err
 
 
 def test_baseline_before_restore_names_restore(write_session, tmp_path, capsys):

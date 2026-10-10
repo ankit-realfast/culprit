@@ -77,6 +77,13 @@ def load_criterion(runs_dir: Path, episode_id: str) -> Criterion | None:
     return Criterion(data["success_means"], tuple(data["checks"]), tuple(data["must_not"]), bool(data["approved"]))
 
 
+def criterion_step(criterion: Criterion | None, episode_id: str) -> str:
+    """The command that gets this episode an approved criterion; never suggests redrafting over a draft."""
+    if criterion is None:
+        return f"run `culprit criterion draft {episode_id}` then `culprit criterion approve {episode_id}`"
+    return f"review it with `culprit criterion show {episode_id}`, then run `culprit criterion approve {episode_id}`"
+
+
 def approve_criterion(runs_dir: Path, episode_id: str) -> Criterion:
     criterion = load_criterion(runs_dir, episode_id)
     if criterion is None:

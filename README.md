@@ -15,6 +15,7 @@ more often than the unchanged one (one-sided Fisher exact test, p < 0.05 over 5 
 2. You `confirm` what went wrong: `stopped-short`, `wrong-result`, `ignored-instructions`, `wasteful`,
    or `no-failure`.
 3. `criterion draft` writes what success means from your follow-up messages; you edit and `approve` it.
+   Drafting again over an existing criterion needs `--force` (it replaces it with a new unapproved draft).
 4. `restore` rebuilds the files the episode started from in a throwaway copy.
 5. `baseline` replays the episode unchanged 5 times. Passing 3+ times means the failure was luck.
 6. `diagnose` replays it with one layer improved at a time, cheapest fix first:

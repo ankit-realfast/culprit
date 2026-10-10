@@ -63,6 +63,7 @@ def test_readiness_names_the_first_missing_step(tmp_path):
     prepare(tmp_path, "d:1")
     assert "culprit confirm" in readiness_problem(tmp_path, "a:1")
     assert "culprit criterion approve" in readiness_problem(tmp_path, "b:1")
+    assert "criterion draft" not in readiness_problem(tmp_path, "b:1")  # drafting again would overwrite it
     assert "culprit restore" in readiness_problem(tmp_path, "c:1")
     assert readiness_problem(tmp_path, "d:1") is None
 
@@ -143,3 +144,9 @@ def test_one_failing_episode_does_not_end_the_batch(tmp_path):
     summary = run(runs, flaky)
     assert "judge overloaded" in summary.skipped["a:1"]
     assert summary.diagnosed == ["b:1"]
+
+
+def test_readiness_with_no_criterion_names_draft(tmp_path):
+    prepare(tmp_path, "a:1")
+    (episode_dir(tmp_path, "a:1") / "criterion.json").unlink()
+    assert "culprit criterion draft a:1" in readiness_problem(tmp_path, "a:1")

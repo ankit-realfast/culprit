@@ -97,6 +97,14 @@ def record_symptom(runs_dir: Path, episode_id: str, symptom: Symptom) -> Path:
     return path
 
 
+def confirm_step(runs_dir: Path, episode_id: str) -> str:
+    """The command that records a symptom; confirm only accepts queued episodes, so name triage when needed."""
+    if episode_id in {row["summary"]["episode_id"] for row in candidate_rows(runs_dir)}:
+        return f"run `culprit confirm {episode_id} <symptom>`"
+    return (f"it is not in the triage queue — run `culprit triage` until it is listed, "
+            f"then `culprit confirm {episode_id} <symptom>`")
+
+
 def read_symptom(runs_dir: Path, episode_id: str) -> Symptom | None:
     path = episode_dir(runs_dir, episode_id) / SYMPTOM_FILE
     if not path.exists():

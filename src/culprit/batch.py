@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from culprit.claude import ClaudeCallFailed
-from culprit.criterion import load_criterion
+from culprit.criterion import criterion_step, load_criterion
 from culprit.diagnose import diagnose
 from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget, stored_spend
 from culprit.judge import JUDGE_CALL_CAP_USD
@@ -38,7 +38,7 @@ def readiness_problem(runs_dir: Path, episode_id: str) -> str | None:
         return f"not confirmed — run `culprit confirm {episode_id} <symptom>`"
     criterion = load_criterion(runs_dir, episode_id)
     if criterion is None or not criterion.approved:
-        return f"no approved criterion — run `culprit criterion draft {episode_id}` then `culprit criterion approve {episode_id}`"
+        return f"no approved criterion — {criterion_step(criterion, episode_id)}"
     if not (episode_dir(runs_dir, episode_id) / PRISTINE_DIR).is_dir():
         return f"not restored — run `culprit restore {episode_id}`"
     return None

@@ -12,7 +12,7 @@ from culprit.batch import ENV_FIX_FILE, diagnose_all
 from culprit.calibration import (MIN_KAPPA, MIN_LABELS, UnknownRun, agreement, next_unlabelled, record_label,
                                  run_id, run_summary)
 from culprit.claude import ClaudeCallFailed, ask_claude
-from culprit.criterion import Criterion, approve_criterion, draft_criterion, load_criterion, save_criterion
+from culprit.criterion import Criterion, approve_criterion, criterion_step, draft_criterion, load_criterion, save_criterion
 from culprit.diagnose import diagnose, retire_if_criterion_changed
 from culprit.eligibility import project_hooks, replay_blockers
 from culprit.episodes import Episode, episodes_from_session, session_files
@@ -25,7 +25,7 @@ from culprit.sandbox import (DEFAULT_FILE_HISTORY, apply_episode_originals, chec
 from culprit.selftest import CONTROL_MIN_PASSES, is_control, run_selftest, selftest_accuracy
 from culprit.signals import FailureSignals
 from culprit.snapshot import load_snapshot, session_root
-from culprit.store import (NotReady, UnknownEpisode, candidate_rows, episode_dir, read_symptom, record_symptom,
+from culprit.store import (NotReady, UnknownEpisode, candidate_rows, confirm_step, episode_dir, read_symptom, record_symptom,
                            resolve_episode_id, save_candidates, short_id)
 from culprit.taxonomy import Symptom
 from culprit.triage import EpisodeSummary, rank_candidates
@@ -73,6 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
     criterion = commands.add_parser("criterion", help="draft, show or approve what success means for an episode")
     criterion.add_argument("action", choices=["draft", "show", "approve"])
     criterion.add_argument("episode_id")
+    criterion.add_argument("--force", action="store_true", help="draft: replace an existing criterion")
     _projects_and_runs(criterion)
     criterion.set_defaults(handler=criterion_command)
 
@@ -195,6 +196,10 @@ def confirm_command(args: argparse.Namespace) -> int:
 
 def criterion_command(args: argparse.Namespace) -> int:
     if args.action == "draft":
+        if load_criterion(args.runs, args.episode_id) is not None and not args.force:
+            print(f"culprit: {args.episode_id} already has a criterion — view it with `culprit criterion show "
+                  f"{args.episode_id}`; `--force` replaces it with a new unapproved draft", file=sys.stderr)
+            return EXIT_REFUSED
         episode = find_episode(args.projects, args.episode_id)
         follow_ups = follow_up_prompts(args.projects, args.episode_id)
         path = save_criterion(args.runs, args.episode_id, draft_criterion(episode, follow_ups, ask=ask_claude))
@@ -262,8 +267,7 @@ def ready_to_replay(args: argparse.Namespace) -> tuple[Episode, Criterion]:
     episode = find_episode(args.projects, args.episode_id)
     criterion = load_criterion(args.runs, args.episode_id)
     if criterion is None or not criterion.approved:
-        raise NotReady(f"no approved criterion for {args.episode_id} — run "
-                                f"`culprit criterion draft {args.episode_id}` then `culprit criterion approve {args.episode_id}`")
+        raise NotReady(f"no approved criterion for {args.episode_id} — {criterion_step(criterion, args.episode_id)}")
     if not (episode_dir(args.runs, args.episode_id) / PRISTINE_DIR).is_dir():
         raise NotReady(f"{args.episode_id} has no restored copy — run `culprit restore {args.episode_id}` first")
     return episode, criterion
@@ -294,7 +298,7 @@ def diagnose_command(args: argparse.Namespace) -> int:
     episode, criterion = ready_to_replay(args)
     symptom = read_symptom(args.runs, args.episode_id)
     if symptom is None:
-        raise NotReady(f"{args.episode_id} has no confirmed symptom — run `culprit confirm {args.episode_id} <symptom>` first")
+        raise NotReady(f"{args.episode_id} has no confirmed symptom — {confirm_step(args.runs, args.episode_id)}")
     env_script = episode_dir(args.runs, args.episode_id) / ENV_FIX_FILE
     verdict = diagnose(episode, criterion, symptom, baseline_settings(episode, args.replay_budget),
                        runs_dir=args.runs, follow_ups=follow_up_prompts(args.projects, args.episode_id),
