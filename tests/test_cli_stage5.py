@@ -112,3 +112,14 @@ def test_selftest_prints_each_fault_and_the_accuracy(write_session, tmp_path, ca
     assert "weak-model: expected model, got model ✓" in out
     assert "truncated-prompt: expected task, got harness ✗" in out
     assert "1 of 2 planted faults named correctly" in out
+
+
+def test_review_asks_with_the_shared_chooser(tmp_path, capsys, monkeypatch):
+    judged(tmp_path / "runs", 0, True)
+    asked = []
+    monkeypatch.setattr(cli, "stdin_is_tty", lambda: True)
+    answers = ["2"]
+    monkeypatch.setattr("builtins.input", lambda prompt="": asked.append(prompt) or answers.pop(0))
+    assert cli.main(["review"]) == 0
+    assert asked == ["your verdict? 1 pass · 2 fail · 3 skip · 4 quit: "]
+    assert json.loads((tmp_path / "runs/s1__p1/replays/baseline/0/human_label.json").read_text())["passed"] is False

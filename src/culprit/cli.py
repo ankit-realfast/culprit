@@ -577,11 +577,6 @@ def trust_lines(runs_dir: Path) -> list[str]:
     return [f"judge: {result.agreed} of {result.labelled} labels agree, kappa {kappa} — {state}", planted]
 
 
-REVIEW_QUESTION = "your verdict? [p]ass / [f]ail / [s]kip / [q]uit: "
-REVIEW_ANSWERS = {"p": "pass", "pass": "pass", "f": "fail", "fail": "fail", "s": "skip", "skip": "skip",
-                  "q": "quit", "quit": "quit"}
-
-
 def review_command(args: argparse.Namespace) -> int:
     """Show each judged replay nobody has labelled and record the person's pass/fail, until none are left."""
     if not stdin_is_tty():
@@ -590,12 +585,7 @@ def review_command(args: argparse.Namespace) -> int:
     skipped: set[Path] = set()
     while (run_dir := next_unlabelled(args.runs, skip=skipped)) is not None:
         print(f"\n{run_id(args.runs, run_dir)}\n{run_summary(run_dir)}")
-        answer = None
-        while answer is None:
-            try:
-                answer = REVIEW_ANSWERS.get(input(REVIEW_QUESTION).strip().lower())
-            except EOFError:
-                answer = "quit"
+        answer = choose("your verdict?", ("pass", "fail", "skip", "quit"))
         if answer == "quit":
             break
         if answer == "skip":
