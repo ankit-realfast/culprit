@@ -150,7 +150,7 @@ limited by what is left of the cap), then start without asking.
 
 ## Status
 
-Built and unit-tested (199 tests); a final review's critical and important findings are fixed. Triage
+Built and unit-tested (340 tests); a final review's critical and important findings are fixed. Triage
 and restore have run on real logs; no real episode has been replayed yet — start with one
 `diagnose` and read its output before anything larger.
 

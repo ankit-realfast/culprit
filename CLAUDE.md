@@ -9,31 +9,35 @@ headless `claude -p` with one layer changed at a time (task, environment, agent 
 and reports which change makes it pass. Input is the user's own session logs in
 `~/.claude/projects/*.jsonl`; everything runs locally.
 
-**Current state:** design and plan only — no code yet. The source of truth is:
+**Current state:** built and unit-tested (`uv run pytest -q`); not yet run end to end on a paid replay. The
+source of truth is:
 
 - `docs/specs/2026-10-11-culprit-design.md` — the taxonomy (symptom × cause axes), architecture, validity guards, known limits.
 - `docs/plans/2026-10-11-culprit-plan.md` — six stages, executed in order, each task written test-first with exact code, file paths and commands. Implement it task by task (the plan names `superpowers:subagent-driven-development` or `superpowers:executing-plans`). Each stage lists its own Global Constraints and Review Focus; read them before starting that stage.
 
 If code and spec/plan disagree, the spec wins; change the spec deliberately rather than drifting from it.
 
-## Commands (once Stage 1 Task 1.1 creates `pyproject.toml`)
+## Commands
 
 ```bash
 uv sync                                   # install (pytest is the only dev dependency)
 uv run pytest -v                          # all tests
 uv run pytest tests/test_episodes.py -v   # one file
 uv run pytest tests/test_episodes.py::test_a_partial_last_line_is_skipped   # one test
-uv run culprit triage --top 20            # CLI entry point (later: confirm, criterion, restore,
-                                          # baseline, env-fix, diagnose, review, label,
-                                          # calibration, selftest, report, diagnose-all)
+uv run culprit --help                     # commands: triage, confirm, diagnose, report, status,
+                                          # env-fix, review, selftest
 ```
 
-## Architecture (planned)
+The CLI keeps flags to `triage --top` and `status --json`; the store and the logs come from `CULPRIT_RUNS`
+(default `runs/`) and `CULPRIT_PROJECTS` (default `~/.claude/projects`). Episodes can be named by `#row`,
+short id or unique prefix. Don't add flags or subcommands without the user asking.
+
+## Architecture
 
 Stdlib-only Python ≥3.11 package under `src/culprit/`, one module per job. Pipeline per episode:
 
 episodes → triage (human confirms symptom) → criterion (human approves success criterion) → restore
-(starting files rebuilt in a throwaway dir) → baseline (N=5 unchanged replays, judged) → oracles
+(starting files rebuilt in a throwaway dir) → baseline (N=10 unchanged replays, judged) → oracles
 (one variant per cause, leak-checked) → verdict (Fisher test, first match wins, then pair test) →
 report (symptom × cause grid, ranked fix list). Calibration and selftest measure culprit's own trust.
 
@@ -52,4 +56,6 @@ Key cross-cutting rules:
 
 - `runs/` is gitignored and holds client work: **real session content never enters the repo**. Tests use synthetic records (`tests/records.py`).
 - Tests never call the real `claude` binary — inject a fake. Real calls happen only in each task's explicit manual step.
+  `tests/conftest.py` enforces this (a failing stand-in `claude` first on PATH) and points every default at
+  tmp paths, so no test reads real logs or writes the repo's `runs/`; keep both guards.
 - No runtime dependencies beyond the standard library.
