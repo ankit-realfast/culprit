@@ -18,8 +18,13 @@ more often than the unchanged one (one-sided Fisher exact test, p < 0.05 over 10
    Episodes a replay cannot use (say, their working directory is gone) come after every replayable one,
    with the reason printed under the row.
 2. You `confirm` what went wrong: `stopped-short`, `wrong-result`, `ignored-instructions`, `wasteful`,
-   or `no-failure`. confirm then drafts what success means from your follow-up messages and prints it;
-   edit `runs/<episode>/criterion.json` if it is wrong, then run the same `confirm` again to approve it.
+   or `no-failure`. confirm then drafts what success means from your follow-up messages and prints it.
+   With no episode id, `culprit confirm` walks the queue in order (in a terminal): for each episode not yet
+   done it shows the row (prompt, evidence, why it cannot be replayed), asks the symptom (or s to skip, q to
+   quit), drafts the criterion and asks you to approve it, edit it later or skip, then restores the
+   starting files when a replay can use the episode. Episodes already past a step skip it.
+   One at a time: `culprit confirm <episode-id> <symptom>` records and drafts; edit
+   `runs/<episode>/criterion.json` if it is wrong, then run the same `confirm` again to approve it.
    A criterion is never redrafted over; to change one, edit its file.
 3. `diagnose` rebuilds the files the episode started from in a throwaway copy (once), then replays the
    episode unchanged 10 times. Passing 6+ times means the failure was luck.
@@ -54,7 +59,8 @@ uv run pytest -q
 
 ```bash
 uv run culprit triage --top 40
-uv run culprit confirm <episode-id> wrong-result   # drafts the criterion; edit runs/<episode>/criterion.json
+uv run culprit confirm                             # walk the queue: symptom, criterion, restore
+uv run culprit confirm <episode-id> wrong-result   # or one episode: drafts the criterion; edit runs/<episode>/criterion.json
 uv run culprit confirm <episode-id> wrong-result   # again, to approve it
 uv run culprit diagnose <episode-id>               # restore, baseline, oracles; read runs/<episode>/replays/
 uv run culprit diagnose                            # every confirmed episode in the queue, then the report
