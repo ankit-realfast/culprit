@@ -37,11 +37,11 @@ Claude Code did until the next human prompt, identified by the log's `promptId`.
 | # | Cause | Proven when | You change |
 |---|---|---|---|
 | 1 | Misjudged | The human (or an independent check) says it was not a failure | Your label |
-| 2 | Not reproducible | The unchanged replay already passes at a rate indistinguishable from the best variant | Nothing — it was luck |
+| 2 | Not reproducible | The unchanged replay already passes most of the time (at least 3 of 5; §3) | Nothing — it was luck |
 | 3 | Task | Only the request is restated clearly, and it passes | How you ask |
 | 4 | Environment | Only the outside world is fixed (flaky test, network, broken repo state), and it passes | Repo or infrastructure |
 | 5 | Agent setup | Same model and tools, better instructions or role, and it passes | CLAUDE.md, rules, skills, subagent definitions |
-| 6 | Harness | Same model and instructions, given what it lacked (context, a working tool, permission, an unharmed compaction), and it passes. Tagged **yours** or **vendor's** | Tools, MCP, hooks, settings |
+| 6 | Harness | Same model and instructions, given what it lacked (context, a working tool, permission, an unharmed compaction), and it passes | Tools, MCP, hooks, settings |
 | 7 | Model | Only a stronger model (`claude-fable-5-1`) makes it pass | `--model` or routing |
 | 8 | Multi-cause | No single variant passes, but a pair does; the pair is reported | Both layers |
 | 9 | Unexplained | Nothing passes | Human review |
@@ -74,7 +74,7 @@ unchanged baseline's over N replays — the exact test is in §3, *What "passes 
 **Restoring an episode's starting state.** Claude Code backs up every file it edits. The snapshot keyed
 by the episode's prompt `uuid` maps each tracked path (relative to `cwd`, or absolute) to a backup file;
 `backupFileName: null` is read as "the file did not exist yet" — **an assumption Stage 2 verifies on a
-real episode** by comparing a restored file with what the episode's first `Read` of it returned. Files
+real episode** by comparing each restored file with the `originalFile` its first `Edit` in the episode recorded (the whole file before that edit; a `Read` may show only a line range). Files
 Claude Code never edited are not backed up, so they are taken from the working directory as it is today:
 restore fidelity is exact for tracked files and best-effort for the rest, and every verdict says so.
 
@@ -115,7 +115,7 @@ state; v1 uses `claude -p` in a throwaway directory and revisits Harbor if isola
 | 4 | sandbox | Restore the episode's starting state in a throwaway directory | Episode → directory |
 | 5 | oracles | Build one variant per cause | Episode → variants: task, environment, agent setup, harness, model |
 | 6 | replayer | Run each variant N times, baseline first | Variant + directory → stream-json transcripts, cost |
-| 7 | judge | Score a replay against the criterion | Transcript + criterion → pass/fail |
+| 7 | judge | Score a replay against the criterion | Final answer, diff, check results and the transcript's tool calls + criterion → pass/fail |
 | 8 | verdict | Apply the cause checklist to the pass rates, then the pair test | Pass rates → Cause |
 | 9 | report | Roll verdicts into the grid and a ranked fix list | Verdicts → report |
 | 10 | selftest | Plant known faults and check culprit names them | Planted episodes → accuracy |
@@ -150,13 +150,13 @@ claude -p "<episode or variant prompt>" \
 ### Which episodes are replayable
 
 An episode is replayable only if its `cwd` still exists, its snapshot exists, it used no MCP tool, and it
-never called `AskUserQuestion`. culprit reports the reason for every episode it skips.
+never called `AskUserQuestion`. `triage` prints the blocking reason under every queued candidate, and `restore` refuses with the reasons; `restore` also lists every hook the project's own settings define, because those hooks run in every replay.
 
 ### The oracles, concretely
 
 | Variant | What changes from the baseline | Untested when |
 |---|---|---|
-| Task | The prompt, rewritten from the original prompt and the human's follow-ups to state scope and success criterion | The leak check rejects it twice |
+| Task | The prompt, rewritten from the original prompt and the approved criterion to state scope and success criterion (the follow-ups reach it only through the criterion, which limits leaks; the leak check still compares the draft with them) | The leak check rejects it twice |
 | Environment | A fix script the human supplies (`culprit env-fix`) runs in the clone before the replay | No script supplied (the common case in v1) |
 | Agent setup | An appended system prompt (`--append-system-prompt`) drafted from the criterion: standing instructions, no task-specific facts | The leak check rejects it twice |
 | Harness | The default tool set with every non-safety restriction lifted, the files the episode read or edited preloaded into the prompt as context, and double the spend cap | Never |
@@ -199,6 +199,8 @@ the full set.
 - Episodes that used an MCP tool are excluded from v1, because replays connect no MCP server.
 - v1 replays from the episode's start, not from the step where it went wrong; mid-episode branching is
   deferred until v1 proves the method.
+- A Harness verdict cannot say whether the fix is yours (configuration) or the vendor's (a Claude Code
+  bug): an intervention shows what made it pass, not who must change it. The human reads the evidence.
 - Cost: about 30 replays per episode (baseline ×5 plus five variants ×5), ~25 minutes at the median turn
   length. v1 is capped at 10–20 episodes.
 - The logs are client work; everything runs locally and only the model calls Claude Code already makes

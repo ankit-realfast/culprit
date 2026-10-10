@@ -6,7 +6,7 @@
 
 **Spec:** [`docs/specs/2026-10-11-culprit-design.md`](../specs/2026-10-11-culprit-design.md)
 
-**How to read this file:** one master plan in six stages, executed in order. Each stage ends in working, tested software and is proven on the real logs before the next starts. Each stage lists its own Goal, Architecture, Global Constraints, measured facts, Review Focus, files and tasks; a stage's tasks may use any interface an earlier stage produced.
+**How to read this file:** one master plan in six stages, executed in order. Where a task says "add to the imports", put each line in the file's top import block (standard library first, then `culprit`); where it says "append", leave two blank lines before the appended definitions. Each stage ends in working, tested software and is proven on the real logs before the next starts. Each stage lists its own Goal, Architecture, Global Constraints, measured facts, Review Focus, files and tasks; a stage's tasks may use any interface an earlier stage produced.
 
 | Stage | Delivers |
 |---|---|
@@ -1745,13 +1745,17 @@ git status --short   # must print nothing
   - `Tracked = dict[str, str | None]` — tracked path → backup file name, or `None` for a file that did not exist yet.
   - `load_snapshot(episode: Episode) -> Tracked | None` — the last `file-history-snapshot` whose `snapshot.messageId` equals `episode.prompt_uuid`.
   - `replay_blockers(episode: Episode, tracked: Tracked | None) -> list[str]` — empty means replayable.
+  - `PROJECT_SETTINGS = (".claude/settings.json", ".claude/settings.local.json")`
+  - `project_hooks(cwd: Path) -> list[str]` — every hook command the project's own settings define, as `"<event>: <command>"`; these run during replays, so `restore` lists them for the human.
 
 - [ ] **Step 1: Write the failing tests**
 
 `tests/test_snapshot_and_eligibility.py`:
 
 ```python
-from culprit.eligibility import replay_blockers
+import json
+
+from culprit.eligibility import project_hooks, replay_blockers
 from culprit.episodes import episodes_from_session
 from culprit.snapshot import load_snapshot
 from records import human, snapshot, tool_use
@@ -1793,6 +1797,15 @@ def test_every_blocker_is_named(write_session, tmp_path):
     assert any("snapshot" in b for b in blockers)
     assert any("MCP" in b for b in blockers)
     assert any("asked the human" in b for b in blockers)
+
+
+def test_project_hooks_lists_every_hook_command_the_project_defines(tmp_path):
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text(json.dumps(
+        {"hooks": {"Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "./notify.sh"}]}]}}))
+    (tmp_path / ".claude" / "settings.local.json").write_text("{not json")
+    assert project_hooks(tmp_path) == ["Stop: ./notify.sh", ".claude/settings.local.json is not valid JSON"]
+    assert project_hooks(tmp_path / "elsewhere") == []
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -1837,10 +1850,11 @@ def load_snapshot(episode: Episode) -> Tracked | None:
 `src/culprit/eligibility.py`:
 
 ```python
-"""Why an episode cannot be replayed in v1. An empty list means it can."""
+"""Why an episode cannot be replayed in v1 (an empty list means it can), and which project hooks a replay runs."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from culprit.episodes import Episode, tool_uses
@@ -1848,6 +1862,7 @@ from culprit.snapshot import Tracked
 
 ASK_USER_TOOL = "AskUserQuestion"
 MCP_TOOL_PREFIX = "mcp__"
+PROJECT_SETTINGS = (".claude/settings.json", ".claude/settings.local.json")
 
 
 def replay_blockers(episode: Episode, tracked: Tracked | None) -> list[str]:
@@ -1864,12 +1879,31 @@ def replay_blockers(episode: Episode, tracked: Tracked | None) -> list[str]:
     if ASK_USER_TOOL in names:
         blockers.append("asked the human a question, which a replay cannot answer")
     return blockers
+
+
+def project_hooks(cwd: Path) -> list[str]:
+    """Hook commands in the project's own settings; they run in every replay, so the human must see them."""
+    commands = []
+    for name in PROJECT_SETTINGS:
+        path = cwd / name
+        if not path.is_file():
+            continue
+        try:
+            settings = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            commands.append(f"{name} is not valid JSON")
+            continue
+        for event, matchers in (settings.get("hooks") or {}).items():
+            for matcher in matchers or []:
+                for hook in (matcher or {}).get("hooks") or []:
+                    commands.append(f"{event}: {hook.get('command', '')}")
+    return commands
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest -v`
-Expected: 45 passed.
+Expected: 46 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -2135,7 +2169,7 @@ def _target_inside(cwd: Path, destination: Path, tracked_path: str) -> Path | No
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest -v`
-Expected: 51 passed.
+Expected: 52 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -2170,12 +2204,10 @@ git status --short   # must print nothing
 `tests/test_cli_stage2.py`:
 
 ```python
-import json
-
 import culprit.cli as cli
 from culprit.criterion import load_criterion
 from fakes import FakeAsk
-from records import edit_result, human, snapshot
+from records import edit_result, human, interrupt, snapshot
 
 
 def projects_with_one_episode(write_session, tmp_path, repo):
@@ -2215,6 +2247,14 @@ def test_restore_builds_the_pristine_copy_and_reports_the_check(write_session, t
     assert exit_code == 0
     assert (runs / "s1__p1" / "pristine" / "a.py").read_text() == "old\n"
     assert "1 restored" in out and "1 of 1 checked files match" in out
+    assert "no project hooks" in out
+
+
+def test_triage_says_why_a_candidate_cannot_be_replayed(write_session, tmp_path, capsys):
+    write_session([human("went wrong", "p1", session_id="s1", cwd=str(tmp_path / "gone")), interrupt("p1")],
+                  name="s1.jsonl")
+    assert cli.main(["triage", "--projects", str(tmp_path / "projects"), "--runs", str(tmp_path / "runs")]) == 0
+    assert "not replayable: working directory" in capsys.readouterr().out
 
 
 def test_restore_refuses_an_unreplayable_episode(write_session, tmp_path, capsys):
@@ -2227,7 +2267,7 @@ def test_restore_refuses_an_unreplayable_episode(write_session, tmp_path, capsys
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_cli_stage2.py -v`
-Expected: FAIL — `argparse` error `invalid choice: 'criterion'` (SystemExit 2).
+Expected: FAIL — the draft test with `AttributeError: <module 'culprit.cli' …> has no attribute 'ask_claude'`, the restore tests with argparse's `invalid choice: 'restore'` (SystemExit 2), and the triage test because no "not replayable" line is printed.
 
 - [ ] **Step 3: Rewrite `src/culprit/cli.py` with one handler per subcommand**
 
@@ -2242,7 +2282,7 @@ from pathlib import Path
 
 from culprit.claude import ClaudeCallFailed, ask_claude
 from culprit.criterion import approve_criterion, draft_criterion, load_criterion, save_criterion
-from culprit.eligibility import replay_blockers
+from culprit.eligibility import project_hooks, replay_blockers
 from culprit.episodes import episodes_from_session, session_files
 from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
 from culprit.sandbox import DEFAULT_FILE_HISTORY, check_restore, restore
@@ -2312,8 +2352,16 @@ def triage_command(args: argparse.Namespace) -> int:
     for candidate in candidates:
         s = candidate.summary
         print(f"{candidate.score:>3}  {s.episode_id}  [{_evidence(s.signals)}]  {s.prompt_excerpt}")
+        blockers = _blockers_for(args.projects, s.episode_id)
+        if blockers:
+            print(f"       not replayable: {'; '.join(blockers)}")
     print(f"{len(summaries)} episodes scanned; top {len(candidates)} saved to {path}")
     return 0
+
+
+def _blockers_for(projects: Path, episode_id: str) -> list[str]:
+    episode = find_episode(projects, episode_id)
+    return replay_blockers(episode, load_snapshot(episode))
 
 
 def _evidence(signals: FailureSignals) -> str:
@@ -2377,6 +2425,8 @@ def restore_command(args: argparse.Namespace) -> int:
     print(f"{checked - len(mismatches)} of {checked} checked files match what the episode saw")
     for mismatch in mismatches:
         print(f"  mismatch: {mismatch.path} ({mismatch.reason})")
+    hooks = project_hooks(Path(episode.cwd))
+    print("project hooks that will run in every replay: " + "; ".join(hooks) if hooks else "no project hooks")
     return 0
 ```
 
@@ -2385,7 +2435,7 @@ Note: Stage 1's `_triage` and `_confirm` are now `triage_command` and `confirm_c
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest -v`
-Expected: 54 passed (Stage 1's `test_cli.py` included).
+Expected: 56 passed (Stage 1's `test_cli.py` included).
 
 - [ ] **Step 5: Prove it on a real episode**
 
@@ -2419,7 +2469,7 @@ uv run culprit restore <ID>
 
 Expected:
 - `criterion show` prints a success definition that names an outcome, not a fix. If it names a fix, the drafting prompt failed its own rule: record the example in the commit message and tighten `drafting_prompt`.
-- `restore` prints `N of N checked files match what the episode saw`. **Any mismatch means the `backupFileName: null` reading or the last-snapshot-wins rule is wrong:** stop, inspect the mismatched file's snapshot entries, and fix `load_snapshot` before Stage 3.
+- `restore` prints `N of N checked files match what the episode saw`, and either `no project hooks` or the hook commands that will run in every replay — read them; a hook that sends or posts anything must be disabled in the pristine copy before Stage 3. **Any mismatch means the `backupFileName: null` reading or the last-snapshot-wins rule is wrong:** stop, inspect the mismatched file's snapshot entries, and fix `load_snapshot` before Stage 3.
 - `ls runs/<ID with : as __>/pristine` shows the project; `git -C` on it (if it is a repo) lists no remotes.
 
 Record the episode id, the match count and the check result in the commit message.
@@ -2450,7 +2500,7 @@ git status --short   # must print nothing
 ### Global Constraints
 
 - The replay command always carries: `--output-format stream-json --verbose`, `--strict-mcp-config --mcp-config '{"mcpServers":{}}'`, `--permission-prompts none`, `--permission-mode <mode>`, `--no-session-persistence`, `--max-budget-usd <cap>`, and `--disallowedTools "Bash(git push *)" "Bash(gh *)"`.
-- Permission mode: the episode's own, except `default` (or none recorded) becomes `acceptEdits`.
+- Permission mode: `auto` and `acceptEdits` replay as recorded; every other value (`default` and `manual`, where the human approved prompts; `plan`; `dontAsk`; `bypassPermissions`; none recorded) becomes `acceptEdits`. The installed CLI accepts `acceptEdits, auto, bypassPermissions, manual, dontAsk, plan` — not `default`, which older logs contain.
 - **Each replay runs in a fresh clone placed beside the original working directory** (`<original cwd's parent>/.culprit-replay-<12 hex>`), so Claude Code loads the same ancestor `CLAUDE.md` files the original session loaded; the clone is deleted when the run ends, success or failure.
 - After every run culprit deletes the `~/.claude/projects/<encoded workdir>/` folder Claude Code creates, but only when it holds nothing except an empty `memory/` folder.
 - Default caps: $2.00 per replay, $10.00 per `baseline` command; a judge model call counts as its $0.50 cap against the episode budget (conservative, because `ask_claude` does not report its cost).
@@ -2501,6 +2551,7 @@ tests/
 - Produces:
   - `SAFETY_DENIED_TOOLS = ("Bash(git push *)", "Bash(gh *)")`, `REPLAY_TIMEOUT_S = 1800`, `DEFAULT_REPLAY_BUDGET_USD = 2.0`, `DEFAULT_PROJECTS = Path.home() / ".claude" / "projects"`
   - `@dataclass(frozen=True) class ReplaySettings` with `prompt: str`, `model: str | None`, `permission_mode: str`, `append_system_prompt: str | None = None`, `tools: str | None = None` (None keeps Claude Code's default set), `disallowed_tools: tuple[str, ...] = ()` (restrictions beyond the safety denies), `context_preamble: str | None = None`, `setup_script: Path | None = None`, `max_budget_usd: float = DEFAULT_REPLAY_BUDGET_USD`.
+  - `REPLAY_PERMISSION_MODES = ("auto", "acceptEdits")`
   - `replay_permission_mode(original: str | None) -> str`
   - `baseline_settings(episode: Episode, max_budget_usd: float = DEFAULT_REPLAY_BUDGET_USD) -> ReplaySettings`
   - `full_prompt(settings: ReplaySettings) -> str`
@@ -2582,11 +2633,11 @@ def pristine_tree(tmp_path):
     return pristine
 
 
-def test_permission_mode_keeps_auto_and_accept_edits_and_promotes_default():
+def test_permission_mode_keeps_auto_and_accept_edits_and_maps_everything_else_to_accept_edits():
     assert replay_permission_mode("auto") == "auto"
     assert replay_permission_mode("acceptEdits") == "acceptEdits"
-    assert replay_permission_mode("default") == "acceptEdits"
-    assert replay_permission_mode(None) == "acceptEdits"
+    for other in ["default", "manual", "plan", "dontAsk", "bypassPermissions", None]:
+        assert replay_permission_mode(other) == "acceptEdits"
 
 
 def test_baseline_settings_copy_the_episode(write_session):
@@ -2688,6 +2739,24 @@ def test_a_failing_setup_script_raises_and_cleans_up(tmp_path):
         run_replay(settings(setup_script=script), pristine_tree(tmp_path), tmp_path / "run0", workdir, (),
                    run=FakeRun(setup_code=3), projects_dir=tmp_path / "p")
     assert not workdir.exists()
+
+
+def test_a_relative_setup_script_runs_inside_the_clone(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    Path("runs").mkdir()
+    Path("runs/env-fix.sh").write_text("touch fixed-by-setup.txt\n")
+    seen = {}
+
+    def run(command, **kwargs):
+        if command[0] == "bash" and command[1] != "-c":
+            done = subprocess.run(command, **kwargs)  # the real bash, run from the clone
+            seen["fixed"] = (kwargs["cwd"] / "fixed-by-setup.txt").exists()
+            return done
+        return FakeRun(claude_stdout=RESULT)(command, **kwargs)
+
+    run_replay(settings(setup_script=Path("runs/env-fix.sh")), pristine_tree(tmp_path), tmp_path / "run0",
+               tmp_path / ".culprit-replay-rel", (), run=run, projects_dir=tmp_path / "p")
+    assert seen["fixed"] is True
 ```
 
 - [ ] **Step 3: Run the tests to verify they fail**
@@ -2721,6 +2790,7 @@ from culprit.episodes import Episode
 from culprit.sandbox import clone_tree
 
 SAFETY_DENIED_TOOLS = ("Bash(git push *)", "Bash(gh *)")
+REPLAY_PERMISSION_MODES = ("auto", "acceptEdits")
 REPLAY_TIMEOUT_S = 1800
 CHECK_TIMEOUT_S = 600
 DEFAULT_REPLAY_BUDGET_USD = 2.0
@@ -2765,8 +2835,10 @@ class SetupScriptFailed(RuntimeError):
 
 
 def replay_permission_mode(original: str | None) -> str:
-    # In the original the human approved prompts; with nobody present, edits are accepted instead.
-    return "acceptEdits" if original in (None, "default") else original
+    # auto and acceptEdits replay as recorded. Every other mode becomes acceptEdits: in default and manual
+    # the human approved prompts and nobody is present now; plan makes no edits; bypassPermissions is
+    # never handed to a replay; the CLI no longer accepts default at all.
+    return original if original in REPLAY_PERMISSION_MODES else "acceptEdits"
 
 
 def baseline_settings(episode: Episode, max_budget_usd: float = DEFAULT_REPLAY_BUDGET_USD) -> ReplaySettings:
@@ -2817,7 +2889,8 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
     project_folder = projects_dir / project_folder_name(workdir.resolve())
     try:
         if settings.setup_script:
-            setup = run(["bash", str(settings.setup_script)], cwd=workdir, capture_output=True, text=True,
+            # resolved first: the script path is usually relative to culprit's folder, and the clone is elsewhere
+            setup = run(["bash", str(settings.setup_script.resolve())], cwd=workdir, capture_output=True, text=True,
                         timeout=CHECK_TIMEOUT_S)
             if setup.returncode != 0:
                 raise SetupScriptFailed(f"{settings.setup_script} exited {setup.returncode}: {setup.stderr[-500:]}")
@@ -2879,7 +2952,7 @@ def _remove_if_only_empty_memory(project_folder: Path) -> None:
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest -v`
-Expected: 64 passed (54 from Stages 1–2 plus 10).
+Expected: 67 passed (56 from Stages 1–2 plus 11).
 
 - [ ] **Step 6: Commit**
 
@@ -2909,7 +2982,9 @@ git status --short   # must print nothing
 - Produces:
   - `JUDGE_CALL_CAP_USD = 0.50`, `MAX_DIFF_CHARS = 60_000`, `JUDGEMENT_SCHEMA: dict`
   - `@dataclass(frozen=True) class Judgement` with `passed: bool`, `reason: str`, `by: str` — `"check"`, `"replay"` or `"model"`.
-  - `judging_prompt(criterion: Criterion, replay: ReplayResult, diff: str) -> str`
+  - `MAX_ACTIONS_CHARS = 20_000`
+  - `actions_from_transcript(transcript: str) -> str` — one line per tool call in the stream-json transcript (`- <tool>: <input, cut to 300 chars>`), cut to `MAX_ACTIONS_CHARS`; this is how the judge sees a forbidden action or wasted effort that leaves no diff.
+  - `judging_prompt(criterion: Criterion, replay: ReplayResult, diff: str, actions: str) -> str`
   - `judge_replay(criterion: Criterion, replay: ReplayResult, ask: Ask = ask_claude) -> Judgement`
 
 - [ ] **Step 1: Write the failing tests**
@@ -2917,8 +2992,10 @@ git status --short   # must print nothing
 `tests/test_judge.py`:
 
 ```python
+import json
+
 from culprit.criterion import Criterion
-from culprit.judge import MAX_DIFF_CHARS, Judgement, judge_replay, judging_prompt
+from culprit.judge import MAX_DIFF_CHARS, Judgement, actions_from_transcript, judge_replay, judging_prompt
 from culprit.replay import CheckResult, ReplayResult
 from fakes import FakeAsk
 
@@ -2957,9 +3034,24 @@ def test_otherwise_the_model_decides_from_criterion_answer_and_diff(tmp_path):
 
 def test_a_huge_diff_is_truncated_in_the_prompt(tmp_path):
     replay = replay_in(tmp_path, diff="x" * (MAX_DIFF_CHARS + 5000))
-    prompt = judging_prompt(CRITERION, replay, (replay.run_dir / "diff.patch").read_text())
+    prompt = judging_prompt(CRITERION, replay, (replay.run_dir / "diff.patch").read_text(), "")
     assert "[diff truncated" in prompt
     assert prompt.count("x") <= MAX_DIFF_CHARS + 100
+
+
+def test_the_judge_sees_every_tool_call_and_the_effort_spent(tmp_path):
+    replay = replay_in(tmp_path, [CheckResult("pytest -q", 0, "ok")])
+    (replay.run_dir / "transcript.jsonl").write_text("\n".join([
+        json.dumps({"type": "system", "subtype": "init"}),
+        json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": "rm -rf tests"}}]}}),
+        json.dumps({"type": "result", "subtype": "success"})]))
+    assert actions_from_transcript((replay.run_dir / "transcript.jsonl").read_text()) == \
+        '- Bash: {"command": "rm -rf tests"}'
+    ask = FakeAsk({"passed": False, "reason": "deleted the tests"})
+    judge_replay(CRITERION, replay, ask=ask)
+    prompt = ask.calls[0][0]
+    assert "rm -rf tests" in prompt and "4 turns" in prompt
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -2980,6 +3072,7 @@ answer and diff. Every judgement says which of the three decided it.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from culprit.claude import Ask, ask_claude
@@ -2988,6 +3081,8 @@ from culprit.replay import ReplayResult
 
 JUDGE_CALL_CAP_USD = 0.50
 MAX_DIFF_CHARS = 60_000
+MAX_ACTIONS_CHARS = 20_000
+TOOL_INPUT_CHARS = 300
 JUDGEMENT_SCHEMA = {
     "type": "object",
     "properties": {"passed": {"type": "boolean"}, "reason": {"type": "string"}},
@@ -3002,7 +3097,25 @@ class Judgement:
     by: str  # "check", "replay" or "model"
 
 
-def judging_prompt(criterion: Criterion, replay: ReplayResult, diff: str) -> str:
+def actions_from_transcript(transcript: str) -> str:
+    lines = []
+    for raw in transcript.splitlines():
+        try:
+            record = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict) or record.get("type") != "assistant":
+            continue
+        for block in (record.get("message") or {}).get("content") or []:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                lines.append(f"- {block.get('name')}: {json.dumps(block.get('input'))[:TOOL_INPUT_CHARS]}")
+    text = "\n".join(lines)
+    if len(text) > MAX_ACTIONS_CHARS:
+        text = text[:MAX_ACTIONS_CHARS] + f"\n[{len(text) - MAX_ACTIONS_CHARS} more characters of tool calls cut]"
+    return text
+
+
+def judging_prompt(criterion: Criterion, replay: ReplayResult, diff: str, actions: str) -> str:
     if len(diff) > MAX_DIFF_CHARS:
         diff = diff[:MAX_DIFF_CHARS] + f"\n[diff truncated: {len(diff) - MAX_DIFF_CHARS} more characters]"
     must_not = "\n".join(f"- {rule}" for rule in criterion.must_not) or "- (nothing listed)"
@@ -3020,13 +3133,18 @@ Checks run after the attempt:
 The agent's final answer:
 <answer>{replay.result_text}</answer>
 
+What the agent did, every tool call in order ({replay.num_turns} turns, ${replay.cost_usd:.2f}):
+<actions>
+{actions or "(no tool calls)"}
+</actions>
+
 Every file change the attempt made:
 <diff>
 {diff}
 </diff>
 
 Judge only against the criterion. passed is true only if the outcome is met and nothing forbidden
-was done. reason is one sentence naming the evidence."""
+was done, in the files or in the actions. reason is one sentence naming the evidence."""
 
 
 def judge_replay(criterion: Criterion, replay: ReplayResult, ask: Ask = ask_claude) -> Judgement:
@@ -3036,14 +3154,16 @@ def judge_replay(criterion: Criterion, replay: ReplayResult, ask: Ask = ask_clau
     if replay.is_error:
         return Judgement(False, f"the replay ended in an error: {replay.result_text[:300]}", "replay")
     diff = (replay.run_dir / "diff.patch").read_text(errors="replace")
-    answer = ask(judging_prompt(criterion, replay, diff), JUDGEMENT_SCHEMA)
+    transcript_path = replay.run_dir / "transcript.jsonl"
+    actions = actions_from_transcript(transcript_path.read_text(errors="replace")) if transcript_path.exists() else ""
+    answer = ask(judging_prompt(criterion, replay, diff, actions), JUDGEMENT_SCHEMA)
     return Judgement(bool(answer["passed"]), str(answer["reason"]), "model")
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest -v`
-Expected: 68 passed.
+Expected: 72 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -3249,7 +3369,7 @@ Note on the budget test: run 1 reserves $1.50 (0 + 1.50 ≤ 3.20) and spends $1.
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest -v`
-Expected: 72 passed.
+Expected: 76 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -3331,7 +3451,7 @@ def test_baseline_before_restore_names_restore(write_session, tmp_path, capsys):
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_cli_stage3.py -v`
-Expected: FAIL — `invalid choice: 'baseline'` (SystemExit 2).
+Expected: FAIL — the first test with `AttributeError: <module 'culprit.cli' …> has no attribute 'run_variant'`, the others with argparse's `invalid choice: 'baseline'` (SystemExit 2).
 
 - [ ] **Step 3: Add the subcommand**
 
@@ -3391,7 +3511,7 @@ def baseline_command(args: argparse.Namespace) -> int:
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest -v`
-Expected: 75 passed.
+Expected: 79 passed.
 
 - [ ] **Step 5: Prove it on the real episode restored in Task 2.6**
 
@@ -3540,7 +3660,7 @@ def test_fisher_one_sided_for_equal_rates_is_large():
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_stats.py -v`
-Expected: FAIL — `ImportError: cannot import name 'ORACLE_ORDER' from 'culprit.taxonomy'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'culprit.stats'`
 
 - [ ] **Step 3: Write the implementation**
 
@@ -3588,7 +3708,7 @@ def fisher_one_sided(variant_passes: int, variant_runs: int, baseline_passes: in
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest -v`
-Expected: 82 passed (75 plus 7: one taxonomy test, five parametrised cases, one equal-rates test).
+Expected: 86 passed (79 plus 7: one taxonomy test, five parametrised cases, one equal-rates test).
 
 - [ ] **Step 5: Commit**
 
@@ -3705,7 +3825,7 @@ def check_leak(drafted_text: str, original_prompt: str, follow_ups: list[str], a
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest -v`
-Expected: 84 passed.
+Expected: 88 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -3752,7 +3872,6 @@ Expected: 6 passed (behaviour unchanged).
 
 ```python
 from dataclasses import replace
-from pathlib import Path
 
 from culprit.criterion import Criterion
 from culprit.episodes import episodes_from_session
@@ -3873,7 +3992,7 @@ def test_combine_takes_each_causes_fields_from_its_variant():
 - [ ] **Step 3: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_oracles.py -v`
-Expected: FAIL — `ImportError: cannot import name 'settings_from_json' from 'culprit.replay'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'culprit.oracles'`
 
 - [ ] **Step 4: Write the implementation**
 
@@ -4052,7 +4171,7 @@ def _drafted(base: ReplaySettings, field: str, prompt_for, episode: Episode, fol
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `uv run pytest -v`
-Expected: 95 passed.
+Expected: 99 passed.
 
 - [ ] **Step 6: Commit**
 
@@ -4398,7 +4517,7 @@ Note on the resume test: the first run saved every variant's settings under `var
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest -v`
-Expected: 105 passed.
+Expected: 109 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -4486,7 +4605,7 @@ def test_diagnose_before_confirm_names_confirm(write_session, tmp_path, capsys):
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_cli_stage4.py -v`
-Expected: FAIL — `invalid choice: 'env-fix'` (SystemExit 2).
+Expected: FAIL — the diagnose test with `AttributeError: <module 'culprit.cli' …> has no attribute 'diagnose'`, the others with argparse's `invalid choice` (SystemExit 2).
 
 - [ ] **Step 3: Add the subcommands**
 
@@ -4552,7 +4671,7 @@ def diagnose_command(args: argparse.Namespace) -> int:
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest -v`
-Expected: 108 passed.
+Expected: 112 passed.
 
 - [ ] **Step 5: Prove it on a real episode**
 
@@ -4836,7 +4955,7 @@ def run_summary(run_dir: Path) -> str:
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest -v`
-Expected: 115 passed.
+Expected: 119 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -4885,7 +5004,6 @@ from culprit.replay import ReplaySettings
 from culprit.selftest import (EXPECTED, IMPOSSIBLE, MISLEADING_INSTRUCTION_TEXT, PlantedFault, SelftestResult,
                               is_control, plant, run_selftest, selftest_accuracy, selftest_dir)
 from culprit.store import episode_dir
-from culprit.taxonomy import Cause
 from culprit.verdict import Verdict, save_verdict
 from records import human
 
@@ -5071,7 +5189,7 @@ def selftest_accuracy(runs_dir: Path) -> tuple[int, int]:
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest -v`
-Expected: 119 passed.
+Expected: 123 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -5175,7 +5293,7 @@ def test_selftest_prints_each_fault_and_the_accuracy(write_session, tmp_path, ca
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_cli_stage5.py -v`
-Expected: FAIL — `invalid choice: 'review'` (SystemExit 2).
+Expected: FAIL — `test_trust_lines_report_calibration_and_selftest` with `AttributeError: module 'culprit.cli' has no attribute 'trust_lines'`, the selftest tests with `AttributeError: … has no attribute 'run_selftest'`, and the review test with argparse's `invalid choice: 'review'` (SystemExit 2).
 
 - [ ] **Step 3: Add the subcommands**
 
@@ -5276,7 +5394,7 @@ In `diagnose_command`, after the `for cause, reason in verdict.untested.items():
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest -v`
-Expected: 123 passed (Stage 4's `test_diagnose_passes_everything_through_and_prints_the_verdict` still passes: it checks substrings, and the trust lines only add output).
+Expected: 127 passed (Stage 4's `test_diagnose_passes_everything_through_and_prints_the_verdict` still passes: it checks substrings, and the trust lines only add output).
 
 - [ ] **Step 5: Prove it on real runs**
 
@@ -5374,7 +5492,7 @@ tests/
 `tests/test_report.py`:
 
 ```python
-from culprit.report import Fix, collect, fix_list, grid, render_report
+from culprit.report import collect, fix_list, grid, render_report
 from culprit.verdict import Verdict, save_verdict
 
 
@@ -5569,7 +5687,7 @@ def render_report(rows: list[Row], trust: list[str]) -> str:
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest -v`
-Expected: 129 passed.
+Expected: 133 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -5798,7 +5916,7 @@ In `src/culprit/cli.py`, replace the Stage 4 constant `ENV_FIX_FILE = "env-fix.s
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest -v`
-Expected: 133 passed.
+Expected: 137 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -5869,7 +5987,7 @@ def test_diagnose_all_prints_the_summary_and_writes_the_report(tmp_path, capsys,
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_cli_stage6.py -v`
-Expected: FAIL — `invalid choice: 'report'` (SystemExit 2).
+Expected: FAIL — the diagnose-all test with `AttributeError: <module 'culprit.cli' …> has no attribute 'diagnose_all'`, the report test with argparse's `invalid choice: 'report'` (SystemExit 2).
 
 - [ ] **Step 3: Add the subcommands**
 
@@ -5929,7 +6047,7 @@ def diagnose_all_command(args: argparse.Namespace) -> int:
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest -v`
-Expected: 135 passed.
+Expected: 139 passed.
 
 - [ ] **Step 5: Produce the first real report over 10–20 episodes**
 
