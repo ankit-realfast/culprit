@@ -11,7 +11,8 @@ more often than the unchanged one (one-sided Fisher exact test, p < 0.05 over 5 
 
 1. `triage` splits your Claude Code logs (`~/.claude/projects/*.jsonl`) into episodes — one prompt and
    everything until your next prompt — and ranks the likely failures. Each run merges into the stored
-   queue (`runs/candidates.json`), so episodes queued earlier are kept.
+   queue (`runs/candidates.json`), so episodes queued earlier are kept: the rows it prints become
+   queue rows #1..#n, and earlier episodes it no longer shows follow them (`culprit status` lists all).
 2. You `confirm` what went wrong: `stopped-short`, `wrong-result`, `ignored-instructions`, `wasteful`,
    or `no-failure`.
 3. `criterion draft` writes what success means from your follow-up messages; you edit and `approve` it.

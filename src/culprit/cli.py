@@ -309,6 +309,8 @@ def triage_command(args: argparse.Namespace) -> int:
             print(f"            not replayable: {'; '.join(blockers)}")
     print(f"{len(summaries)} episodes scanned; top {len(candidates)} merged into {path} ({len(queue)} queued); "
           f"refer to an episode by its #row, short id or any unique prefix")
+    if len(queue) > len(candidates):
+        print(f"{len(queue) - len(candidates)} more queued, not in this top {len(candidates)} — see `culprit status`")
     return 0
 
 

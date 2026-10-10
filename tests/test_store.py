@@ -65,7 +65,8 @@ def test_a_new_triage_keeps_queued_episodes_and_takes_the_new_score(tmp_path):
         Candidate(EpisodeSummary("abc:p2", "/s.jsonl", "prompt", FailureSignals(True, 3, 0, 0, 1.0)), 8),
         Candidate(EpisodeSummary("abc:p3", "/s.jsonl", "prompt", FailureSignals(True, 0, 0, 0, 1.0)), 1)])
     rows = json.loads(path.read_text())
-    assert [(r["summary"]["episode_id"], r["score"]) for r in rows] == [("abc:p2", 8), ("abc:p1", 5), ("abc:p3", 1)]
+    # The new ranking comes first in its own order, so its rows are #1..#n; kept extras follow by score.
+    assert [(r["summary"]["episode_id"], r["score"]) for r in rows] == [("abc:p2", 8), ("abc:p3", 1), ("abc:p1", 5)]
 
 
 def test_resolve_takes_a_queue_row_number(tmp_path):

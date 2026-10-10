@@ -86,13 +86,15 @@ def candidate_rows(runs_dir: Path) -> list[dict]:
 
 
 def save_candidates(runs_dir: Path, candidates: list[Candidate]) -> Path:
-    """Merge a new ranking into the stored queue by episode id (the new score wins), so a later triage
-    never drops an episode already queued or confirmed."""
-    rows = {row["summary"]["episode_id"]: row for row in candidate_rows(runs_dir)}
-    rows.update({c.summary.episode_id: asdict(c) for c in candidates})
+    """Merge a new ranking into the stored queue by episode id, so a later triage never drops an episode
+    already queued or confirmed. The new ranking comes first, in its own order, so the rows triage prints
+    are queue rows #1..#n; kept episodes it no longer shows follow, highest score first."""
+    fresh = [asdict(c) for c in candidates]
+    fresh_ids = {c.summary.episode_id for c in candidates}
+    kept = [row for row in candidate_rows(runs_dir) if row["summary"]["episode_id"] not in fresh_ids]
     runs_dir.mkdir(parents=True, exist_ok=True)
     path = runs_dir / CANDIDATES_FILE
-    path.write_text(json.dumps(sorted(rows.values(), key=lambda row: row["score"], reverse=True), indent=2))
+    path.write_text(json.dumps(fresh + sorted(kept, key=lambda row: row["score"], reverse=True), indent=2))
     return path
 
 

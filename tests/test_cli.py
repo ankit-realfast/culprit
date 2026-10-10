@@ -48,6 +48,8 @@ def test_a_second_triage_keeps_the_queue_and_says_how_many_are_queued(write_sess
     out = capsys.readouterr().out
     assert "s2:p3" in out and "s1:p2" not in out
     assert "2 queued" in out
+    assert out.lstrip().startswith("#1 ")
+    assert "1 more queued, not in this top 1 — see `culprit status`" in out
     assert main(["confirm", "s1:p2", "stopped-short", "--runs", str(runs)]) == 0
 
 
@@ -96,3 +98,19 @@ def test_ctrl_c_stops_with_exit_130_and_says_how_to_resume(tmp_path, capsys, mon
     (tmp_path / "runs").mkdir()
     assert main(["report", "--runs", str(tmp_path / "runs")]) == 130
     assert "stopped. finished runs are kept; rerun the same command to resume" in capsys.readouterr().err
+
+
+def test_triage_rows_are_numbered_contiguously_when_kept_episodes_are_not_shown(write_session, tmp_path, capsys):
+    runs = tmp_path / "runs"
+    write_session([human("a", "p1", session_id="s1"), interrupt("p1"),
+                   human("b", "p2", session_id="s1"), interrupt("p2")])
+    main(["triage", "--projects", str(tmp_path / "projects"), "--runs", str(runs)])
+    write_session([human("c", "p3", session_id="s2"), system("api_error"), interrupt("p3"),
+                   human("d", "p4", session_id="s2"), interrupt("p4"), system("compact_boundary")], name="s2.jsonl")
+    (tmp_path / "projects" / "-repo" / "s1.jsonl").unlink()
+    capsys.readouterr()
+    main(["triage", "--projects", str(tmp_path / "projects"), "--runs", str(runs), "--top", "2"])
+    rows = [line.split()[0] for line in capsys.readouterr().out.splitlines() if line.lstrip().startswith("#")]
+    assert rows == ["#1", "#2"]
+    assert main(["confirm", "#1", "wasteful", "--runs", str(runs)]) == 0
+    assert read_symptom(runs, "s2:p4").value == "wasteful"
