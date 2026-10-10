@@ -29,9 +29,11 @@ FIX_ACTIONS = {
     "unexplained": "nothing single — review these by hand",
 }
 KNOWN_LIMITS = (
-    "Restores are exact only for files Claude Code edited; every other file is as it is today.",
-    "Replays start in a new working directory, so the original project's auto-memory was not loaded.",
-    "Episodes that used an MCP tool or asked you a question were not replayed.",
+    "Restores are exact for files Claude Code edited; in git projects other files come from the last commit "
+    "before the episode, elsewhere they are as they are today.",
+    "Replays read a copy of the project's memory as it is today, not as it was then.",
+    "MCP tools answered from the log, so a call the original never made failed; questions were answered with "
+    "your recorded answers only when the replay asked something close.",
     "Causes marked untested below were not measured for that episode; a cheaper fix may exist there.",
     "A harness verdict says what made it pass, not whether the fix is yours or Claude Code's.",
     "Replays start from the start of the episode, not from the step where it went wrong.",

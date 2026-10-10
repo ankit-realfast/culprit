@@ -51,7 +51,7 @@ def test_the_report_leads_with_the_answer_and_states_the_limits(tmp_path):
     first_lines = text.splitlines()[:4]
     assert any("harness" in line and "2 of 5" in line for line in first_lines)
     for expected in ["| Fix", "| Symptom", "wrong-result", "kappa 0.81", "4 of 5 planted faults",
-                     "Known limits", "auto-memory", "no environment fix supplied", "harness passed 4/5"]:
+                     "Known limits", "project's memory", "no environment fix supplied", "harness passed 4/5"]:
         assert expected in text
 
 

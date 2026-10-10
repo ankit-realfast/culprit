@@ -68,7 +68,7 @@ unchanged baseline's over N replays — the exact test is in §3, *What "passes 
 | Tracked file backups | 35,238 entries: 28,370 backup present in `~/.claude/file-history/<sessionId>/`, 6,239 `backupFileName: null`, 629 missing | Overlay onto a copy of the working directory |
 | Working directories | 86 distinct: 9 git repos, 56 exist without git, 21 gone | An episode whose `cwd` is gone cannot be replayed |
 | Permission modes | `auto` 9,547, `acceptEdits` 3,378, `default` 880 | Replays reuse the episode's mode (see §3) |
-| Tool use | Bash 14,940, MCP 4,473, Edit 3,789, AskUserQuestion 220 | Episodes that used MCP or asked a question are not replayable in v1 |
+| Tool use | Bash 14,940, MCP 4,473, Edit 3,789, AskUserQuestion 220 | MCP calls and answered questions are replayed from the log (§3) |
 | Models | ~99% Opus; Fable 303 responses | Fable 5.1 is the oracle model for almost every episode |
 
 **Restoring an episode's starting state** (revised 2026-10-11 after the first real restores). The copy
@@ -90,6 +90,11 @@ says so.
   skills, plugins, MCP).
 - `--strict-mcp-config` with `--mcp-config` limits MCP servers to the ones passed.
 - `--permission-prompts none` removes tools that need a person, such as `AskUserQuestion`.
+- Verified live 2026-10-11 on 2.1.296 (the latest release): `AskUserQuestion` is offered headless only when
+  `--permission-prompt-tool` names an MCP tool; a `PreToolUse` hook, from `--settings` or the project's
+  `.claude/settings.json`, leaves it out of the init tool list. Images reach the model as content blocks
+  of a `--input-format stream-json` user message. `sandbox.enabled` with `allowUnsandboxedCommands: false`
+  refused a shell write outside the working directory. `autoMemoryDirectory` in `--settings` is read.
 - `--max-budget-usd` caps spend; JSON output reports `total_cost_usd`.
 - Measured with two live Haiku calls (about $0.008 in total): `--output-format stream-json` requires
   `--verbose` with `-p`; the last line is `{"type": "result", "subtype": "success", "is_error": false,
@@ -139,13 +144,20 @@ claude -p "<episode or variant prompt>" \
   --model <model>
 ```
 
-- **No MCP server connects in v1**, so no outbound server (Slack, Gmail, Salesforce, monday) can be
-  reached. An episode whose transcript used an MCP tool is therefore not replayable in v1.
+- **No real MCP server ever connects.** For each server an episode used, culprit runs a stand-in that
+  answers recorded calls with their recorded results and fails any call the original never made.
+- **Questions are answered from the log:** culprit's answer host is the permission-prompt tool; a
+  question close to one the human answered (difflib ratio ≥ 0.6) gets that answer, and every other
+  question or permission prompt is refused.
+- **Shell commands run in the OS Bash sandbox** (writes only in the copy and the temp folder, no
+  unsandboxed fallback); file tools are denied on the original folder; a before/after fingerprint of the
+  original stops culprit if anything changed. Images are resent with the prompt.
 - **The working directory is an APFS clone** (`cp -cR`) of a pristine restored copy, one fresh clone
   per replay, with every git remote removed; `git push` and `gh` are also denied.
 - **Each clone sits beside the original working directory** (`<parent>/.culprit-replay-<id>`), so the
   replay loads the same ancestor `CLAUDE.md` files the original session did. The original project's
-  auto-memory is not loaded, because the replay's working directory is new; every report says so.
+  auto-memory is copied per run and read through `autoMemoryDirectory` (today's notes, not the notes as
+  they were); the replay's writes never reach the real notes.
 - **Permission mode:** the episode's own mode (`auto`, `acceptEdits`), except `default` becomes
   `acceptEdits`, because in the original the human approved those prompts and no human is present now.
 - **Cleanup:** after each replay culprit deletes the clone and the empty `memory/` folder Claude Code
@@ -154,8 +166,9 @@ claude -p "<episode or variant prompt>" \
 
 ### Which episodes are replayable
 
-An episode is replayable only if its `cwd` still exists, its snapshot exists, it used no MCP tool, and it
-never called `AskUserQuestion`. `triage` prints the blocking reason under every queued candidate, and `restore` refuses with the reasons; `restore` also lists every hook the project's own settings define, because those hooks run in every replay.
+An episode is replayable only if its `cwd` still exists and is not the home folder, a folder containing
+culprit, a git worktree or submodule, or beside an unwritable parent; its snapshot exists; any question it
+asked has a recorded answer; and any image it carried was kept in the log. `triage` prints the blocking reason under every queued candidate, and `restore` refuses with the reasons; `restore` also lists every hook the project's own settings define, because those hooks run in every replay.
 
 ### The oracles, concretely
 
@@ -201,7 +214,9 @@ the full set.
 - Episodes in which Claude asked the human a question cannot be replayed faithfully (no person to
   answer); they are tagged and excluded from v1.
 - Episodes already run on Fable cannot test the Model cause; reported as untestable.
-- Episodes that used an MCP tool are excluded from v1, because replays connect no MCP server.
+- An MCP call or a question the original session never made cannot be answered in a replay.
+- For a project in git, files nothing else recorded come from the last commit before the episode;
+  elsewhere they are as they are today.
 - v1 replays from the episode's start, not from the step where it went wrong; mid-episode branching is
   deferred until v1 proves the method.
 - A Harness verdict cannot say whether the fix is yours (configuration) or the vendor's (a Claude Code

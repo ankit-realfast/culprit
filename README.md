@@ -71,25 +71,35 @@ says "not testable".
 ## Safety
 
 - Replays run in a copy placed beside your project (`.culprit-replay-<id>`), deleted afterwards.
-- No MCP server connects, so Slack, Gmail and similar are unreachable.
+- No real MCP server ever connects. An episode that used MCP tools gets a stand-in for each server
+  that answers only with the results recorded in your log, so Slack, Gmail and similar are never reached.
+- Shell commands run in Claude Code's OS-enforced Bash sandbox: they can write only in the copy and the
+  temp folder, with no unsandboxed fallback.
 - Git remotes are stripped from the copy; `git push` and `gh` are denied; git cannot climb out of the
   copy into a parent repository. Episodes in a git worktree or submodule are refused.
 - Paths to your project in the prompt are rewritten to the copy, file tools are denied on your project,
-  and if anything in your project changes during a replay culprit stops and names the files.
+  and if anything in your project still changes during a replay culprit stops and names the files.
 - Episodes run in your home folder, in a folder containing culprit, or beside an unwritable parent are
   refused. `runs/` is gitignored and never committed.
 
-## Limits
+## What replays reproduce, and where they fall short
 
-- Episodes that used an MCP tool, asked you a question, or had an image in the prompt are not replayed.
-- Files Claude Code never recorded are restored as they are today, not as they were.
-- Replays start fresh: the original project's auto-memory is not loaded.
-- A harness verdict says what made it pass, not whether the fix is yours or Claude Code's.
-- Bash commands that write into your project cannot be blocked by a rule; they are caught afterwards.
+- **Images** you attached are resent with the prompt. An image the log did not keep blocks the replay.
+- **Questions Claude asked you** are answered with your recorded answer when the replay asks something
+  close (similarity ≥ 0.6); anything else is refused, as a replay with nobody present would be.
+- **MCP tools** answer from the log; a call the original session never made fails in the replay.
+- **Files** are restored from Claude Code's snapshots and the episode's own edits; for a project in git,
+  everything else is rolled back to the last commit before the episode. Outside git, files nothing
+  recorded are as they are today.
+- **Claude's project memory** is a copy of today's notes, not the notes as they were then.
+- **Replays start at the beginning of the episode**, not at the step where it went wrong.
+- **A harness verdict** says what made it pass, not whether the fix is yours or Claude Code's. To narrow
+  it, replay on another Claude Code build: `CULPRIT_CLAUDE_BIN=/path/to/claude uv run culprit diagnose …`;
+  a verdict that flips between builds points at Claude Code.
 
 ## Status
 
-Built and unit-tested (177 tests); a final review's critical and important findings are fixed. Triage
+Built and unit-tested (199 tests); a final review's critical and important findings are fixed. Triage
 and restore have run on real logs; no real episode has been replayed yet — start with one cheap baseline
 (`--n 1 --budget 3`) and read its output before anything larger.
 
