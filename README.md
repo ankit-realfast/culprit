@@ -62,7 +62,11 @@ and reports how often culprit names it.
 ## Cost
 
 Each replay is capped at $2; a full diagnosis is about 30 replays, capped at $40 per episode by
-default. Judge and drafting calls are capped at $0.50 each.
+default. Judge and drafting calls are capped at $0.50 each and charged at that cap. Caps count
+everything already spent, so resuming never doubles them; `--total` covers every batch in `runs/`.
+Runs that fail for reasons outside the agent (API errors, culprit's own cap, timeouts) are not counted
+and are retried. If no result could beat the baseline at N runs, culprit stops before the oracles and
+says "not testable".
 
 ## Safety
 
@@ -70,19 +74,24 @@ default. Judge and drafting calls are capped at $0.50 each.
 - No MCP server connects, so Slack, Gmail and similar are unreachable.
 - Git remotes are stripped from the copy; `git push` and `gh` are denied; git cannot climb out of the
   copy into a parent repository. Episodes in a git worktree or submodule are refused.
-- Nothing is written to your original project; `runs/` is gitignored and never committed.
+- Paths to your project in the prompt are rewritten to the copy, file tools are denied on your project,
+  and if anything in your project changes during a replay culprit stops and names the files.
+- Episodes run in your home folder, in a folder containing culprit, or beside an unwritable parent are
+  refused. `runs/` is gitignored and never committed.
 
 ## Limits
 
-- Episodes that used an MCP tool or asked you a question are not replayed.
+- Episodes that used an MCP tool, asked you a question, or had an image in the prompt are not replayed.
 - Files Claude Code never recorded are restored as they are today, not as they were.
 - Replays start fresh: the original project's auto-memory is not loaded.
 - A harness verdict says what made it pass, not whether the fix is yours or Claude Code's.
+- Bash commands that write into your project cannot be blocked by a rule; they are caught afterwards.
 
 ## Status
 
-Built and unit-tested (146 tests). Not yet run end to end on real episodes. A final review's safety and
-budget findings are being fixed; run paid diagnoses only after they land.
+Built and unit-tested (171 tests); a final review's critical and important findings are fixed. Triage
+and restore have run on real logs; no real episode has been replayed yet — start with one cheap baseline
+(`--n 1 --budget 3`) and read its output before anything larger.
 
 Design: [`docs/specs/2026-10-11-culprit-design.md`](docs/specs/2026-10-11-culprit-design.md) ·
 Plan: [`docs/plans/2026-10-11-culprit-plan.md`](docs/plans/2026-10-11-culprit-plan.md)
