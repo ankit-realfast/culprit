@@ -2436,3 +2436,1003 @@ originalFile its first Edit recorded.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 git status --short   # must print nothing
 ```
+
+---
+
+## Stage 3 — Replay and judge
+
+**Goal:** `culprit baseline <id>` re-runs a restored episode unchanged N times through a locked-down `claude -p`, judges each run against the approved criterion, and records the baseline pass rate every verdict is measured against.
+
+**Architecture:** Three modules. `replay` owns the settings a replay runs with, the exact command, and one run (fresh clone → optional setup script → `claude -p` → checks → diff → cleanup). `judge` turns one run into pass/fail: a failing check or an errored run fails without a model call; otherwise one schema-checked call decides. `experiment` runs one variant N times under a spend cap and stores the outcome. Stage 4 reuses all three for every oracle.
+
+**Spec:** §3 *Every replay runs locked down* and *Which episodes are replayable*; §4 guard 3 (baseline before variants).
+
+### Global Constraints
+
+- The replay command always carries: `--output-format stream-json --verbose`, `--strict-mcp-config --mcp-config '{"mcpServers":{}}'`, `--permission-prompts none`, `--permission-mode <mode>`, `--no-session-persistence`, `--max-budget-usd <cap>`, and `--disallowedTools "Bash(git push *)" "Bash(gh *)"`.
+- Permission mode: the episode's own, except `default` (or none recorded) becomes `acceptEdits`.
+- **Each replay runs in a fresh clone placed beside the original working directory** (`<original cwd's parent>/.culprit-replay-<12 hex>`), so Claude Code loads the same ancestor `CLAUDE.md` files the original session loaded; the clone is deleted when the run ends, success or failure.
+- After every run culprit deletes the `~/.claude/projects/<encoded workdir>/` folder Claude Code creates, but only when it holds nothing except an empty `memory/` folder.
+- Default caps: $2.00 per replay, $10.00 per `baseline` command; a judge model call counts as its $0.50 cap against the episode budget (conservative, because `ask_claude` does not report its cost).
+- N defaults to 5.
+
+### Facts this stage relies on (measured 2026-10-11)
+
+- `--output-format stream-json` with `-p` fails without `--verbose` (`Error: When using --print, --output-format=stream-json requires --verbose`).
+- The last stream line is `{"type": "result", "subtype": "success", "is_error": false, "result": "<final text>", "total_cost_usd": <float>, "num_turns": <int>, …}`; earlier lines include `system/hook_started`, `system/init`, `assistant`.
+- Claude Code names a project folder by replacing every character of the absolute working directory that is not a letter or digit with `-` (`/private/var/folders/kh/…/T/tmp.hIyMkHhkqk` → `-private-var-folders-kh-…-T-tmp-hIyMkHhkqk`).
+- Known fidelity differences, reported with every verdict: auto-memory of the original project is not loaded (the replay's working directory is new), and files Claude Code never edited are as they are today.
+
+### Review Focus
+
+1. **A replay that hangs past its timeout** must be recorded as an errored run and its clone still deleted. Pinned in Task 3.1 (`test_a_timed_out_replay_is_an_error_and_cleans_up`).
+2. **A replay whose output has no result line** (crash, killed process) must be an errored run, never a pass. Pinned in Task 3.1 (`test_output_without_a_result_line_is_an_error`).
+3. **Cleanup must never delete a project folder holding a real session log.** Pinned in Task 3.1 (`test_a_project_folder_with_a_session_log_is_kept`).
+4. **The budget must stop before the run that would cross it**, not after. Pinned in Task 3.3 (`test_the_budget_stops_before_the_run_that_would_cross_it`).
+5. **`baseline` before restore or before approval** must name the missing step. Pinned in Task 3.4 (`test_baseline_names_the_missing_step`).
+
+### File Structure
+
+```
+src/culprit/
+├── replay.py        # ReplaySettings, baseline_settings, replay_command, run_replay, replay_workdir
+├── judge.py         # Judgement, judge_replay
+├── experiment.py    # EpisodeBudget, VariantOutcome, run_variant, load_outcome
+└── cli.py           # MODIFY: add `baseline`
+tests/
+├── fakes.py         # MODIFY: add FakeRun
+├── test_replay.py
+├── test_judge.py
+├── test_experiment.py
+└── test_cli_stage3.py
+```
+
+---
+
+#### Task 3.1: Run one locked-down replay in a fresh clone
+
+**Files:**
+- Create: `src/culprit/replay.py`
+- Modify: `tests/fakes.py` (append `FakeRun`)
+- Test: `tests/test_replay.py`
+
+**Interfaces:**
+- Consumes: `Episode` (episodes); `NO_MCP_SERVERS` (claude); `clone_tree` (sandbox).
+- Produces:
+  - `SAFETY_DENIED_TOOLS = ("Bash(git push *)", "Bash(gh *)")`, `REPLAY_TIMEOUT_S = 1800`, `DEFAULT_REPLAY_BUDGET_USD = 2.0`, `DEFAULT_PROJECTS = Path.home() / ".claude" / "projects"`
+  - `@dataclass(frozen=True) class ReplaySettings` with `prompt: str`, `model: str | None`, `permission_mode: str`, `append_system_prompt: str | None = None`, `tools: str | None = None` (None keeps Claude Code's default set), `disallowed_tools: tuple[str, ...] = ()` (restrictions beyond the safety denies), `context_preamble: str | None = None`, `setup_script: Path | None = None`, `max_budget_usd: float = DEFAULT_REPLAY_BUDGET_USD`.
+  - `replay_permission_mode(original: str | None) -> str`
+  - `baseline_settings(episode: Episode, max_budget_usd: float = DEFAULT_REPLAY_BUDGET_USD) -> ReplaySettings`
+  - `full_prompt(settings: ReplaySettings) -> str`
+  - `replay_command(settings: ReplaySettings) -> list[str]`
+  - `replay_workdir(episode: Episode) -> Path`
+  - `project_folder_name(path: Path) -> str`
+  - `@dataclass(frozen=True) class CheckResult` with `command: str`, `exit_code: int`, `output_tail: str`.
+  - `@dataclass(frozen=True) class ReplayResult` with `run_dir: Path`, `exit_code: int`, `is_error: bool`, `result_text: str`, `cost_usd: float`, `num_turns: int`, `checks: tuple[CheckResult, ...]`.
+  - `class SetupScriptFailed(RuntimeError)`
+  - `run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir: Path, checks: tuple[str, ...], run=subprocess.run, projects_dir: Path = DEFAULT_PROJECTS) -> ReplayResult` — writes `transcript.jsonl`, `stderr.txt`, `diff.patch`, `result.json` into `run_dir`.
+
+- [ ] **Step 1: Add the fake process runner**
+
+Append to `tests/fakes.py`:
+
+```python
+class FakeRun:
+    """Stands in for subprocess.run in replay tests: answers claude, checks, setup scripts and diff."""
+
+    def __init__(self, claude_stdout="", check_codes=None, diff="", on_claude=None, claude_raises=None,
+                 setup_code=0):
+        self.claude_stdout = claude_stdout
+        self.check_codes = check_codes or {}
+        self.diff = diff
+        self.on_claude = on_claude
+        self.claude_raises = claude_raises
+        self.setup_code = setup_code
+        self.calls = []
+
+    def __call__(self, command, **kwargs):
+        self.calls.append((command, kwargs))
+        if command[0] == "claude":
+            if self.on_claude:
+                self.on_claude(kwargs["cwd"])
+            if self.claude_raises:
+                raise self.claude_raises
+            return completed(self.claude_stdout)
+        if command[:2] == ["bash", "-c"]:
+            return completed("check output", returncode=self.check_codes.get(command[2], 0))
+        if command[0] == "bash":
+            return completed("", stderr="setup failed" if self.setup_code else "", returncode=self.setup_code)
+        if command[0] == "diff":
+            return completed(self.diff, returncode=1 if self.diff else 0)
+        raise AssertionError(f"unexpected command {command}")
+```
+
+- [ ] **Step 2: Write the failing tests**
+
+`tests/test_replay.py`:
+
+```python
+import json
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from culprit.episodes import episodes_from_session
+from culprit.replay import (ReplaySettings, SetupScriptFailed, baseline_settings, project_folder_name,
+                            replay_command, replay_permission_mode, replay_workdir, run_replay)
+from fakes import FakeRun
+from records import assistant, human
+
+RESULT = json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "done",
+                     "total_cost_usd": 0.42, "num_turns": 7})
+STREAM = "\n".join([json.dumps({"type": "system", "subtype": "init"}), json.dumps({"type": "assistant"}), RESULT])
+
+
+def settings(**overrides):
+    base = dict(prompt="fix the bug", model="claude-opus-5", permission_mode="auto")
+    base.update(overrides)
+    return ReplaySettings(**base)
+
+
+def pristine_tree(tmp_path):
+    pristine = tmp_path / "pristine"
+    pristine.mkdir()
+    (pristine / "a.py").write_text("old\n")
+    return pristine
+
+
+def test_permission_mode_keeps_auto_and_accept_edits_and_promotes_default():
+    assert replay_permission_mode("auto") == "auto"
+    assert replay_permission_mode("acceptEdits") == "acceptEdits"
+    assert replay_permission_mode("default") == "acceptEdits"
+    assert replay_permission_mode(None) == "acceptEdits"
+
+
+def test_baseline_settings_copy_the_episode(write_session):
+    (episode,) = episodes_from_session(write_session([human("fix it", "p1", permissionMode="default"),
+                                                      assistant(model="claude-opus-4-8")]))
+    s = baseline_settings(episode, max_budget_usd=1.5)
+    assert (s.prompt, s.model, s.permission_mode, s.max_budget_usd) == ("fix it", "claude-opus-4-8", "acceptEdits", 1.5)
+    assert (s.append_system_prompt, s.tools, s.disallowed_tools, s.context_preamble, s.setup_script) == (None, None, (), None, None)
+
+
+def test_the_command_is_locked_down_and_carries_every_setting():
+    command = replay_command(settings(append_system_prompt="verify first", tools="default",
+                                      disallowed_tools=("WebFetch",), context_preamble="FILES"))
+    joined = " ".join(command)
+    assert command[:3] == ["claude", "-p", "FILES\n\nfix the bug"]
+    for required in ["--output-format stream-json", "--verbose", "--strict-mcp-config",
+                     '--mcp-config {"mcpServers":{}}', "--permission-prompts none", "--permission-mode auto",
+                     "--no-session-persistence", "--max-budget-usd 2.00", "--model claude-opus-5",
+                     "--tools default", "--append-system-prompt verify first"]:
+        assert required in joined
+    denied = command[command.index("--disallowedTools") + 1:]
+    assert denied[:3] == ["Bash(git push *)", "Bash(gh *)", "WebFetch"]
+
+
+def test_replay_workdir_sits_beside_the_original(write_session, tmp_path):
+    (episode,) = episodes_from_session(write_session([human("x", "p1", cwd=str(tmp_path / "proj"))]))
+    workdir = replay_workdir(episode)
+    assert workdir.parent == tmp_path
+    assert workdir.name.startswith(".culprit-replay-")
+    assert replay_workdir(episode) != workdir
+
+
+def test_project_folder_name_matches_claude_codes_encoding():
+    assert project_folder_name(Path("/Users/akp/Downloads/New-Website")) == "-Users-akp-Downloads-New-Website"
+    assert project_folder_name(Path("/private/var/T/tmp.hIy")) == "-private-var-T-tmp-hIy"
+
+
+def test_a_run_records_everything_runs_checks_and_cleans_up(tmp_path):
+    pristine = pristine_tree(tmp_path)
+    projects = tmp_path / "projects"
+    workdir = tmp_path / ".culprit-replay-abc"
+
+    def claude_edits_and_leaves_memory(cwd):
+        (cwd / "a.py").write_text("new\n")
+        (projects / project_folder_name(cwd.resolve()) / "memory").mkdir(parents=True)
+
+    run = FakeRun(claude_stdout=STREAM, check_codes={"pytest -q": 1}, diff="--- a.py\n+++ a.py\n",
+                  on_claude=claude_edits_and_leaves_memory)
+    result = run_replay(settings(), pristine, tmp_path / "run0", workdir, ("pytest -q", "true"), run=run,
+                        projects_dir=projects)
+    assert (result.is_error, result.result_text, result.cost_usd, result.num_turns) == (False, "done", 0.42, 7)
+    assert [(c.command, c.exit_code) for c in result.checks] == [("pytest -q", 1), ("true", 0)]
+    assert (tmp_path / "run0" / "transcript.jsonl").read_text() == STREAM
+    assert (tmp_path / "run0" / "diff.patch").read_text().startswith("--- a.py")
+    assert json.loads((tmp_path / "run0" / "result.json").read_text())["cost_usd"] == 0.42
+    assert not workdir.exists()
+    assert list(projects.iterdir()) == []
+    assert (pristine / "a.py").read_text() == "old\n"
+    claude_call = next(kwargs for command, kwargs in run.calls if command[0] == "claude")
+    assert claude_call["cwd"] == workdir
+
+
+def test_a_project_folder_with_a_session_log_is_kept(tmp_path):
+    projects = tmp_path / "projects"
+    workdir = tmp_path / ".culprit-replay-keep"
+
+    def claude_leaves_a_log(cwd):
+        folder = projects / project_folder_name(cwd.resolve())
+        (folder / "memory").mkdir(parents=True)
+        (folder / "real.jsonl").write_text("{}\n")
+
+    run_replay(settings(), pristine_tree(tmp_path), tmp_path / "run0", workdir, (),
+               run=FakeRun(claude_stdout=RESULT, on_claude=claude_leaves_a_log), projects_dir=projects)
+    assert (projects / project_folder_name(workdir.resolve()) / "real.jsonl").exists()
+
+
+def test_output_without_a_result_line_is_an_error(tmp_path):
+    result = run_replay(settings(), pristine_tree(tmp_path), tmp_path / "run0", tmp_path / ".culprit-replay-x", (),
+                        run=FakeRun(claude_stdout=json.dumps({"type": "assistant"})), projects_dir=tmp_path / "p")
+    assert result.is_error is True
+    assert "no result line" in result.result_text
+
+
+def test_a_timed_out_replay_is_an_error_and_cleans_up(tmp_path):
+    workdir = tmp_path / ".culprit-replay-slow"
+    run = FakeRun(claude_raises=subprocess.TimeoutExpired(cmd="claude", timeout=1800))
+    result = run_replay(settings(), pristine_tree(tmp_path), tmp_path / "run0", workdir, (), run=run,
+                        projects_dir=tmp_path / "p")
+    assert result.is_error is True
+    assert "timed out" in result.result_text
+    assert not workdir.exists()
+
+
+def test_a_failing_setup_script_raises_and_cleans_up(tmp_path):
+    workdir = tmp_path / ".culprit-replay-env"
+    script = tmp_path / "fix.sh"
+    script.write_text("exit 3\n")
+    with pytest.raises(SetupScriptFailed, match="setup failed"):
+        run_replay(settings(setup_script=script), pristine_tree(tmp_path), tmp_path / "run0", workdir, (),
+                   run=FakeRun(setup_code=3), projects_dir=tmp_path / "p")
+    assert not workdir.exists()
+```
+
+- [ ] **Step 3: Run the tests to verify they fail**
+
+Run: `uv run pytest tests/test_replay.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'culprit.replay'`
+
+- [ ] **Step 4: Write the implementation**
+
+`src/culprit/replay.py`:
+
+```python
+"""One replay: an episode re-run through a locked-down `claude -p` in a fresh clone of its starting files.
+
+The settings carry every knob an oracle may change — prompt, model, appended instructions, tools,
+context, setup script, spend cap — so a variant is the baseline with some fields replaced.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import shutil
+import subprocess
+import uuid
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+from culprit.claude import NO_MCP_SERVERS
+from culprit.episodes import Episode
+from culprit.sandbox import clone_tree
+
+SAFETY_DENIED_TOOLS = ("Bash(git push *)", "Bash(gh *)")
+REPLAY_TIMEOUT_S = 1800
+CHECK_TIMEOUT_S = 600
+DEFAULT_REPLAY_BUDGET_USD = 2.0
+DEFAULT_PROJECTS = Path.home() / ".claude" / "projects"
+OUTPUT_TAIL_CHARS = 2000
+REPLAY_DIR_PREFIX = ".culprit-replay-"
+
+
+@dataclass(frozen=True)
+class ReplaySettings:
+    prompt: str
+    model: str | None
+    permission_mode: str
+    append_system_prompt: str | None = None
+    tools: str | None = None  # None keeps Claude Code's default tool set
+    disallowed_tools: tuple[str, ...] = ()  # restrictions beyond SAFETY_DENIED_TOOLS
+    context_preamble: str | None = None
+    setup_script: Path | None = None
+    max_budget_usd: float = DEFAULT_REPLAY_BUDGET_USD
+
+
+@dataclass(frozen=True)
+class CheckResult:
+    command: str
+    exit_code: int
+    output_tail: str
+
+
+@dataclass(frozen=True)
+class ReplayResult:
+    run_dir: Path
+    exit_code: int
+    is_error: bool
+    result_text: str
+    cost_usd: float
+    num_turns: int
+    checks: tuple[CheckResult, ...]
+
+
+class SetupScriptFailed(RuntimeError):
+    pass
+
+
+def replay_permission_mode(original: str | None) -> str:
+    # In the original the human approved prompts; with nobody present, edits are accepted instead.
+    return "acceptEdits" if original in (None, "default") else original
+
+
+def baseline_settings(episode: Episode, max_budget_usd: float = DEFAULT_REPLAY_BUDGET_USD) -> ReplaySettings:
+    return ReplaySettings(prompt=episode.prompt_text, model=episode.model,
+                          permission_mode=replay_permission_mode(episode.permission_mode),
+                          max_budget_usd=max_budget_usd)
+
+
+def full_prompt(settings: ReplaySettings) -> str:
+    if settings.context_preamble:
+        return f"{settings.context_preamble}\n\n{settings.prompt}"
+    return settings.prompt
+
+
+def replay_command(settings: ReplaySettings) -> list[str]:
+    command = [
+        "claude", "-p", full_prompt(settings),
+        "--output-format", "stream-json", "--verbose",
+        "--strict-mcp-config", "--mcp-config", NO_MCP_SERVERS,
+        "--permission-prompts", "none",
+        "--permission-mode", settings.permission_mode,
+        "--no-session-persistence",
+        "--max-budget-usd", f"{settings.max_budget_usd:.2f}",
+    ]
+    if settings.model:
+        command += ["--model", settings.model]
+    if settings.tools is not None:
+        command += ["--tools", settings.tools]
+    if settings.append_system_prompt:
+        command += ["--append-system-prompt", settings.append_system_prompt]
+    command += ["--disallowedTools", *SAFETY_DENIED_TOOLS, *settings.disallowed_tools]
+    return command
+
+
+def replay_workdir(episode: Episode) -> Path:
+    """Beside the original working directory, so the replay loads the same ancestor CLAUDE.md files."""
+    return Path(episode.cwd).parent / f"{REPLAY_DIR_PREFIX}{uuid.uuid4().hex[:12]}"
+
+
+def project_folder_name(path: Path) -> str:
+    return re.sub(r"[^A-Za-z0-9]", "-", str(path))
+
+
+def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir: Path, checks: tuple[str, ...],
+               run=subprocess.run, projects_dir: Path = DEFAULT_PROJECTS) -> ReplayResult:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    clone_tree(pristine, workdir)
+    project_folder = projects_dir / project_folder_name(workdir.resolve())
+    try:
+        if settings.setup_script:
+            setup = run(["bash", str(settings.setup_script)], cwd=workdir, capture_output=True, text=True,
+                        timeout=CHECK_TIMEOUT_S)
+            if setup.returncode != 0:
+                raise SetupScriptFailed(f"{settings.setup_script} exited {setup.returncode}: {setup.stderr[-500:]}")
+        try:
+            completed = run(replay_command(settings), cwd=workdir, capture_output=True, text=True,
+                            timeout=REPLAY_TIMEOUT_S)
+            stdout, stderr, exit_code = completed.stdout, completed.stderr, completed.returncode
+        except subprocess.TimeoutExpired:
+            stdout, stderr, exit_code = "", f"timed out after {REPLAY_TIMEOUT_S}s", -1
+        (run_dir / "transcript.jsonl").write_text(stdout)
+        (run_dir / "stderr.txt").write_text(stderr)
+        result_line = _result_line(stdout)
+        check_results = tuple(_run_check(command, workdir, run) for command in checks)
+        diff = run(["diff", "-ruN", "--exclude=.git", str(pristine), str(workdir)], capture_output=True, text=True)
+        (run_dir / "diff.patch").write_text(diff.stdout)
+        if result_line is None:
+            reason = "timed out" if exit_code == -1 else f"no result line (exit {exit_code})"
+            replay = ReplayResult(run_dir, exit_code, True, f"{reason}: {stderr[-300:]}", 0.0, 0, check_results)
+        else:
+            replay = ReplayResult(run_dir, exit_code, bool(result_line.get("is_error")),
+                                  str(result_line.get("result") or ""), float(result_line.get("total_cost_usd") or 0),
+                                  int(result_line.get("num_turns") or 0), check_results)
+        (run_dir / "result.json").write_text(json.dumps(asdict(replay), default=str, indent=2))
+        return replay
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+        _remove_if_only_empty_memory(project_folder)
+
+
+def _result_line(stdout: str) -> dict | None:
+    for line in reversed(stdout.splitlines()):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict) and record.get("type") == "result":
+            return record
+    return None
+
+
+def _run_check(command: str, workdir: Path, run) -> CheckResult:
+    try:
+        done = run(["bash", "-c", command], cwd=workdir, capture_output=True, text=True, timeout=CHECK_TIMEOUT_S)
+        return CheckResult(command, done.returncode, (done.stdout + done.stderr)[-OUTPUT_TAIL_CHARS:])
+    except subprocess.TimeoutExpired:
+        return CheckResult(command, -1, f"timed out after {CHECK_TIMEOUT_S}s")
+
+
+def _remove_if_only_empty_memory(project_folder: Path) -> None:
+    if not project_folder.is_dir():
+        return
+    entries = list(project_folder.iterdir())
+    if all(entry.name == "memory" and entry.is_dir() and not any(entry.iterdir()) for entry in entries):
+        for entry in entries:
+            entry.rmdir()
+        project_folder.rmdir()
+```
+
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run: `uv run pytest -v`
+Expected: 64 passed (54 from Stages 1–2 plus 10).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/culprit/replay.py tests/fakes.py tests/test_replay.py
+git commit -m "Run one locked-down replay in a fresh clone beside the original working directory
+
+The clone sits beside the original so the same ancestor CLAUDE.md files
+load; no MCP server, no permission prompts, no session log, git push and gh
+denied, spend cap. Checks and a diff are recorded; the clone and Claude
+Code's empty project folder are removed whatever happens.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git status --short   # must print nothing
+```
+
+---
+
+#### Task 3.2: Judge one replay against the criterion
+
+**Files:**
+- Create: `src/culprit/judge.py`
+- Test: `tests/test_judge.py`
+
+**Interfaces:**
+- Consumes: `Criterion` (criterion); `ReplayResult`, `CheckResult` (replay); `Ask`, `ask_claude` (claude).
+- Produces:
+  - `JUDGE_CALL_CAP_USD = 0.50`, `MAX_DIFF_CHARS = 60_000`, `JUDGEMENT_SCHEMA: dict`
+  - `@dataclass(frozen=True) class Judgement` with `passed: bool`, `reason: str`, `by: str` — `"check"`, `"replay"` or `"model"`.
+  - `judging_prompt(criterion: Criterion, replay: ReplayResult, diff: str) -> str`
+  - `judge_replay(criterion: Criterion, replay: ReplayResult, ask: Ask = ask_claude) -> Judgement`
+
+- [ ] **Step 1: Write the failing tests**
+
+`tests/test_judge.py`:
+
+```python
+from culprit.criterion import Criterion
+from culprit.judge import MAX_DIFF_CHARS, Judgement, judge_replay, judging_prompt
+from culprit.replay import CheckResult, ReplayResult
+from fakes import FakeAsk
+
+CRITERION = Criterion("the export has a header row", ("pytest -q",), ("delete tests",), approved=True)
+
+
+def replay_in(tmp_path, checks=(), is_error=False, diff="+header\n"):
+    run_dir = tmp_path / "run0"
+    run_dir.mkdir()
+    (run_dir / "diff.patch").write_text(diff)
+    return ReplayResult(run_dir, 0, is_error, "I added the header", 0.3, 4, tuple(checks))
+
+
+def test_a_failing_check_fails_without_asking_a_model(tmp_path):
+    ask = FakeAsk()
+    judgement = judge_replay(CRITERION, replay_in(tmp_path, [CheckResult("pytest -q", 1, "1 failed")]), ask=ask)
+    assert judgement == Judgement(False, "check failed: pytest -q (exit 1)", "check")
+    assert ask.calls == []
+
+
+def test_an_errored_replay_fails_without_asking_a_model(tmp_path):
+    ask = FakeAsk()
+    judgement = judge_replay(CRITERION, replay_in(tmp_path, is_error=True), ask=ask)
+    assert (judgement.passed, judgement.by) == (False, "replay")
+    assert ask.calls == []
+
+
+def test_otherwise_the_model_decides_from_criterion_answer_and_diff(tmp_path):
+    ask = FakeAsk({"passed": True, "reason": "header present, tests intact"})
+    judgement = judge_replay(CRITERION, replay_in(tmp_path, [CheckResult("pytest -q", 0, "ok")]), ask=ask)
+    assert judgement == Judgement(True, "header present, tests intact", "model")
+    prompt = ask.calls[0][0]
+    for expected in ["the export has a header row", "delete tests", "I added the header", "+header", "pytest -q"]:
+        assert expected in prompt
+
+
+def test_a_huge_diff_is_truncated_in_the_prompt(tmp_path):
+    replay = replay_in(tmp_path, diff="x" * (MAX_DIFF_CHARS + 5000))
+    prompt = judging_prompt(CRITERION, replay, (replay.run_dir / "diff.patch").read_text())
+    assert "[diff truncated" in prompt
+    assert prompt.count("x") <= MAX_DIFF_CHARS + 100
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `uv run pytest tests/test_judge.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'culprit.judge'`
+
+- [ ] **Step 3: Write the implementation**
+
+`src/culprit/judge.py`:
+
+```python
+"""Pass or fail for one replay, against the approved criterion.
+
+A failing check or an errored run fails on the spot; only otherwise does a model read the run's final
+answer and diff. Every judgement says which of the three decided it.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from culprit.claude import Ask, ask_claude
+from culprit.criterion import Criterion
+from culprit.replay import ReplayResult
+
+JUDGE_CALL_CAP_USD = 0.50
+MAX_DIFF_CHARS = 60_000
+JUDGEMENT_SCHEMA = {
+    "type": "object",
+    "properties": {"passed": {"type": "boolean"}, "reason": {"type": "string"}},
+    "required": ["passed", "reason"],
+}
+
+
+@dataclass(frozen=True)
+class Judgement:
+    passed: bool
+    reason: str
+    by: str  # "check", "replay" or "model"
+
+
+def judging_prompt(criterion: Criterion, replay: ReplayResult, diff: str) -> str:
+    if len(diff) > MAX_DIFF_CHARS:
+        diff = diff[:MAX_DIFF_CHARS] + f"\n[diff truncated: {len(diff) - MAX_DIFF_CHARS} more characters]"
+    must_not = "\n".join(f"- {rule}" for rule in criterion.must_not) or "- (nothing listed)"
+    checks = "\n".join(f"- {c.command}: exit {c.exit_code}" for c in replay.checks) or "- (no checks)"
+    return f"""Decide whether one attempt by a coding agent met its success criterion.
+
+Success means: {criterion.success_means}
+
+A correct attempt must not:
+{must_not}
+
+Checks run after the attempt:
+{checks}
+
+The agent's final answer:
+<answer>{replay.result_text}</answer>
+
+Every file change the attempt made:
+<diff>
+{diff}
+</diff>
+
+Judge only against the criterion. passed is true only if the outcome is met and nothing forbidden
+was done. reason is one sentence naming the evidence."""
+
+
+def judge_replay(criterion: Criterion, replay: ReplayResult, ask: Ask = ask_claude) -> Judgement:
+    failed = [check for check in replay.checks if check.exit_code != 0]
+    if failed:
+        return Judgement(False, f"check failed: {failed[0].command} (exit {failed[0].exit_code})", "check")
+    if replay.is_error:
+        return Judgement(False, f"the replay ended in an error: {replay.result_text[:300]}", "replay")
+    diff = (replay.run_dir / "diff.patch").read_text(errors="replace")
+    answer = ask(judging_prompt(criterion, replay, diff), JUDGEMENT_SCHEMA)
+    return Judgement(bool(answer["passed"]), str(answer["reason"]), "model")
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `uv run pytest -v`
+Expected: 68 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/culprit/judge.py tests/test_judge.py
+git commit -m "Judge one replay: failing check or errored run fails; otherwise a model reads answer and diff
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git status --short   # must print nothing
+```
+
+---
+
+#### Task 3.3: Run one variant N times under a spend cap
+
+**Files:**
+- Create: `src/culprit/experiment.py`
+- Test: `tests/test_experiment.py`
+
+**Interfaces:**
+- Consumes: `Episode` (episodes); `Criterion` (criterion); `ReplaySettings`, `run_replay`, `replay_workdir` (replay); `Judgement`, `judge_replay`, `JUDGE_CALL_CAP_USD` (judge); `episode_dir` (store).
+- Produces:
+  - `REPLAYS_DIR = "replays"`, `PRISTINE_DIR = "pristine"`, `OUTCOME_FILE = "outcome.json"`
+  - `class BudgetExhausted(RuntimeError)`
+  - `@dataclass class EpisodeBudget` with `cap_usd: float`, `spent_usd: float = 0.0`, methods `ensure_room(next_cap_usd: float) -> None` and `spend(usd: float) -> None`.
+  - `@dataclass(frozen=True) class VariantOutcome` with `variant: str`, `passes: int`, `runs: int`, `cost_usd: float`.
+  - `run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Episode, runs_dir: Path, criterion: Criterion, budget: EpisodeBudget, replay=run_replay, judge=judge_replay, out_dir: Path | None = None) -> VariantOutcome` — runs go to `<out_dir or episode folder>/replays/<variant>/<i>/`, each with `judgement.json`; the outcome to `replays/<variant>/outcome.json`. `out_dir` lets Stage 5's selftest keep planted runs apart from real ones.
+  - `load_outcome(folder: Path, variant: str) -> VariantOutcome | None` — `folder` is the episode folder (or a selftest folder).
+
+- [ ] **Step 1: Write the failing tests**
+
+`tests/test_experiment.py`:
+
+```python
+import json
+
+import pytest
+
+from culprit.criterion import Criterion
+from culprit.episodes import episodes_from_session
+from culprit.experiment import BudgetExhausted, EpisodeBudget, VariantOutcome, load_outcome, run_variant
+from culprit.judge import Judgement
+from culprit.replay import ReplayResult, ReplaySettings
+from culprit.store import episode_dir
+from records import human
+
+CRITERION = Criterion("works", (), (), approved=True)
+SETTINGS = ReplaySettings(prompt="fix", model="claude-opus-5", permission_mode="auto", max_budget_usd=1.0)
+
+
+def episode_at(write_session, tmp_path):
+    (episode,) = episodes_from_session(write_session([human("fix", "p1", session_id="s1", cwd=str(tmp_path / "proj"))]))
+    return episode
+
+
+def fake_replay(cost=0.25):
+    calls = []
+
+    def replay(settings, pristine, run_dir, workdir, checks):
+        calls.append((settings, pristine, run_dir, workdir, checks))
+        run_dir.mkdir(parents=True, exist_ok=True)
+        return ReplayResult(run_dir, 0, False, "done", cost, 3, ())
+
+    replay.calls = calls
+    return replay
+
+
+def judge_sequence(*passed):
+    answers = list(passed)
+    return lambda criterion, result: Judgement(answers.pop(0), "r", "model")
+
+
+def test_a_variant_runs_n_times_and_stores_each_judgement_and_the_outcome(write_session, tmp_path):
+    episode = episode_at(write_session, tmp_path)
+    runs = tmp_path / "runs"
+    replay = fake_replay()
+    outcome = run_variant("baseline", SETTINGS, n=3, episode=episode, runs_dir=runs, criterion=CRITERION,
+                          budget=EpisodeBudget(10.0), replay=replay, judge=judge_sequence(True, False, True))
+    assert outcome == VariantOutcome("baseline", passes=2, runs=3, cost_usd=0.75)
+    folder = episode_dir(runs, episode.episode_id)
+    assert json.loads((folder / "replays" / "baseline" / "1" / "judgement.json").read_text())["passed"] is False
+    assert load_outcome(folder, "baseline") == outcome
+    assert all(call[1] == folder / "pristine" for call in replay.calls)
+    assert all(call[3].parent == tmp_path and call[3].name.startswith(".culprit-replay-") for call in replay.calls)
+
+
+def test_the_budget_stops_before_the_run_that_would_cross_it(write_session, tmp_path):
+    episode = episode_at(write_session, tmp_path)
+    budget = EpisodeBudget(cap_usd=3.2)
+    replay = fake_replay(cost=1.0)
+    with pytest.raises(BudgetExhausted, match="3.20"):
+        run_variant("baseline", SETTINGS, n=5, episode=episode, runs_dir=tmp_path / "runs", criterion=CRITERION,
+                    budget=budget, replay=replay, judge=judge_sequence(*[True] * 5))
+    # each run reserves its $1.00 cap plus the $0.50 judge cap: two runs fit in $3.20, a third would not
+    assert len(replay.calls) == 2
+
+
+def test_out_dir_keeps_runs_apart_from_the_episode_folder(write_session, tmp_path):
+    episode = episode_at(write_session, tmp_path)
+    out = tmp_path / "selftest" / "weak-model"
+    run_variant("baseline", SETTINGS, n=1, episode=episode, runs_dir=tmp_path / "runs", criterion=CRITERION,
+                budget=EpisodeBudget(10.0), replay=fake_replay(), judge=judge_sequence(True), out_dir=out)
+    assert load_outcome(out, "baseline").passes == 1
+    assert not (episode_dir(tmp_path / "runs", episode.episode_id) / "replays").exists()
+
+
+def test_a_variant_never_run_loads_as_none(tmp_path):
+    assert load_outcome(tmp_path, "model") is None
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `uv run pytest tests/test_experiment.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'culprit.experiment'`
+
+- [ ] **Step 3: Write the implementation**
+
+`src/culprit/experiment.py`:
+
+```python
+"""One variant of an episode, replayed N times and judged, inside a spend cap.
+
+The outcome — passes out of runs — is what the verdict compares across variants.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+from culprit.criterion import Criterion
+from culprit.episodes import Episode
+from culprit.judge import JUDGE_CALL_CAP_USD, judge_replay
+from culprit.replay import ReplaySettings, replay_workdir, run_replay
+from culprit.store import episode_dir
+
+REPLAYS_DIR = "replays"
+PRISTINE_DIR = "pristine"
+OUTCOME_FILE = "outcome.json"
+JUDGEMENT_FILE = "judgement.json"
+
+
+class BudgetExhausted(RuntimeError):
+    pass
+
+
+@dataclass
+class EpisodeBudget:
+    cap_usd: float
+    spent_usd: float = 0.0
+
+    def ensure_room(self, next_cap_usd: float) -> None:
+        if self.spent_usd + next_cap_usd > self.cap_usd:
+            raise BudgetExhausted(f"the next run could spend ${next_cap_usd:.2f}; ${self.spent_usd:.2f} of "
+                                  f"${self.cap_usd:.2f} is already spent")
+
+    def spend(self, usd: float) -> None:
+        self.spent_usd += usd
+
+
+@dataclass(frozen=True)
+class VariantOutcome:
+    variant: str
+    passes: int
+    runs: int
+    cost_usd: float
+
+
+def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Episode, runs_dir: Path,
+                criterion: Criterion, budget: EpisodeBudget, replay=run_replay, judge=judge_replay,
+                out_dir: Path | None = None) -> VariantOutcome:
+    episode_folder = episode_dir(runs_dir, episode.episode_id)
+    folder = out_dir or episode_folder
+    variant_dir = folder / REPLAYS_DIR / variant
+    passes = 0
+    cost = 0.0
+    for i in range(n):
+        budget.ensure_room(settings.max_budget_usd + JUDGE_CALL_CAP_USD)
+        run_dir = variant_dir / str(i)
+        result = replay(settings, episode_folder / PRISTINE_DIR, run_dir, replay_workdir(episode), criterion.checks)
+        judgement = judge(criterion, result)
+        spent = result.cost_usd + (JUDGE_CALL_CAP_USD if judgement.by == "model" else 0.0)
+        budget.spend(spent)
+        cost += result.cost_usd
+        (run_dir / JUDGEMENT_FILE).write_text(json.dumps(asdict(judgement), indent=2))
+        passes += int(judgement.passed)
+    outcome = VariantOutcome(variant, passes, n, round(cost, 4))
+    variant_dir.mkdir(parents=True, exist_ok=True)
+    (variant_dir / OUTCOME_FILE).write_text(json.dumps(asdict(outcome), indent=2))
+    return outcome
+
+
+def load_outcome(folder: Path, variant: str) -> VariantOutcome | None:
+    path = folder / REPLAYS_DIR / variant / OUTCOME_FILE
+    if not path.exists():
+        return None
+    return VariantOutcome(**json.loads(path.read_text()))
+```
+
+Note on the budget test: run 1 reserves $1.50 (0 + 1.50 ≤ 3.20) and spends $1.50 (replay $1.00 + judge cap $0.50); run 2 reserves $1.50 (1.50 + 1.50 ≤ 3.20) and spends $1.50; run 3 needs 3.00 + 1.50 > 3.20 and stops.
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `uv run pytest -v`
+Expected: 72 passed.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/culprit/experiment.py tests/test_experiment.py
+git commit -m "Run one variant N times inside an episode spend cap and store its pass count
+
+The cap is checked before each run against that run's replay cap plus the
+judge call's cap, so a run that could cross the cap never starts.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git status --short   # must print nothing
+```
+
+---
+
+#### Task 3.4: `culprit baseline`, proven on the restored real episode
+
+**Files:**
+- Modify: `src/culprit/cli.py`
+- Test: `tests/test_cli_stage3.py`
+
+**Interfaces:**
+- Consumes: Stage 2's CLI; `baseline_settings` (replay); `EpisodeBudget`, `BudgetExhausted`, `run_variant`, `PRISTINE_DIR` (experiment).
+- Produces: subcommand `baseline <episode_id> [--n 5] [--budget 10.0] [--replay-budget 2.0]`.
+
+- [ ] **Step 1: Write the failing tests**
+
+`tests/test_cli_stage3.py`:
+
+```python
+import culprit.cli as cli
+from culprit.criterion import Criterion, save_criterion
+from culprit.experiment import VariantOutcome
+from culprit.store import episode_dir
+from records import human, snapshot
+
+
+def setup_episode(write_session, tmp_path, approved=True, restored=True):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_session([snapshot("u-p1", {}), human("fix a", "p1", session_id="s1", cwd=str(repo))], name="s1.jsonl")
+    runs = tmp_path / "runs"
+    save_criterion(runs, "s1:p1", Criterion("works", (), (), approved=approved))
+    if restored:
+        (episode_dir(runs, "s1:p1") / "pristine").mkdir(parents=True)
+    return tmp_path / "projects", runs
+
+
+def test_baseline_runs_the_unchanged_episode_and_prints_the_pass_rate(write_session, tmp_path, capsys, monkeypatch):
+    projects, runs = setup_episode(write_session, tmp_path)
+    seen = {}
+
+    def fake_run_variant(variant, settings, **kwargs):
+        seen.update(variant=variant, settings=settings, n=kwargs["n"], cap=kwargs["budget"].cap_usd)
+        return VariantOutcome(variant, 1, kwargs["n"], 3.1)
+
+    monkeypatch.setattr(cli, "run_variant", fake_run_variant)
+    exit_code = cli.main(["baseline", "s1:p1", "--projects", str(projects), "--runs", str(runs), "--n", "4",
+                          "--budget", "12"])
+    assert exit_code == 0
+    assert seen["variant"] == "baseline" and seen["n"] == 4 and seen["cap"] == 12.0
+    assert seen["settings"].prompt == "fix a"
+    assert "baseline: 1 of 4 passed" in capsys.readouterr().out
+
+
+def test_baseline_names_the_missing_step(write_session, tmp_path, capsys):
+    projects, runs = setup_episode(write_session, tmp_path, approved=False)
+    assert cli.main(["baseline", "s1:p1", "--projects", str(projects), "--runs", str(runs)]) == 1
+    assert "culprit criterion approve" in capsys.readouterr().err
+
+
+def test_baseline_before_restore_names_restore(write_session, tmp_path, capsys):
+    projects, runs = setup_episode(write_session, tmp_path, restored=False)
+    assert cli.main(["baseline", "s1:p1", "--projects", str(projects), "--runs", str(runs)]) == 1
+    assert "culprit restore" in capsys.readouterr().err
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `uv run pytest tests/test_cli_stage3.py -v`
+Expected: FAIL — `invalid choice: 'baseline'` (SystemExit 2).
+
+- [ ] **Step 3: Add the subcommand**
+
+In `src/culprit/cli.py`, add to the imports:
+
+```python
+from culprit.criterion import Criterion
+from culprit.episodes import Episode
+from culprit.experiment import BudgetExhausted, EpisodeBudget, run_variant
+from culprit.replay import DEFAULT_REPLAY_BUDGET_USD, SetupScriptFailed, baseline_settings
+```
+
+Replace the `except` line in `main` with:
+
+```python
+    except (UnknownEpisode, EpisodeNotFound, FileNotFoundError, ClaudeCallFailed, BudgetExhausted,
+            SetupScriptFailed) as refusal:
+```
+
+Add before `return parser` in `build_parser`:
+
+```python
+    baseline = commands.add_parser("baseline", help="replay the unchanged episode N times and judge each run")
+    baseline.add_argument("episode_id")
+    _projects_and_runs(baseline)
+    baseline.add_argument("--n", type=int, default=5)
+    baseline.add_argument("--budget", type=float, default=10.0, help="spend cap in USD for this command")
+    baseline.add_argument("--replay-budget", type=float, default=DEFAULT_REPLAY_BUDGET_USD)
+    baseline.set_defaults(handler=baseline_command)
+```
+
+Add these functions at the end of the file:
+
+```python
+def ready_to_replay(args: argparse.Namespace) -> tuple[Episode, Criterion]:
+    """The episode and its approved criterion, once restore has built the pristine copy; refuses otherwise."""
+    episode = find_episode(args.projects, args.episode_id)
+    criterion = load_criterion(args.runs, args.episode_id)
+    if criterion is None or not criterion.approved:
+        raise FileNotFoundError(f"no approved criterion for {args.episode_id} — run "
+                                f"`culprit criterion draft {args.episode_id}` then `culprit criterion approve {args.episode_id}`")
+    if not (episode_dir(args.runs, args.episode_id) / PRISTINE_DIR).is_dir():
+        raise FileNotFoundError(f"{args.episode_id} has no restored copy — run `culprit restore {args.episode_id}` first")
+    return episode, criterion
+
+
+def baseline_command(args: argparse.Namespace) -> int:
+    episode, criterion = ready_to_replay(args)
+    outcome = run_variant("baseline", baseline_settings(episode, args.replay_budget), n=args.n, episode=episode,
+                          runs_dir=args.runs, criterion=criterion, budget=EpisodeBudget(args.budget))
+    print(f"baseline: {outcome.passes} of {outcome.runs} passed, ${outcome.cost_usd:.2f} spent on replays")
+    return 0
+```
+
+(`PRISTINE_DIR` is already defined in `cli.py` from Stage 2 with the same value, `"pristine"`, as `culprit.experiment.PRISTINE_DIR`; replace the Stage 2 constant with `from culprit.experiment import PRISTINE_DIR` so one name owns it.)
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `uv run pytest -v`
+Expected: 75 passed.
+
+- [ ] **Step 5: Prove it on the real episode restored in Task 2.6**
+
+One run first, so a wiring fault costs one replay, not five:
+
+```bash
+uv run culprit baseline <ID> --n 1 --budget 3
+```
+
+Expected: `baseline: K of 1 passed, $X spent on replays`, exit 0. Then read what the loop actually wrote, not a proxy:
+
+```bash
+R=runs/<ID with : as __>/replays/baseline/0
+head -c 600 $R/transcript.jsonl         # system/init present; its cwd is <original parent>/.culprit-replay-…
+python3 -c "import json;l=[json.loads(x) for x in open('$R/transcript.jsonl')];i=[x for x in l if x.get('subtype')=='init'][0];print(i.get('cwd'), i.get('mcp_servers'), i.get('permissionMode'))"
+cat $R/result.json $R/judgement.json
+head -40 $R/diff.patch
+ls -d "$(dirname <original cwd>)"/.culprit-replay-* 2>/dev/null | wc -l    # prints 0: the clone is gone
+ls ~/.claude/projects | grep -c culprit-replay                              # prints 0: no folder left behind
+```
+
+Expected: `mcp_servers` is empty, the permission mode is the mapped one, the judgement's reason matches the diff, and nothing is left behind. If the judgement disagrees with your own reading of the diff, note it: Stage 5 calibration exists for this, but a gross error here means `judging_prompt` needs fixing before Stage 4.
+
+Then the full baseline:
+
+```bash
+rm -r runs/<ID with : as __>/replays/baseline
+uv run culprit baseline <ID>
+```
+
+Expected: `baseline: K of 5 passed`. Record K, the cost and the wall time in the commit message. K ≥ 3 means this episode will be **Not reproducible**; pick another episode for Stage 4's proof.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/culprit/cli.py tests/test_cli_stage3.py
+git commit -m "Add culprit baseline: replay the unchanged episode N times and judge each run
+
+Proven on <ID>: K of 5 passed, \$<cost>, <wall time>; transcript init shows
+no MCP servers and the replay ran beside the original directory.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git status --short   # must print nothing
+```
