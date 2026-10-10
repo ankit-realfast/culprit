@@ -95,7 +95,7 @@ def test_store_logs_and_file_history_are_not_flags(argv, capsys):
 def test_read_only_commands_refuse_a_missing_store_without_creating_it(tmp_path, capsys, monkeypatch):
     missing = tmp_path / "nowhere"
     monkeypatch.setenv("CULPRIT_RUNS", str(missing))
-    for argv in (["review"], ["calibration"], ["report"], ["confirm", "s1:p1", "wasteful"]):
+    for argv in (["review"], ["status"], ["report"], ["confirm", "s1:p1", "wasteful"]):
         assert main(argv) == 3
         err = capsys.readouterr().err
         assert f"no culprit store at {missing.resolve()}" in err and "CULPRIT_RUNS" in err

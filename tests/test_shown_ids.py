@@ -75,7 +75,7 @@ def test_status_rows_line_up_whatever_the_id_lengths(tmp_path, capsys):
     runs = tmp_path / "runs"
     queue(runs, A, TWIN, "s1:p1", B)
     assert cli.main(["status"]) == 0
-    rows = capsys.readouterr().out.splitlines()
+    rows = capsys.readouterr().out.split("\n\n")[0].splitlines()
     assert len(rows) == 4
     assert len({row.index("next:") for row in rows}) == 1
     assert len({row.index("queued") for row in rows}) == 1

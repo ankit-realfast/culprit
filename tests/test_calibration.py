@@ -66,6 +66,14 @@ def test_next_unlabelled_walks_the_runs_in_order(tmp_path):
     assert next_unlabelled(runs) is None
 
 
+def test_next_unlabelled_passes_over_skipped_runs(tmp_path):
+    runs = tmp_path / "runs"
+    first = judged(runs, "s1__p1", "baseline", 0, True)
+    second = judged(runs, "s1__p1", "baseline", 1, False)
+    assert next_unlabelled(runs, skip={first}) == second
+    assert next_unlabelled(runs, skip={first, second}) is None
+
+
 def test_the_summary_shows_answer_judgement_and_diff(tmp_path):
     summary = run_summary(judged(tmp_path, "s1__p1", "baseline", 0, False, reason="tests still fail"))
     for expected in ["I fixed it", "judge: fail — tests still fail", "+new", "1 file changed"]:

@@ -60,15 +60,3 @@ def test_diagnose_and_env_fix_name_their_next_step(write_session, tmp_path, caps
     monkeypatch.setattr(cli, "diagnose", fake_diagnose)
     assert cli.main(["diagnose", "s1:p1"]) == 0
     assert last_err_line(capsys) == "next: run `culprit report`"
-
-
-def test_label_names_review_while_runs_are_unlabelled_then_calibration(tmp_path, capsys):
-    runs = tmp_path / "runs"
-    for i in range(2):
-        run_dir = runs / "s1__p1" / "replays" / "baseline" / str(i)
-        run_dir.mkdir(parents=True)
-        (run_dir / "judgement.json").write_text(json.dumps({"passed": True, "reason": "r", "by": "model"}))
-    assert cli.main(["label", "s1__p1/replays/baseline/0", "pass"]) == 0
-    assert last_err_line(capsys) == "next: run `culprit review`"
-    assert cli.main(["label", "s1__p1/replays/baseline/1", "pass"]) == 0
-    assert last_err_line(capsys) == "next: run `culprit calibration`"

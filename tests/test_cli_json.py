@@ -57,9 +57,10 @@ def test_diagnose_json(write_session, tmp_path, capsys, monkeypatch):
     assert data["judge"]["calibrated"] is False and data["selftest"] == {"correct": 0, "total": 0}
 
 
-def test_calibration_json(tmp_path, capsys):
+def test_status_json_carries_the_judge_agreement_and_selftest_accuracy(tmp_path, capsys):
     (tmp_path / "runs").mkdir()
-    assert cli.main(["calibration", "--json"]) == 0
+    assert cli.main(["status", "--json"]) == 0
     data = only_json(capsys)
-    assert data == {"labelled": 0, "agreed": 0, "kappa": None, "calibrated": False, "min_labels": 20,
-                    "min_kappa": 0.6}
+    assert data["judge"] == {"labelled": 0, "agreed": 0, "kappa": None, "calibrated": False, "min_labels": 20,
+                             "min_kappa": 0.6}
+    assert data["selftest"] == {"correct": 0, "total": 0}

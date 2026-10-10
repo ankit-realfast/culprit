@@ -86,8 +86,10 @@ def test_status_without_an_id_prints_one_line_per_episode(tmp_path, capsys):
     queue(runs, ID)
     confirm(runs)
     assert cli.main(["status"]) == 0
-    out = capsys.readouterr().out.splitlines()
+    out, trust = capsys.readouterr().out.split("\n\n")  # the episode rows, then how far to trust verdicts
+    out = out.splitlines()
     assert len(out) == 1
+    assert "judge: 0 of 0 labels agree" in trust and "selftest: not run" in trust
     assert "aaaaaaaa:bbbbbbbb" in out[0] and "confirmed" in out[0] and f"culprit confirm {short_id(ID)} wrong-result" in out[0]
 
 

@@ -61,7 +61,7 @@ uv run culprit status [<episode-id>]            # where each episode stands and 
 `culprit --help` lists the commands by group (workflow, human review, trust) with this run-through;
 `culprit <command> --help` ends with examples.
 
-For scripts, `triage`, `status`, `diagnose` and `calibration` take `--json`: stdout is then
+For scripts, `triage`, `status` and `diagnose` take `--json`: stdout is then
 one JSON document and nothing else (progress, `next:` lines and questions stay on stderr).
 
 `diagnose` and `selftest` print a line on stderr as each replay finishes:
@@ -78,14 +78,15 @@ episode alone; `--json` output always carries the full id.
 
 Everything is stored in `runs/` in the current folder; set `CULPRIT_RUNS=/path/to/runs` to use another.
 Session logs are read from `~/.claude/projects`; set `CULPRIT_PROJECTS=/path/to/projects` to read others.
-`status`, `confirm`, `review`, `calibration` and `report` refuse (exit 3) when the store
+`status`, `confirm`, `review` and `report` refuse (exit 3) when the store
 does not exist rather than create an empty one.
 
 Batch: `uv run culprit diagnose` with no episode id restores and diagnoses every confirmed episode in the
 queue, sharing a $400 total, then writes the report.
 
-Trust: label replays with `culprit review` / `culprit label <run> pass|fail`; `culprit calibration`
-shows how often the judge agrees with you (calibrated at ≥ 20 labels and Cohen's kappa ≥ 0.6).
+Trust: `culprit review` shows each judged replay you have not labelled and asks pass, fail, skip or quit
+(it needs a terminal). `culprit status` and the report show how often the judge agrees with you
+(calibrated at ≥ 20 labels and Cohen's kappa ≥ 0.6).
 `culprit selftest <episode-id>` takes an episode that normally passes (replaying its baseline first if it
 has none), plants a known fault in each layer and reports how often culprit names it.
 

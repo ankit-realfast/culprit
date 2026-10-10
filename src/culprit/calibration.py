@@ -6,6 +6,7 @@ Verdicts are marked uncalibrated until at least MIN_LABELS replays are labelled 
 from __future__ import annotations
 
 import json
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -72,8 +73,10 @@ def agreement(runs_dir: Path) -> Agreement:
     return Agreement(len(pairs), sum(j == h for j, h in pairs), cohens_kappa(pairs))
 
 
-def next_unlabelled(runs_dir: Path) -> Path | None:
-    return next((run_dir for run_dir in judged_runs(runs_dir) if not (run_dir / HUMAN_LABEL_FILE).exists()), None)
+def next_unlabelled(runs_dir: Path, skip: Collection[Path] = ()) -> Path | None:
+    """The first judged run with no human label, passing over the runs in skip."""
+    return next((run_dir for run_dir in judged_runs(runs_dir)
+                 if not (run_dir / HUMAN_LABEL_FILE).exists() and run_dir not in skip), None)
 
 
 def run_summary(run_dir: Path) -> str:

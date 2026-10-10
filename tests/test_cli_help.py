@@ -5,7 +5,7 @@ import culprit.cli as cli
 GROUPS = {
     "workflow": ["triage", "env-fix", "diagnose", "report", "status"],
     "human review": ["confirm"],
-    "trust": ["review", "label", "calibration", "selftest"],
+    "trust": ["review", "selftest"],
 }
 
 

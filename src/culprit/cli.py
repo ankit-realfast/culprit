@@ -97,7 +97,7 @@ def require_store(runs_dir: Path) -> None:
 COMMAND_GROUPS = {
     "workflow": ("triage", "env-fix", "diagnose", "report", "status"),
     "human review": ("confirm",),
-    "trust": ("review", "label", "calibration", "selftest"),
+    "trust": ("review", "selftest"),
 }
 EXAMPLE_RUN = """example run:
   culprit triage --top 20                  rank likely failures; rows are numbered #1, #2, ...
@@ -117,9 +117,7 @@ EXAMPLES = {
     "status": "  culprit status\n  culprit status #1\n",
     "env-fix": "  culprit env-fix #1 fix-env.sh         run before Claude starts in the environment oracle\n",
     "diagnose": "  culprit diagnose #1\n  culprit diagnose       every confirmed episode in the queue, then the report\n",
-    "review": "  culprit review\n",
-    "label": "  culprit label 1a2b__5e6f/replays/baseline/0 pass\n",
-    "calibration": "  culprit calibration\n",
+    "review": "  culprit review        answer p(ass), f(ail), s(kip) or q(uit) for each judged replay\n",
     "selftest": "  culprit selftest #4\n",
     "report": "  culprit report\n  CULPRIT_RUNS=~/work/runs culprit report\n",
 }
@@ -163,17 +161,8 @@ def build_parser() -> argparse.ArgumentParser:
     _json_flag(diagnose_parser)
     diagnose_parser.set_defaults(handler=diagnose_command)
 
-    review = add("review", "show the next judged replay you have not labelled")
+    review = add("review", "label judged replays pass or fail, one after another, to calibrate the judge")
     review.set_defaults(handler=review_command, needs_store=True)
-
-    label = add("label", "record your own pass/fail for one judged replay")
-    label.add_argument("run")
-    label.add_argument("verdict", choices=["pass", "fail"])
-    label.set_defaults(handler=label_command)
-
-    calibration = add("calibration", "how often the judge agrees with your labels")
-    _json_flag(calibration)
-    calibration.set_defaults(handler=calibration_command, needs_store=True)
 
     selftest = add("selftest", "plant known faults into a control episode and score culprit")
     selftest.add_argument("episode_id")
@@ -318,7 +307,9 @@ def status_command(args: argparse.Namespace) -> int:
         return 0
     statuses = queue_status(args.runs)
     if args.json:
-        emit({"episodes": [asdict(status) for status in statuses]})
+        correct, total = selftest_accuracy(args.runs)
+        emit({"episodes": [asdict(status) for status in statuses], "judge": agreement_json(agreement(args.runs)),
+              "selftest": {"correct": correct, "total": total}})
         return 0
     if not statuses:
         print("nothing queued — run `culprit triage`")
@@ -327,6 +318,9 @@ def status_command(args: argparse.Namespace) -> int:
     stage_width = max(map(len, STAGES))
     for name, status in zip(shown, statuses):
         print(f"{name:<{id_width}}  {status.stage:<{stage_width}}  next: {status.next_step}")
+    print()
+    for line in trust_lines(args.runs):
+        print(line)
     return 0
 
 
@@ -476,38 +470,40 @@ def trust_lines(runs_dir: Path) -> list[str]:
     return [f"judge: {result.agreed} of {result.labelled} labels agree, kappa {kappa} — {state}", planted]
 
 
+REVIEW_QUESTION = "your verdict? [p]ass / [f]ail / [s]kip / [q]uit: "
+REVIEW_ANSWERS = {"p": "pass", "pass": "pass", "f": "fail", "fail": "fail", "s": "skip", "skip": "skip",
+                  "q": "quit", "quit": "quit"}
+
+
 def review_command(args: argparse.Namespace) -> int:
-    run_dir = next_unlabelled(args.runs)
-    if run_dir is None:
-        print("every judged replay is labelled")
-        return 0
-    print(f"{run_id(args.runs, run_dir)}\n{run_summary(run_dir)}")
-    print(f"\nlabel it: culprit label {run_id(args.runs, run_dir)} pass|fail")
-    return 0
-
-
-def label_command(args: argparse.Namespace) -> int:
-    record_label(args.runs, args.run, args.verdict == "pass")
-    print(f"labelled {args.run} {args.verdict}")
-    more = next_unlabelled(args.runs) is not None
-    print(f"next: run `culprit {'review' if more else 'calibration'}`", file=sys.stderr)
+    """Show each judged replay nobody has labelled and record the person's pass/fail, until none are left."""
+    if not stdin_is_tty():
+        print("culprit: review asks for your verdict on each replay, so it needs a terminal", file=sys.stderr)
+        return EXIT_NOT_READY
+    skipped: set[Path] = set()
+    while (run_dir := next_unlabelled(args.runs, skip=skipped)) is not None:
+        print(f"\n{run_id(args.runs, run_dir)}\n{run_summary(run_dir)}")
+        answer = None
+        while answer is None:
+            try:
+                answer = REVIEW_ANSWERS.get(input(REVIEW_QUESTION).strip().lower())
+            except EOFError:
+                answer = "quit"
+        if answer == "quit":
+            break
+        if answer == "skip":
+            skipped.add(run_dir)
+        else:
+            record_label(args.runs, run_id(args.runs, run_dir), answer == "pass")
+    else:
+        print("every judged replay is labelled" + (f" or skipped ({len(skipped)} skipped)" if skipped else ""))
+    print(trust_lines(args.runs)[0])
     return 0
 
 
 def agreement_json(result) -> dict:
     return {"labelled": result.labelled, "agreed": result.agreed, "kappa": result.kappa,
             "calibrated": result.calibrated, "min_labels": MIN_LABELS, "min_kappa": MIN_KAPPA}
-
-
-def calibration_command(args: argparse.Namespace) -> int:
-    result = agreement(args.runs)
-    if args.json:
-        emit(agreement_json(result))
-        return 0
-    kappa = "not computable yet" if result.kappa is None else f"{result.kappa:.2f}"
-    print(f"{result.labelled} labelled, {result.agreed} agree with the judge, kappa {kappa}")
-    print("calibrated" if result.calibrated else f"uncalibrated: needs {MIN_LABELS} labels and kappa ≥ {MIN_KAPPA}")
-    return 0
 
 
 def selftest_command(args: argparse.Namespace) -> int:
