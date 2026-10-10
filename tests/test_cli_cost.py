@@ -49,8 +49,8 @@ def spy(monkeypatch):
 @pytest.mark.parametrize("argv", [
     ["baseline", "s1:p1", "--yes"], ["baseline", "s1:p1", "-y"], ["baseline", "s1:p1", "--dry-run"],
     ["baseline", "s1:p1", "--budget", "3"], ["diagnose", "s1:p1", "--replay-budget", "3"],
-    ["selftest", "s1:p1", "--budget-per-fault", "3"], ["diagnose-all", "--per-episode", "3"],
-    ["diagnose-all", "--total", "3"]])
+    ["selftest", "s1:p1", "--budget-per-fault", "3"], ["diagnose", "--per-episode", "3"],
+    ["diagnose", "--total", "3"]])
 def test_spend_is_not_set_or_confirmed_by_flags(argv, capsys):
     with pytest.raises(SystemExit) as stopped:
         cli.main(argv)
@@ -89,12 +89,12 @@ def test_selftest_plan_sums_every_planted_fault(write_session, tmp_path, capsys,
     assert spy == ["selftest"]
 
 
-def test_diagnose_all_plan_covers_only_ready_episodes_within_the_total(write_session, tmp_path, capsys, spy):
+def test_diagnose_queue_plan_covers_only_ready_episodes_within_the_total(write_session, tmp_path, capsys, spy):
     ready(write_session, tmp_path)
     runs = tmp_path / "runs"
     (runs / "candidates.json").write_text(json.dumps([{"summary": {"episode_id": "s1:p1"}, "score": 3},
                                                       {"summary": {"episode_id": "s2:p1"}, "score": 2}]))
-    assert cli.main(["diagnose-all"]) == 0
+    assert cli.main(["diagnose"]) == 0
     err = capsys.readouterr().err
     assert "up to 120 replays" in err and "at most $40.00 more" in err and "cap $400.00" in err
     assert spy == ["diagnose-all"]

@@ -6,7 +6,6 @@ GROUPS = {
     "workflow": ["triage", "restore", "baseline", "env-fix", "diagnose", "report", "status"],
     "human review": ["confirm", "criterion"],
     "trust": ["review", "label", "calibration", "selftest"],
-    "batch": ["diagnose-all"],
 }
 
 

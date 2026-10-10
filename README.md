@@ -23,7 +23,8 @@ more often than the unchanged one (one-sided Fisher exact test, p < 0.05 over 5 
    Drafting never overwrites an existing criterion; to change one, edit `runs/<episode>/criterion.json`.
 4. `restore` rebuilds the files the episode started from in a throwaway copy.
 5. `baseline` replays the episode unchanged 5 times. Passing 3+ times means the failure was luck.
-6. `diagnose` replays it with one layer improved at a time, cheapest fix first:
+6. `diagnose` restores the starting files if `restore` has not, then replays the episode with one layer
+   improved at a time, cheapest fix first:
 
    | Change | Verdict if it now passes |
    |---|---|
@@ -60,13 +61,13 @@ uv run culprit report                           # writes runs/report.md
 uv run culprit status [<episode-id>]            # where each episode stands and what to run next
 ```
 
-`culprit --help` lists the commands by group (workflow, human review, trust, batch) with this run-through;
+`culprit --help` lists the commands by group (workflow, human review, trust) with this run-through;
 `culprit <command> --help` ends with examples.
 
 For scripts, `triage`, `status`, `baseline`, `diagnose` and `calibration` take `--json`: stdout is then
 one JSON document and nothing else (progress, `next:` lines and questions stay on stderr).
 
-`baseline`, `diagnose`, `selftest` and `diagnose-all` print a line on stderr as each replay finishes:
+`baseline`, `diagnose` and `selftest` print a line on stderr as each replay finishes:
 its result, its cost and what the episode has spent so far. While a replay runs, a
 `… still running` line every 30 s shows it is alive.
 
@@ -83,7 +84,8 @@ Session logs are read from `~/.claude/projects`; set `CULPRIT_PROJECTS=/path/to/
 `status`, `confirm`, `review`, `calibration` and `report` refuse (exit 3) when the store
 does not exist rather than create an empty one.
 
-Batch: `uv run culprit diagnose-all` diagnoses every prepared episode.
+Batch: `uv run culprit diagnose` with no episode id restores and diagnoses every confirmed episode in the
+queue, sharing a $400 total, then writes the report.
 
 Trust: label replays with `culprit review` / `culprit label <run> pass|fail`; `culprit calibration`
 shows how often the judge agrees with you (calibrated at ≥ 20 labels and Cohen's kappa ≥ 0.6).
@@ -97,14 +99,14 @@ flight is killed and its copy deleted; finished replays are kept, so rerunning t
 ## Cost
 
 Each replay is capped at $2; a full diagnosis is about 30 replays, capped at $40 per episode
-(selftest: $40 per planted fault; `diagnose-all`: $400 in total). Judge and drafting calls are capped at
+(selftest: $40 per planted fault; `diagnose` with no id: $400 in total). Judge and drafting calls are capped at
 $0.50 each and charged at that cap. Caps are built in and count everything already spent, so resuming
 never doubles them; the $400 total covers every batch in `runs/`.
 Runs that fail for reasons outside the agent (API errors, culprit's own cap, timeouts) are not counted
 and are retried. If no result could beat the baseline at N runs, culprit stops before the oracles and
 says "not testable".
 
-Before it spends anything, `baseline`, `diagnose`, `selftest` and `diagnose-all` print on stderr the most
+Before it spends anything, `baseline`, `diagnose` and `selftest` print on stderr the most
 they could run (every variant with all its void retries, plus drafting calls) and spend (that worst case,
 limited by what is left of the cap), then start without asking.
 

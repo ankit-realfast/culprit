@@ -52,16 +52,15 @@ def test_refusals_name_the_short_id(write_session, tmp_path, capsys):
                   name=f"{session}.jsonl")
     runs = tmp_path / "runs"
     queue(runs, A, B)
-    flags = []
-    assert cli.main(["baseline", A, *flags]) == 3
+    assert cli.main(["baseline", A]) == 3
     assert "culprit criterion draft aaaaaaaa:bbbbbbbb" in capsys.readouterr().err
     save_criterion(runs, A, Criterion("works", (), (), approved=True))
-    assert cli.main(["baseline", A, *flags]) == 3
-    assert "culprit restore aaaaaaaa:bbbbbbbb" in capsys.readouterr().err
-    assert cli.main(["criterion", "draft", A, *flags]) == 1
+    assert cli.main(["baseline", A]) == 1  # the log has no snapshot for this prompt, so restoring first refuses
+    assert "aaaaaaaa:bbbbbbbb cannot be replayed" in capsys.readouterr().err
+    assert cli.main(["criterion", "draft", A]) == 1
     assert "culprit criterion show aaaaaaaa:bbbbbbbb" in capsys.readouterr().err
     (episode_dir(runs, A) / "pristine").mkdir()
-    assert cli.main(["diagnose", A, *flags]) == 3
+    assert cli.main(["diagnose", A]) == 3
     assert "culprit confirm aaaaaaaa:bbbbbbbb" in capsys.readouterr().err
     assert "culprit confirm cccccccc:dddddddd" in readiness_problem(runs, B)
 

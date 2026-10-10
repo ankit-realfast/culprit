@@ -30,10 +30,11 @@ from culprit.selftest import CONTROL_MIN_PASSES, is_control, run_selftest, selft
 from culprit.signals import FailureSignals
 from culprit.snapshot import load_snapshot, session_root
 from culprit.status import STAGES, EpisodeStatus, episode_status, next_step, queue_status
-from culprit.store import (NotReady, UnknownEpisode, candidate_rows, confirm_step, display_id, episode_dir, read_symptom,
+from culprit.store import (CANDIDATES_FILE, NotReady, UnknownEpisode, candidate_rows, confirm_step, display_id, episode_dir, read_symptom,
                            record_symptom,
                            resolve_episode_id, save_candidates, short_id)
 from culprit.taxonomy import Symptom
+from culprit.verdict import load_verdict
 from culprit.triage import rank_candidates, summarize_session
 
 DEFAULT_PROJECTS = Path.home() / ".claude" / "projects"
@@ -48,7 +49,7 @@ RUNS_PER_VARIANT = 5  # N: the baseline and each variant are replayed this many 
 REPLAY_BUDGET_USD = DEFAULT_REPLAY_BUDGET_USD  # one replay
 EPISODE_CAP_USD = 40.0  # one episode's baseline and oracles
 FAULT_CAP_USD = 40.0  # one planted fault in selftest
-TOTAL_CAP_USD = 400.0  # every episode diagnose-all takes on
+TOTAL_CAP_USD = 400.0  # every episode `diagnose` with no id takes on
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -71,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
         print("\nculprit: stopped. finished runs are kept; rerun the same command to resume", file=sys.stderr)
         return EXIT_INTERRUPTED
     except (UnknownEpisode, EpisodeNotFound, FileNotFoundError, ClaudeCallFailed,
-            SetupScriptFailed, UnknownRun, OriginalModified) as refusal:
+            SetupScriptFailed, UnknownRun, OriginalModified, NotReplayable) as refusal:
         print(f"culprit: {refusal}", file=sys.stderr)
         return EXIT_REFUSED
 
@@ -97,7 +98,6 @@ COMMAND_GROUPS = {
     "workflow": ("triage", "restore", "baseline", "env-fix", "diagnose", "report", "status"),
     "human review": ("confirm", "criterion"),
     "trust": ("review", "label", "calibration", "selftest"),
-    "batch": ("diagnose-all",),
 }
 EXAMPLE_RUN = """example run:
   culprit triage --top 20                  rank likely failures; rows are numbered #1, #2, ...
@@ -107,6 +107,7 @@ EXAMPLE_RUN = """example run:
   culprit restore #1                       rebuild the starting files
   culprit baseline #1                      replay it unchanged
   culprit diagnose #1                      find the layer to change
+  culprit diagnose                         diagnose every confirmed episode in the queue
   culprit report                           rank the changes across episodes
   culprit status                           where every episode stands, and what to run next
 """
@@ -118,13 +119,12 @@ EXAMPLES = {
     "restore": "  culprit restore #1\n",
     "baseline": "  culprit baseline #1\n",
     "env-fix": "  culprit env-fix #1 fix-env.sh         run before Claude starts in the environment oracle\n",
-    "diagnose": "  culprit diagnose #1\n",
+    "diagnose": "  culprit diagnose #1\n  culprit diagnose       every confirmed episode in the queue, then the report\n",
     "review": "  culprit review\n",
     "label": "  culprit label 1a2b__5e6f/replays/baseline/0 pass\n",
     "calibration": "  culprit calibration\n",
     "selftest": "  culprit selftest #4\n",
     "report": "  culprit report\n  CULPRIT_RUNS=~/work/runs culprit report\n",
-    "diagnose-all": "  culprit diagnose-all\n",
 }
 
 
@@ -174,8 +174,9 @@ def build_parser() -> argparse.ArgumentParser:
     env_fix.add_argument("script", type=Path)
     env_fix.set_defaults(handler=env_fix_command)
 
-    diagnose_parser = add("diagnose", "find what to change: run the oracles and decide the cause")
-    diagnose_parser.add_argument("episode_id")
+    diagnose_parser = add("diagnose", "find what to change: restore, replay and decide the cause; "
+                                      "with no id, every confirmed episode in the queue, then the report")
+    diagnose_parser.add_argument("episode_id", nargs="?")
     _json_flag(diagnose_parser)
     diagnose_parser.set_defaults(handler=diagnose_command)
 
@@ -198,8 +199,6 @@ def build_parser() -> argparse.ArgumentParser:
     report = add("report", "write runs/report.md from every stored verdict")
     report.set_defaults(handler=report_command, needs_store=True)
 
-    batch = add("diagnose-all", "diagnose every prepared episode in the queue, then report")
-    batch.set_defaults(handler=diagnose_all_command)
     width = max(map(len, summaries)) + 2
     parser.description = "Find what to change when a Claude Code episode fails.\n" + "".join(
         f"\n{group}:\n" + "".join(f"  {name:<{width}}{summaries[name]}\n" for name in names)
@@ -364,17 +363,19 @@ def criterion_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def restore_command(args: argparse.Namespace) -> int:
-    episode = find_episode(args.projects, args.episode_id)
+class NotReplayable(Exception):
+    """An episode a replay cannot use; the message names every reason."""
+
+
+def restore_episode(runs_dir: Path, projects_dir: Path, episode_id: str) -> list[str]:
+    """Rebuild the episode's starting files in runs/<episode>/pristine/ and store the trust figures (restore.json);
+    returns what to tell the person. Refuses with NotReplayable when a replay cannot use the episode."""
+    episode = find_episode(projects_dir, episode_id)
     tracked = load_snapshot(episode)
     blockers = replay_blockers(episode, tracked)
     if blockers:
-        print(f"culprit: {args.episode_id} cannot be replayed: " + "; ".join(blockers), file=sys.stderr)
-        return 1
-    destination = episode_dir(args.runs, args.episode_id) / PRISTINE_DIR
-    if destination.exists():
-        print(f"culprit: {destination} already exists — delete it to restore again", file=sys.stderr)
-        return 1
+        raise NotReplayable(f"{display_id(runs_dir, episode_id)} cannot be replayed: " + "; ".join(blockers))
+    destination = episode_dir(runs_dir, episode_id) / PRISTINE_DIR
     report = restore(episode, tracked, destination, file_history_root=sandbox.DEFAULT_FILE_HISTORY,
                      session_root=session_root(episode.session_file))
     root = session_root(episode.session_file) or Path(episode.cwd)
@@ -383,38 +384,50 @@ def restore_command(args: argparse.Namespace) -> int:
     from_git = restore_from_git(episode, destination, covered)
     checked, mismatches = check_restore(episode, destination)  # the snapshot, before the episode's record overrides it
     written, removed = apply_episode_originals(episode, destination)
-    print(f"{report.restored} restored from snapshots, {len(report.unknown)} unknown (snapshot kept no backup), "
-          f"{len(report.missing_backups)} missing backups, {len(report.outside_cwd)} outside the working directory "
-          f"→ {destination}")
-    print(f"snapshot agrees with the episode's own record for {checked - len(mismatches)} of {checked} files")
-    for mismatch in mismatches:
-        print(f"  mismatch: {mismatch.path} ({mismatch.reason})")
-    print(f"{written} file(s) set from the episode's own record, {removed} removed (created during the episode)")
+    lines = [f"{report.restored} restored from snapshots, {len(report.unknown)} unknown (snapshot kept no backup), "
+             f"{len(report.missing_backups)} missing backups, {len(report.outside_cwd)} outside the working directory "
+             f"→ {destination}",
+             f"snapshot agrees with the episode's own record for {checked - len(mismatches)} of {checked} files"]
+    lines += [f"  mismatch: {mismatch.path} ({mismatch.reason})" for mismatch in mismatches]
+    lines.append(f"{written} file(s) set from the episode's own record, {removed} removed (created during the episode)")
     if from_git:
-        print(f"{from_git.restored} other file(s) set from git commit {from_git.commit[:10]} (the last before the "
-              f"episode), {from_git.removed} removed (added after it)")
+        lines.append(f"{from_git.restored} other file(s) set from git commit {from_git.commit[:10]} (the last before "
+                     f"the episode), {from_git.removed} removed (added after it)")
     trust = {"git_commit": from_git.commit if from_git else None,
              "set_from_git": from_git.restored if from_git else 0,
-             "removed_by_git": from_git.removed if from_git else 0,"snapshot_agreed": checked - len(mismatches), "checked": checked, "restored": report.restored,
+             "removed_by_git": from_git.removed if from_git else 0, "snapshot_agreed": checked - len(mismatches),
+             "checked": checked, "restored": report.restored,
              "unknown": len(report.unknown), "missing_backups": len(report.missing_backups),
              "outside_cwd": len(report.outside_cwd), "set_from_episode": written, "removed": removed}
-    episode_dir(args.runs, args.episode_id).mkdir(parents=True, exist_ok=True)
-    (episode_dir(args.runs, args.episode_id) / RESTORE_FILE).write_text(json.dumps(trust, indent=2))
+    episode_dir(runs_dir, episode_id).mkdir(parents=True, exist_ok=True)
+    (episode_dir(runs_dir, episode_id) / RESTORE_FILE).write_text(json.dumps(trust, indent=2))
     hooks = project_hooks(Path(episode.cwd))
-    print("project hooks that will run in every replay: " + "; ".join(hooks) if hooks else "no project hooks")
+    lines.append("project hooks that will run in every replay: " + "; ".join(hooks) if hooks else "no project hooks")
+    return lines
+
+
+def restore_command(args: argparse.Namespace) -> int:
+    destination = episode_dir(args.runs, args.episode_id) / PRISTINE_DIR
+    if destination.exists():
+        print(f"culprit: {destination} already exists — delete it to restore again", file=sys.stderr)
+        return 1
+    for line in restore_episode(args.runs, args.projects, args.episode_id):
+        print(line)
     print_next(args.runs, args.episode_id)
     return 0
 
 
 def ready_to_replay(args: argparse.Namespace) -> tuple[Episode, Criterion]:
-    """The episode and its approved criterion, once restore has built the pristine copy; refuses otherwise."""
+    """The episode and its approved criterion, restoring its starting files first when they are missing."""
     episode = find_episode(args.projects, args.episode_id)
     criterion = load_criterion(args.runs, args.episode_id)
     shown = display_id(args.runs, args.episode_id)
     if criterion is None or not criterion.approved:
         raise NotReady(f"no approved criterion for {shown} — {criterion_step(criterion, shown)}")
     if not (episode_dir(args.runs, args.episode_id) / PRISTINE_DIR).is_dir():
-        raise NotReady(f"{shown} has no restored copy — run `culprit restore {shown}` first")
+        out = sys.stderr if getattr(args, "json", False) else sys.stdout  # under --json stdout holds only JSON
+        for line in restore_episode(args.runs, args.projects, args.episode_id):
+            print(line, file=out)
     return episode, criterion
 
 
@@ -450,11 +463,13 @@ def env_fix_command(args: argparse.Namespace) -> int:
 
 
 def diagnose_command(args: argparse.Namespace) -> int:
-    episode, criterion = ready_to_replay(args)
+    if args.episode_id is None:
+        return diagnose_queue(args)
     symptom = read_symptom(args.runs, args.episode_id)
     if symptom is None:
         raise NotReady(f"{display_id(args.runs, args.episode_id)} has no confirmed symptom — "
                        f"{confirm_step(args.runs, args.episode_id)}")
+    episode, criterion = ready_to_replay(args)
     folder = episode_dir(args.runs, args.episode_id)
     env_script = folder / ENV_FIX_FILE
     budget = EpisodeBudget(EPISODE_CAP_USD, spent_usd=stored_spend(folder))
@@ -560,7 +575,23 @@ def report_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def diagnose_all_command(args: argparse.Namespace) -> int:
+def diagnose_queue(args: argparse.Namespace) -> int:
+    """Every confirmed episode in the queue: restore the ones not yet restored, diagnose them all, then report."""
+    if not (args.runs / CANDIDATES_FILE).is_file():
+        raise NotReady(f"{args.runs / CANDIDATES_FILE} does not exist — run `culprit triage` first")
+    for row in candidate_rows(args.runs):
+        episode_id = row["summary"]["episode_id"]
+        folder = episode_dir(args.runs, episode_id)
+        criterion = load_criterion(args.runs, episode_id)
+        if (folder / PRISTINE_DIR).is_dir() or load_verdict(folder) is not None \
+                or read_symptom(args.runs, episode_id) is None or criterion is None or not criterion.approved:
+            continue
+        shown = display_id(args.runs, episode_id)
+        try:
+            restore_episode(args.runs, args.projects, episode_id)
+            print(f"restored {shown}")
+        except (NotReplayable, EpisodeNotFound) as refusal:
+            print(f"{shown} not restored: {refusal}")
     show_plan(batch_cost(args.runs, n=RUNS_PER_VARIANT, per_episode_usd=EPISODE_CAP_USD, total_usd=TOTAL_CAP_USD,
                          replay_budget_usd=REPLAY_BUDGET_USD))
     with ProgressPrinter() as progress:

@@ -117,7 +117,7 @@ def selftest_cost(runs_dir: Path, episode_id: str, criterion: Criterion, base: R
 
 def batch_cost(runs_dir: Path, *, n: int, per_episode_usd: float, total_usd: float,
                replay_budget_usd: float) -> CostPlan:
-    """Every queued episode diagnose-all would take on, at worst case (any model), within the shared total."""
+    """Every queued episode `diagnose` with no id would take on, at worst case (any model), within the shared total."""
     spent = sum(stored_spend(folder) for folder in runs_dir.iterdir()
                 if folder.is_dir() and folder.name != SELFTEST_DIR) if runs_dir.is_dir() else 0.0
     plan = EMPTY

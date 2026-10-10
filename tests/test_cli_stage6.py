@@ -12,18 +12,19 @@ def test_report_writes_and_prints_the_markdown(tmp_path, capsys):
     assert written in capsys.readouterr().out
 
 
-def test_diagnose_all_prints_the_summary_and_writes_the_report(tmp_path, capsys, monkeypatch):
+def test_diagnose_without_an_id_prints_the_summary_and_writes_the_report(tmp_path, capsys, monkeypatch):
     runs = tmp_path / "runs"
     runs.mkdir()
+    (runs / "candidates.json").write_text("[]")
     seen = {}
 
     def fake_all(runs_dir, projects_dir, **kwargs):
         seen.update(kwargs)
-        return BatchSummary(diagnosed=["a:1"], skipped={"b:1": "not restored — run `culprit restore b:1`"},
+        return BatchSummary(diagnosed=["a:1"], skipped={"b:1": "not restored — `culprit diagnose b:1` restores it"},
                             over_cap=["c:1"], stopped_at="d:1", spent_usd=88.5)
 
     monkeypatch.setattr(cli, "diagnose_all", fake_all)
-    assert cli.main(["diagnose-all"]) == 0
+    assert cli.main(["diagnose"]) == 0
     out = capsys.readouterr().out
     assert seen["total_usd"] == 400.0 and seen["per_episode_usd"] == 40.0 and seen["n"] == cli.RUNS_PER_VARIANT
     for expected in ["diagnosed 1", "b:1 skipped: not restored", "c:1 hit its $40.00 cap",

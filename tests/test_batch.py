@@ -64,7 +64,7 @@ def test_readiness_names_the_first_missing_step(tmp_path):
     assert "culprit confirm" in readiness_problem(tmp_path, "a:1")
     assert "culprit criterion approve" in readiness_problem(tmp_path, "b:1")
     assert "criterion draft" not in readiness_problem(tmp_path, "b:1")  # drafting again would overwrite it
-    assert "culprit restore" in readiness_problem(tmp_path, "c:1")
+    assert "culprit diagnose c:1" in readiness_problem(tmp_path, "c:1")
     assert readiness_problem(tmp_path, "d:1") is None
 
 
@@ -77,7 +77,7 @@ def test_ready_episodes_are_diagnosed_and_the_rest_skipped_with_reasons(tmp_path
     save_verdict(episode_dir(runs, "c:1"), Verdict("c:1", "wrong-result", "task", "e", {}, {}))
     summary = run(runs, spending_diagnose({"a:1": 12.5}))
     assert summary.diagnosed == ["a:1"]
-    assert "culprit restore" in summary.skipped["b:1"]
+    assert "culprit diagnose b:1" in summary.skipped["b:1"]
     assert summary.skipped["c:1"] == "already diagnosed"
     assert summary.spent_usd == 12.5
 

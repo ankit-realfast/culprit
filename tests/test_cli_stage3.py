@@ -41,10 +41,12 @@ def test_baseline_names_the_missing_step(write_session, tmp_path, capsys):
     assert "culprit criterion approve" in err and "criterion draft" not in err
 
 
-def test_baseline_before_restore_names_restore(write_session, tmp_path, capsys):
+def test_baseline_before_restore_restores_first(write_session, tmp_path, capsys, monkeypatch):
     projects, runs = setup_episode(write_session, tmp_path, restored=False)
-    assert cli.main(["baseline", "s1:p1"]) == 3
-    assert "culprit restore" in capsys.readouterr().err
+    monkeypatch.setattr(cli, "run_variant", lambda variant, settings, **k: VariantOutcome(variant, 0, k["n"], 1.0))
+    assert cli.main(["baseline", "s1:p1"]) == 0
+    assert (episode_dir(runs, "s1:p1") / "pristine").is_dir()
+    assert "restored from snapshots" in capsys.readouterr().out
 
 
 def test_baseline_counts_what_the_episode_already_spent(write_session, tmp_path, monkeypatch):
@@ -97,7 +99,7 @@ def test_baseline_prints_a_line_on_stderr_for_each_finished_replay(write_session
 
 
 @pytest.mark.parametrize("argv", [["baseline", "s1:p1", "--n", "1"], ["diagnose", "s1:p1", "--n", "1"],
-                                  ["selftest", "s1:p1", "--n", "1"], ["diagnose-all", "--n", "1"]])
+                                  ["selftest", "s1:p1", "--n", "1"], ["diagnose", "--n", "1"]])
 def test_the_run_count_is_not_a_flag(argv, capsys):
     with pytest.raises(SystemExit) as stopped:
         cli.main(argv)

@@ -41,7 +41,7 @@ def readiness_problem(runs_dir: Path, episode_id: str) -> str | None:
     if criterion is None or not criterion.approved:
         return f"no approved criterion — {criterion_step(criterion, shown)}"
     if not (episode_dir(runs_dir, episode_id) / PRISTINE_DIR).is_dir():
-        return f"not restored — run `culprit restore {shown}`"
+        return f"not restored — `culprit diagnose {shown}` restores it or says why it cannot"
     return None
 
 

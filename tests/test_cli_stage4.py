@@ -5,14 +5,16 @@ from culprit.verdict import Verdict
 from records import human, snapshot
 
 
-def ready(write_session, tmp_path, confirm=True):
+def ready(write_session, tmp_path, confirm=True, restored=True, repo_exists=True):
     repo = tmp_path / "repo"
-    repo.mkdir()
+    if repo_exists:
+        repo.mkdir()
     write_session([snapshot("u-p1", {}), human("fix a", "p1", session_id="s1", cwd=str(repo)),
                    human("still wrong", "p2", session_id="s1", cwd=str(repo))], name="s1.jsonl")
     runs = tmp_path / "runs"
     save_criterion(runs, "s1:p1", Criterion("works", (), (), approved=True))
-    (episode_dir(runs, "s1:p1") / "pristine").mkdir(parents=True)
+    if restored:
+        (episode_dir(runs, "s1:p1") / "pristine").mkdir()
     if confirm:
         (episode_dir(runs, "s1:p1") / "symptom.json").write_text('{"episode_id": "s1:p1", "symptom": "wrong-result"}')
     return tmp_path / "projects", runs
@@ -53,3 +55,59 @@ def test_diagnose_before_confirm_names_triage_when_the_episode_is_not_queued(wri
     projects, runs = ready(write_session, tmp_path, confirm=False)
     cli.main(["diagnose", "s1:p1"])
     assert "culprit triage" in capsys.readouterr().err
+
+
+def fake_verdict(seen):
+    def fake_diagnose(episode, criterion, symptom, base, **kwargs):
+        seen.append(episode.episode_id)
+        return Verdict("s1:p1", "wrong-result", "harness", "harness passed 4/5 against the baseline's 0/5", {}, {})
+    return fake_diagnose
+
+
+def test_diagnose_restores_the_starting_files_first_when_they_are_missing(write_session, tmp_path, capsys,
+                                                                          monkeypatch):
+    projects, runs = ready(write_session, tmp_path, restored=False)
+    seen = []
+    monkeypatch.setattr(cli, "diagnose", fake_verdict(seen))
+    assert cli.main(["diagnose", "s1:p1"]) == 0
+    assert (episode_dir(runs, "s1:p1") / "pristine").is_dir()
+    assert (episode_dir(runs, "s1:p1") / "restore.json").is_file()
+    out = capsys.readouterr().out
+    assert "restored from snapshots" in out and "cause: harness" in out
+    assert seen == ["s1:p1"]
+
+
+def test_diagnose_refuses_with_the_reasons_when_the_episode_cannot_be_replayed(write_session, tmp_path, capsys,
+                                                                               monkeypatch):
+    projects, runs = ready(write_session, tmp_path, restored=False, repo_exists=False)
+    seen = []
+    monkeypatch.setattr(cli, "diagnose", fake_verdict(seen))
+    assert cli.main(["diagnose", "s1:p1"]) == 1
+    err = capsys.readouterr().err
+    assert "s1:p1 cannot be replayed" in err and "no longer exists" in err
+    assert seen == [] and not (episode_dir(runs, "s1:p1") / "pristine").exists()
+
+
+def test_diagnose_without_an_id_restores_the_ready_episodes_then_diagnoses_the_queue(write_session, tmp_path,
+                                                                                     capsys, monkeypatch):
+    from culprit.batch import BatchSummary
+    projects, runs = ready(write_session, tmp_path, restored=False)
+    (runs / "candidates.json").write_text('[{"score": 1, "summary": {"episode_id": "s1:p1"}}]')
+    seen = []
+
+    def fake_all(runs_dir, projects_dir, **kwargs):
+        seen.append((episode_dir(runs_dir, "s1:p1") / "pristine").is_dir())
+        return BatchSummary(diagnosed=["s1:p1"])
+
+    monkeypatch.setattr(cli, "diagnose_all", fake_all)
+    assert cli.main(["diagnose"]) == 0
+    assert seen == [True]
+    out = capsys.readouterr().out
+    assert "restored s1:p1" in out and "diagnosed 1" in out
+
+
+def test_diagnose_all_is_gone(capsys):
+    import pytest
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["diagnose-all"])
+    assert stopped.value.code == 2
