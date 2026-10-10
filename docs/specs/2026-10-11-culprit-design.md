@@ -71,12 +71,17 @@ unchanged baseline's over N replays — the exact test is in §3, *What "passes 
 | Tool use | Bash 14,940, MCP 4,473, Edit 3,789, AskUserQuestion 220 | Episodes that used MCP or asked a question are not replayable in v1 |
 | Models | ~99% Opus; Fable 303 responses | Fable 5.1 is the oracle model for almost every episode |
 
-**Restoring an episode's starting state.** Claude Code backs up every file it edits. The snapshot keyed
-by the episode's prompt `uuid` maps each tracked path (relative to `cwd`, or absolute) to a backup file;
-`backupFileName: null` is read as "the file did not exist yet" — **an assumption Stage 2 verifies on a
-real episode** by comparing each restored file with the `originalFile` its first `Edit` in the episode recorded (the whole file before that edit; a `Read` may show only a line range). Files
-Claude Code never edited are not backed up, so they are taken from the working directory as it is today:
-restore fidelity is exact for tracked files and best-effort for the rest, and every verdict says so.
+**Restoring an episode's starting state** (revised 2026-10-11 after the first real restores). The copy
+starts as a clone of the working directory today. Snapshot backups are then put back: Claude Code keys a
+snapshot by the episode's prompt `uuid`, and its relative paths are relative to **the directory the
+session started in** (97 of 347 sessions later change directory). A snapshot entry with
+`backupFileName: null` proves nothing — three files an episode edited carried it — so it is reported as
+unknown and left as it is today. Last, every file the episode itself recorded at first touch is set
+from that record, which is exact: an `Edit`'s or `Write`'s `originalFile`, or absent for a file a
+`Write` created (in the logs: 1,232 recorded originals, 576 creations, 2,559 edits that recorded none).
+Before that last step, `restore` reports how often the snapshot agreed with those records — the trust
+figure for files only the snapshot covers. Files nothing recorded are as they are today; every verdict
+says so.
 
 **Claude Code 2.1.296** (`claude --help`, and the headless docs at
 <https://code.claude.com/docs/en/headless>, both read 2026-10-11):
