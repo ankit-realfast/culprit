@@ -28,10 +28,10 @@ def test_the_short_id_is_shown_only_when_it_finds_that_episode_alone(tmp_path):
 def test_next_lines_and_status_rows_use_the_short_id(tmp_path, capsys):
     runs = tmp_path / "runs"
     queue(runs, A, B)
-    assert cli.main(["confirm", A, "wrong-result", "--runs", str(runs)]) == 0
+    assert cli.main(["confirm", A, "wrong-result"]) == 0
     err = capsys.readouterr().err
     assert "culprit criterion draft aaaaaaaa:bbbbbbbb" in err and A not in err
-    assert cli.main(["status", "--runs", str(runs)]) == 0
+    assert cli.main(["status"]) == 0
     out = capsys.readouterr().out
     assert "culprit criterion draft aaaaaaaa:bbbbbbbb" in out and "culprit confirm cccccccc:dddddddd" in out
     assert A not in out
@@ -40,7 +40,7 @@ def test_next_lines_and_status_rows_use_the_short_id(tmp_path, capsys):
 def test_an_ambiguous_short_id_falls_back_to_the_full_id(tmp_path, capsys):
     runs = tmp_path / "runs"
     queue(runs, A, TWIN)
-    assert cli.main(["confirm", A, "wrong-result", "--runs", str(runs)]) == 0
+    assert cli.main(["confirm", A, "wrong-result"]) == 0
     assert f"culprit criterion draft {A}" in capsys.readouterr().err
 
 
@@ -52,7 +52,7 @@ def test_refusals_name_the_short_id(write_session, tmp_path, capsys):
                   name=f"{session}.jsonl")
     runs = tmp_path / "runs"
     queue(runs, A, B)
-    flags = ["--projects", str(tmp_path / "projects"), "--runs", str(runs)]
+    flags = []
     assert cli.main(["baseline", A, *flags]) == 3
     assert "culprit criterion draft aaaaaaaa:bbbbbbbb" in capsys.readouterr().err
     save_criterion(runs, A, Criterion("works", (), (), approved=True))
@@ -69,7 +69,7 @@ def test_refusals_name_the_short_id(write_session, tmp_path, capsys):
 def test_status_rows_line_up_whatever_the_id_lengths(tmp_path, capsys):
     runs = tmp_path / "runs"
     queue(runs, A, TWIN, "s1:p1", B)
-    assert cli.main(["status", "--runs", str(runs)]) == 0
+    assert cli.main(["status"]) == 0
     rows = capsys.readouterr().out.splitlines()
     assert len(rows) == 4
     assert len({row.index("next:") for row in rows}) == 1
@@ -81,7 +81,7 @@ def test_triage_rows_show_the_short_id_and_json_keeps_the_full_id(write_session,
     from records import interrupt
     session, prompt = A.split(":")
     write_session([human("went wrong", prompt, session_id=session), interrupt(prompt)], name=f"{session}.jsonl")
-    argv = ["triage", "--projects", str(tmp_path / "projects"), "--runs", str(tmp_path / "runs")]
+    argv = ["triage"]
     assert cli.main(argv) == 0
     out = capsys.readouterr().out
     assert "aaaaaaaa:bbbbbbbb" in out and A not in out
@@ -95,6 +95,6 @@ def test_triage_rows_fall_back_to_the_full_id_when_the_short_id_is_ambiguous(wri
     for episode_id in (A, TWIN):
         session, prompt = episode_id.split(":")
         write_session([human("went wrong", prompt, session_id=session), interrupt(prompt)], name=f"{session}.jsonl")
-    assert cli.main(["triage", "--projects", str(tmp_path / "projects"), "--runs", str(tmp_path / "runs")]) == 0
+    assert cli.main(["triage"]) == 0
     out = capsys.readouterr().out
     assert A in out and TWIN in out

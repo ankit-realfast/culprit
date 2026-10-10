@@ -78,8 +78,9 @@ Each command that changes an episode ends with a `next:` line (on stderr) naming
 commands (`next:` lines, `status`, refusals) and triage rows use the short id whenever it matches that one
 episode alone; `--json` output always carries the full id.
 
-Everything is stored in `runs/` in the current folder; set `CULPRIT_RUNS=/path/to/runs` to use another
-(`--runs` overrides both). `status`, `confirm`, `review`, `calibration` and `report` refuse (exit 3) when the store
+Everything is stored in `runs/` in the current folder; set `CULPRIT_RUNS=/path/to/runs` to use another.
+Session logs are read from `~/.claude/projects`; set `CULPRIT_PROJECTS=/path/to/projects` to read others.
+`status`, `confirm`, `review`, `calibration` and `report` refuse (exit 3) when the store
 does not exist rather than create an empty one.
 
 Batch: `uv run culprit diagnose-all --per-episode 40 --total 400` diagnoses every prepared episode.

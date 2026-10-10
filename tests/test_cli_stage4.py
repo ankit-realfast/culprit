@@ -22,7 +22,7 @@ def test_env_fix_stores_the_script_for_the_environment_oracle(write_session, tmp
     projects, runs = ready(write_session, tmp_path)
     script = tmp_path / "fix.sh"
     script.write_text("export FLAKY=0\n")
-    assert cli.main(["env-fix", "s1:p1", str(script), "--runs", str(runs)]) == 0
+    assert cli.main(["env-fix", "s1:p1", str(script)]) == 0
     assert (episode_dir(runs, "s1:p1") / "env-fix.sh").read_text() == "export FLAKY=0\n"
 
 
@@ -37,7 +37,7 @@ def test_diagnose_passes_everything_through_and_prints_the_verdict(write_session
                        {}, {"environment": "no environment fix supplied (culprit env-fix)"})
 
     monkeypatch.setattr(cli, "diagnose", fake_diagnose)
-    assert cli.main(["diagnose", "--yes", "s1:p1", "--projects", str(projects), "--runs", str(runs)]) == 0
+    assert cli.main(["diagnose", "--yes", "s1:p1"]) == 0
     out = capsys.readouterr().out
     assert seen == {"symptom": "wrong-result", "follow_ups": ["still wrong"], "cap": 40.0, "env": None, "n": 5}
     assert "cause: harness" in out and "4/5" in out and "environment untested" in out
@@ -45,11 +45,11 @@ def test_diagnose_passes_everything_through_and_prints_the_verdict(write_session
 
 def test_diagnose_before_confirm_names_confirm(write_session, tmp_path, capsys):
     projects, runs = ready(write_session, tmp_path, confirm=False)
-    assert cli.main(["diagnose", "--yes", "s1:p1", "--projects", str(projects), "--runs", str(runs)]) == 3
+    assert cli.main(["diagnose", "--yes", "s1:p1"]) == 3
     assert "culprit confirm" in capsys.readouterr().err
 
 
 def test_diagnose_before_confirm_names_triage_when_the_episode_is_not_queued(write_session, tmp_path, capsys):
     projects, runs = ready(write_session, tmp_path, confirm=False)
-    cli.main(["diagnose", "--yes", "s1:p1", "--projects", str(projects), "--runs", str(runs)])
+    cli.main(["diagnose", "--yes", "s1:p1"])
     assert "culprit triage" in capsys.readouterr().err

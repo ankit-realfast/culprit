@@ -24,7 +24,7 @@ def ready(write_session, tmp_path, control=False):
         baseline.mkdir(parents=True)
         (baseline / "outcome.json").write_text(json.dumps({"variant": "baseline", "passes": 5, "runs": 5,
                                                            "cost_usd": 1}))
-    return ["--projects", str(tmp_path / "projects"), "--runs", str(runs)]
+    return []
 
 
 @pytest.fixture

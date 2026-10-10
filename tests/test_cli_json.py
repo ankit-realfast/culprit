@@ -21,14 +21,14 @@ def ready(write_session, tmp_path):
     save_criterion(runs, "s1:p1", Criterion("works", (), (), approved=True))
     (episode_dir(runs, "s1:p1") / "pristine").mkdir(parents=True)
     (episode_dir(runs, "s1:p1") / "symptom.json").write_text('{"episode_id": "s1:p1", "symptom": "wrong-result"}')
-    return ["--projects", str(tmp_path / "projects"), "--runs", str(runs)]
+    return []
 
 
 def test_triage_json(write_session, tmp_path, capsys):
     write_session([human("clean prompt", "p1", session_id="s1"), assistant(),
                    human("went wrong", "p2", session_id="s1"), assistant(), interrupt("p2")])
     runs = tmp_path / "runs"
-    assert cli.main(["triage", "--projects", str(tmp_path / "projects"), "--runs", str(runs), "--json"]) == 0
+    assert cli.main(["triage", "--json"]) == 0
     data = only_json(capsys)
     assert data["scanned"] == 2 and data["queued"] == 1
     [row] = data["candidates"]
@@ -37,13 +37,12 @@ def test_triage_json(write_session, tmp_path, capsys):
 
 
 def test_status_json_for_the_queue_and_for_one_episode(write_session, tmp_path, capsys):
-    flags = ready(write_session, tmp_path)
-    runs = flags[-1]
-    assert cli.main(["status", "--runs", runs, "--json"]) == 0
+    ready(write_session, tmp_path)
+    assert cli.main(["status", "--json"]) == 0
     [episode] = only_json(capsys)["episodes"]
     assert episode["episode_id"] == "s1:p1" and episode["stage"] == "restored"
     assert episode["next_step"] == "run `culprit baseline s1:p1`"
-    assert cli.main(["status", "s1:p1", "--runs", runs, "--json"]) == 0
+    assert cli.main(["status", "s1:p1", "--json"]) == 0
     one = only_json(capsys)
     assert one["criterion"]["approved"] is True and one["symptom"] == "wrong-result" and one["verdict"] is None
 
@@ -75,7 +74,7 @@ def test_diagnose_json(write_session, tmp_path, capsys, monkeypatch):
 
 def test_calibration_json(tmp_path, capsys):
     (tmp_path / "runs").mkdir()
-    assert cli.main(["calibration", "--runs", str(tmp_path / "runs"), "--json"]) == 0
+    assert cli.main(["calibration", "--json"]) == 0
     data = only_json(capsys)
     assert data == {"labelled": 0, "agreed": 0, "kappa": None, "calibrated": False, "min_labels": 20,
                     "min_kappa": 0.6}

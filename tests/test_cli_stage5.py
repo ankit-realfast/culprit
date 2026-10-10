@@ -19,13 +19,13 @@ def judged(runs, i, passed):
 def test_review_then_label_then_calibration(tmp_path, capsys):
     runs = tmp_path / "runs"
     judged(runs, 0, True)
-    assert cli.main(["review", "--runs", str(runs)]) == 0
+    assert cli.main(["review"]) == 0
     out = capsys.readouterr().out
     assert "s1__p1/replays/baseline/0" in out and "judge: pass" in out
-    assert cli.main(["label", "s1__p1/replays/baseline/0", "pass", "--runs", str(runs)]) == 0
-    assert cli.main(["review", "--runs", str(runs)]) == 0
+    assert cli.main(["label", "s1__p1/replays/baseline/0", "pass"]) == 0
+    assert cli.main(["review"]) == 0
     assert "every judged replay is labelled" in capsys.readouterr().out
-    assert cli.main(["calibration", "--runs", str(runs)]) == 0
+    assert cli.main(["calibration"]) == 0
     out = capsys.readouterr().out
     assert "1 labelled" in out and "uncalibrated" in out
 
@@ -47,12 +47,12 @@ def test_selftest_refuses_an_episode_that_is_not_a_control(write_session, tmp_pa
         raise AssertionError("selftest spent money on an episode that is not a control")
 
     monkeypatch.setattr(cli, "run_selftest", must_not_run)
-    assert cli.main(["selftest", "--yes", "s1:p1", "--projects", str(tmp_path / "projects"), "--runs", str(runs)]) == 3
+    assert cli.main(["selftest", "--yes", "s1:p1"]) == 3
     assert "culprit baseline" in capsys.readouterr().err
     outcome = episode_dir(runs, "s1:p1") / "replays" / "baseline" / "outcome.json"
     outcome.parent.mkdir(parents=True)
     outcome.write_text('{"variant": "baseline", "passes": 1, "runs": 5, "cost_usd": 1.0}')
-    assert cli.main(["selftest", "--yes", "s1:p1", "--projects", str(tmp_path / "projects"), "--runs", str(runs)]) == 1
+    assert cli.main(["selftest", "--yes", "s1:p1"]) == 1
     err = capsys.readouterr().err
     assert "control" in err and "1 of 5" in err
 
@@ -69,7 +69,7 @@ def test_selftest_prints_each_fault_and_the_accuracy(write_session, tmp_path, ca
     (baseline / "outcome.json").write_text(json.dumps({"variant": "baseline", "passes": 5, "runs": 5, "cost_usd": 1}))
     monkeypatch.setattr(cli, "run_selftest", lambda *a, **k: [SelftestResult("weak-model", "model", "model"),
                                                               SelftestResult("truncated-prompt", "task", "harness")])
-    assert cli.main(["selftest", "--yes", "s1:p1", "--projects", str(tmp_path / "projects"), "--runs", str(runs)]) == 0
+    assert cli.main(["selftest", "--yes", "s1:p1"]) == 0
     out = capsys.readouterr().out
     assert "weak-model: expected model, got model ✓" in out
     assert "truncated-prompt: expected task, got harness ✗" in out

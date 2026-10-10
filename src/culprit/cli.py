@@ -24,8 +24,8 @@ from culprit.preview import CostPlan, batch_cost, diagnose_cost_for, plan_cost, 
 from culprit.progress import ProgressPrinter
 from culprit.replay import DEFAULT_REPLAY_BUDGET_USD, OriginalModified, SetupScriptFailed, baseline_settings
 from culprit.report import REPORT_FILE, RESTORE_FILE, collect, render_report
-from culprit.sandbox import (DEFAULT_FILE_HISTORY, apply_episode_originals, check_restore, episode_originals, restore,
-                             restore_from_git)
+from culprit import sandbox
+from culprit.sandbox import apply_episode_originals, check_restore, episode_originals, restore, restore_from_git
 from culprit.selftest import CONTROL_MIN_PASSES, is_control, run_selftest, selftest_accuracy
 from culprit.signals import FailureSignals
 from culprit.snapshot import load_snapshot, session_root
@@ -38,6 +38,7 @@ from culprit.triage import rank_candidates, summarize_session
 
 DEFAULT_PROJECTS = Path.home() / ".claude" / "projects"
 RUNS_ENV = "CULPRIT_RUNS"
+PROJECTS_ENV = "CULPRIT_PROJECTS"
 EXIT_REFUSED = 1
 EXIT_NOT_READY = 3
 EXIT_BUDGET = 4
@@ -46,6 +47,7 @@ EXIT_INTERRUPTED = 130
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    args.runs, args.projects = default_runs(), default_projects()
     try:
         if getattr(args, "needs_store", False):
             require_store(args.runs)
@@ -69,8 +71,13 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def default_runs() -> Path:
-    """The store: $CULPRIT_RUNS when set, otherwise runs/ in the current folder; --runs overrides both."""
+    """The store: $CULPRIT_RUNS when set, otherwise runs/ in the current folder."""
     return Path(os.environ.get(RUNS_ENV) or "runs")
+
+
+def default_projects() -> Path:
+    """The session logs: $CULPRIT_PROJECTS when set, otherwise ~/.claude/projects."""
+    return Path(os.environ.get(PROJECTS_ENV) or DEFAULT_PROJECTS)
 
 
 def require_store(runs_dir: Path) -> None:
@@ -98,12 +105,12 @@ EXAMPLE_RUN = """example run:
   culprit status                           where every episode stands, and what to run next
 """
 EXAMPLES = {
-    "triage": "  culprit triage --top 40\n  culprit triage --projects ~/.claude/projects --runs ./runs\n",
+    "triage": "  culprit triage --top 40\n  CULPRIT_PROJECTS=~/other/projects CULPRIT_RUNS=~/work/runs culprit triage\n",
     "confirm": "  culprit confirm #1 wrong-result\n  culprit confirm 1a2b3c4d:5e6f7a8b no-failure\n",
     "status": "  culprit status\n  culprit status #1\n",
     "criterion": "  culprit criterion draft #1\n  culprit criterion show #1\n  culprit criterion approve #1\n"
                  "  culprit criterion draft #1 --force     replace an existing criterion\n",
-    "restore": "  culprit restore #1\n  culprit restore #1 --dest /tmp/look   rebuild somewhere else to inspect\n",
+    "restore": "  culprit restore #1\n",
     "baseline": "  culprit baseline #1 --dry-run         show the most it could run and spend\n"
                 "  culprit baseline #1 --n 1 --budget 3\n  culprit baseline #1 --yes             no question asked\n",
     "env-fix": "  culprit env-fix #1 fix-env.sh         run before Claude starts in the environment oracle\n",
@@ -130,7 +137,6 @@ def build_parser() -> argparse.ArgumentParser:
                                    formatter_class=argparse.RawDescriptionHelpFormatter)
 
     triage = add("triage", "rank episodes most likely to have failed")
-    _projects_and_runs(triage)
     triage.add_argument("--top", type=int, default=20)
     _json_flag(triage)
     triage.set_defaults(handler=triage_command)
@@ -138,12 +144,10 @@ def build_parser() -> argparse.ArgumentParser:
     confirm = add("confirm", "record what went wrong in a queued episode")
     confirm.add_argument("episode_id")
     confirm.add_argument("symptom", choices=[s.value for s in Symptom])
-    confirm.add_argument("--runs", type=Path, default=default_runs())
     confirm.set_defaults(handler=confirm_command, needs_store=True)
 
     status = add("status", "where each episode stands and the command that moves it on")
     status.add_argument("episode_id", nargs="?")
-    status.add_argument("--runs", type=Path, default=default_runs())
     _json_flag(status)
     status.set_defaults(handler=status_command, needs_store=True)
 
@@ -151,19 +155,14 @@ def build_parser() -> argparse.ArgumentParser:
     criterion.add_argument("action", choices=["draft", "show", "approve"])
     criterion.add_argument("episode_id")
     criterion.add_argument("--force", action="store_true", help="draft: replace an existing criterion")
-    _projects_and_runs(criterion)
     criterion.set_defaults(handler=criterion_command)
 
     restore_parser = add("restore", "rebuild an episode's starting files and check them")
     restore_parser.add_argument("episode_id")
-    _projects_and_runs(restore_parser)
-    restore_parser.add_argument("--file-history", type=Path, default=DEFAULT_FILE_HISTORY)
-    restore_parser.add_argument("--dest", type=Path, default=None)
     restore_parser.set_defaults(handler=restore_command)
 
     baseline = add("baseline", "replay the unchanged episode N times and judge each run")
     baseline.add_argument("episode_id")
-    _projects_and_runs(baseline)
     baseline.add_argument("--n", type=int, default=5)
     baseline.add_argument("--budget", type=float, default=10.0, help="spend cap in USD for this episode, counting what it already spent")
     baseline.add_argument("--replay-budget", type=float, default=DEFAULT_REPLAY_BUDGET_USD)
@@ -174,12 +173,10 @@ def build_parser() -> argparse.ArgumentParser:
     env_fix = add("env-fix", "supply a script that fixes the environment for the environment oracle")
     env_fix.add_argument("episode_id")
     env_fix.add_argument("script", type=Path)
-    env_fix.add_argument("--runs", type=Path, default=default_runs())
     env_fix.set_defaults(handler=env_fix_command)
 
     diagnose_parser = add("diagnose", "find what to change: run the oracles and decide the cause")
     diagnose_parser.add_argument("episode_id")
-    _projects_and_runs(diagnose_parser)
     diagnose_parser.add_argument("--n", type=int, default=5)
     diagnose_parser.add_argument("--budget", type=float, default=40.0, help="spend cap in USD for this episode, counting what it already spent")
     diagnose_parser.add_argument("--replay-budget", type=float, default=DEFAULT_REPLAY_BUDGET_USD)
@@ -188,23 +185,19 @@ def build_parser() -> argparse.ArgumentParser:
     diagnose_parser.set_defaults(handler=diagnose_command)
 
     review = add("review", "show the next judged replay you have not labelled")
-    review.add_argument("--runs", type=Path, default=default_runs())
     review.set_defaults(handler=review_command, needs_store=True)
 
     label = add("label", "record your own pass/fail for one judged replay")
     label.add_argument("run")
     label.add_argument("verdict", choices=["pass", "fail"])
-    label.add_argument("--runs", type=Path, default=default_runs())
     label.set_defaults(handler=label_command)
 
     calibration = add("calibration", "how often the judge agrees with your labels")
-    calibration.add_argument("--runs", type=Path, default=default_runs())
     _json_flag(calibration)
     calibration.set_defaults(handler=calibration_command, needs_store=True)
 
     selftest = add("selftest", "plant known faults into a control episode and score culprit")
     selftest.add_argument("episode_id")
-    _projects_and_runs(selftest)
     selftest.add_argument("--n", type=int, default=5)
     selftest.add_argument("--budget-per-fault", type=float, default=40.0)
     selftest.add_argument("--replay-budget", type=float, default=DEFAULT_REPLAY_BUDGET_USD)
@@ -212,11 +205,9 @@ def build_parser() -> argparse.ArgumentParser:
     selftest.set_defaults(handler=selftest_command)
 
     report = add("report", "write runs/report.md from every stored verdict")
-    report.add_argument("--runs", type=Path, default=default_runs())
     report.set_defaults(handler=report_command, needs_store=True)
 
     batch = add("diagnose-all", "diagnose every prepared episode in the queue, then report")
-    _projects_and_runs(batch)
     batch.add_argument("--n", type=int, default=5)
     batch.add_argument("--per-episode", type=float, default=40.0)
     batch.add_argument("--total", type=float, default=400.0)
@@ -228,11 +219,6 @@ def build_parser() -> argparse.ArgumentParser:
         f"\n{group}:\n" + "".join(f"  {name:<{width}}{summaries[name]}\n" for name in names)
         for group, names in COMMAND_GROUPS.items())
     return parser
-
-
-def _projects_and_runs(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--projects", type=Path, default=DEFAULT_PROJECTS)
-    parser.add_argument("--runs", type=Path, default=default_runs())
 
 
 def _json_flag(parser: argparse.ArgumentParser) -> None:
@@ -426,11 +412,11 @@ def restore_command(args: argparse.Namespace) -> int:
     if blockers:
         print(f"culprit: {args.episode_id} cannot be replayed: " + "; ".join(blockers), file=sys.stderr)
         return 1
-    destination = args.dest or episode_dir(args.runs, args.episode_id) / PRISTINE_DIR
+    destination = episode_dir(args.runs, args.episode_id) / PRISTINE_DIR
     if destination.exists():
         print(f"culprit: {destination} already exists — delete it to restore again", file=sys.stderr)
         return 1
-    report = restore(episode, tracked, destination, file_history_root=args.file_history,
+    report = restore(episode, tracked, destination, file_history_root=sandbox.DEFAULT_FILE_HISTORY,
                      session_root=session_root(episode.session_file))
     root = session_root(episode.session_file) or Path(episode.cwd)
     covered = {str(Path(path) if Path(path).is_absolute() else root / path) for path in tracked}

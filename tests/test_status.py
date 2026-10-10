@@ -85,7 +85,7 @@ def test_status_without_an_id_prints_one_line_per_episode(tmp_path, capsys):
     runs = tmp_path / "runs"
     queue(runs, ID)
     confirm(runs)
-    assert cli.main(["status", "--runs", str(runs)]) == 0
+    assert cli.main(["status"]) == 0
     out = capsys.readouterr().out.splitlines()
     assert len(out) == 1
     assert "aaaaaaaa:bbbbbbbb" in out[0] and "confirmed" in out[0] and f"culprit criterion draft {short_id(ID)}" in out[0]
@@ -101,7 +101,7 @@ def test_status_with_an_id_shows_criterion_restore_runs_spend_and_verdict(tmp_pa
                                                                     "unknown": 1, "missing_backups": 0}))
     baseline(runs)
     save_verdict(episode_dir(runs, ID), Verdict(ID, "wrong-result", "harness", "harness passed 4/5", {}, {}))
-    assert cli.main(["status", "#1", "--runs", str(runs)]) == 0
+    assert cli.main(["status", "#1"]) == 0
     out = capsys.readouterr().out
     assert "diagnosed" in out
     assert "approved" in out and "the tests pass" in out
@@ -111,6 +111,7 @@ def test_status_with_an_id_shows_criterion_restore_runs_spend_and_verdict(tmp_pa
     assert "cause: harness" in out
 
 
-def test_status_refuses_a_missing_store(tmp_path, capsys):
-    assert cli.main(["status", "--runs", str(tmp_path / "nowhere")]) == 3
+def test_status_refuses_a_missing_store(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("CULPRIT_RUNS", str(tmp_path / "nowhere"))
+    assert cli.main(["status"]) == 3
     assert "no culprit store" in capsys.readouterr().err
