@@ -1,3 +1,4 @@
+from culprit.replay import DEFAULT_REPLAY_BUDGET_USD
 import json
 
 import pytest
@@ -104,9 +105,9 @@ def test_the_default_caps_never_stop_a_full_diagnose_at_n():
     from culprit.preview import diagnose_cost
     from culprit.taxonomy import ORACLE_ORDER, Cause
     assert cli.RUNS_PER_VARIANT == 10
-    every_oracle = diagnose_cost(cli.REPLAY_BUDGET_USD, ORACLE_ORDER, n=cli.RUNS_PER_VARIANT, spent_usd=0,
+    every_oracle = diagnose_cost(DEFAULT_REPLAY_BUDGET_USD, ORACLE_ORDER, n=cli.RUNS_PER_VARIANT, spent_usd=0,
                                  cap_usd=float("inf"), drafts=2)
-    planted = diagnose_cost(cli.REPLAY_BUDGET_USD, [c for c in ORACLE_ORDER if c is not Cause.ENVIRONMENT],
+    planted = diagnose_cost(DEFAULT_REPLAY_BUDGET_USD, [c for c in ORACLE_ORDER if c is not Cause.ENVIRONMENT],
                             n=cli.RUNS_PER_VARIANT, spent_usd=0, cap_usd=float("inf"), drafts=2)
     assert every_oracle.max_usd <= cli.EPISODE_CAP_USD == 850.0
     assert planted.max_usd <= cli.FAULT_CAP_USD == 650.0

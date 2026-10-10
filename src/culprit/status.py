@@ -10,7 +10,7 @@ from culprit.criterion import Criterion, criterion_step, load_criterion
 from culprit.experiment import OUTCOME_FILE, PRISTINE_DIR, REPLAYS_DIR, VariantOutcome, load_outcome, stored_spend
 from culprit.report import RESTORE_FILE
 from culprit.store import candidate_rows, confirm_step, display_id, episode_dir, known_episode_ids, read_symptom
-from culprit.verdict import Verdict, load_verdict
+from culprit.verdict import BASELINE, Verdict, load_verdict
 
 STAGES = ("not queued", "queued", "confirmed", "criterion drafted", "criterion approved", "restored", "baselined",
           "diagnosed")
@@ -44,7 +44,7 @@ def episode_status(runs_dir: Path, episode_id: str) -> EpisodeStatus:
         ("criterion approved", bool(criterion and criterion.approved),
          lambda: criterion_step(criterion, shown, symptom_value)),
         ("restored", (folder / PRISTINE_DIR).is_dir(), lambda: diagnose),
-        ("baselined", load_outcome(folder, "baseline") is not None, lambda: diagnose),
+        ("baselined", load_outcome(folder, BASELINE) is not None, lambda: diagnose),
         ("diagnosed", verdict is not None, lambda: diagnose),
     ]
     stage, hint = ("queued" if queued else "not queued"), None

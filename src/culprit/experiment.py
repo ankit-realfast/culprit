@@ -12,7 +12,8 @@ from typing import Callable
 
 from culprit.criterion import Criterion
 from culprit.episodes import Episode
-from culprit.judge import JUDGE_CALL_CAP_USD, Judgement, judge_replay
+from culprit.claude import CALL_CAP_USD
+from culprit.judge import Judgement, judge_replay
 from culprit.replay import ReplaySettings, replay_workdir, run_replay
 from culprit.store import episode_dir
 
@@ -98,7 +99,7 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
             run_cost = float(json.loads((run_dir / RESULT_FILE).read_text()).get("cost_usd") or 0)
             judgement = Judgement(**json.loads((run_dir / JUDGEMENT_FILE).read_text()))
         else:
-            budget.ensure_room(settings.max_budget_usd + JUDGE_CALL_CAP_USD)
+            budget.ensure_room(settings.max_budget_usd + CALL_CAP_USD)
             tell(event)
             result = replay(settings, episode_folder / PRISTINE_DIR, run_dir, replay_workdir(episode),
                             criterion.checks, original_cwd=Path(episode.cwd),
@@ -107,7 +108,7 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
             run_cost = result.cost_usd
             judgement = judge(criterion, result)
             if judgement.by == "model":
-                budget.spend(JUDGE_CALL_CAP_USD)
+                budget.spend(CALL_CAP_USD)
             run_dir.mkdir(parents=True, exist_ok=True)
             (run_dir / JUDGEMENT_FILE).write_text(json.dumps(asdict(judgement), indent=2))
         cost += run_cost
@@ -133,7 +134,7 @@ def stored_spend(folder: Path) -> float:
         if (run_dir / RESULT_FILE).is_file():
             total += float(json.loads((run_dir / RESULT_FILE).read_text()).get("cost_usd") or 0)
         if (run_dir / JUDGEMENT_FILE).is_file() and json.loads((run_dir / JUDGEMENT_FILE).read_text()).get("by") == "model":
-            total += JUDGE_CALL_CAP_USD
+            total += CALL_CAP_USD
     for calls in [folder / CALLS_FILE, *(folder / SUPERSEDED_DIR).glob(f"*/{CALLS_FILE}")]:
         if calls.is_file():
             total += float(json.loads(calls.read_text()).get("usd") or 0)

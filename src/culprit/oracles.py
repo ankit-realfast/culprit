@@ -22,6 +22,7 @@ FABLE_PREFIX = "claude-fable"
 MAX_CONTEXT_CHARS = 100_000
 MAX_DRAFT_ATTEMPTS = 2
 HARNESS_BUDGET_MULTIPLIER = 2
+DRAFTED_CAUSES = (Cause.TASK, Cause.AGENT_SETUP)  # oracles whose text a model drafts
 FILE_TOOLS = ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit")
 REWRITE_SCHEMA = {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}
 

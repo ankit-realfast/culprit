@@ -20,6 +20,7 @@ from pathlib import Path
 from culprit.claude import NO_MCP_SERVERS
 from culprit.answer_host import PERMISSION_PROMPT_TOOL, recorded_answers
 from culprit.answer_host import SERVER as ANSWER_SERVER
+from culprit import episodes
 from culprit.episodes import Episode, content_blocks
 from culprit.mcp_stub import MCP_PREFIX, recordings_from_episode
 from culprit.sandbox import clone_tree
@@ -29,7 +30,6 @@ REPLAY_PERMISSION_MODES = ("auto", "acceptEdits")
 REPLAY_TIMEOUT_S = 1800
 CHECK_TIMEOUT_S = 600
 DEFAULT_REPLAY_BUDGET_USD = 2.0
-DEFAULT_PROJECTS = Path.home() / ".claude" / "projects"
 OUTPUT_TAIL_CHARS = 2000
 REPLAY_DIR_PREFIX = ".culprit-replay-"
 WRITE_TOOLS = ("Edit", "Write", "NotebookEdit")
@@ -233,7 +233,7 @@ def run_in_own_process_group(command: list[str], *, input: str | None = None, ca
 
 
 def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir: Path, checks: tuple[str, ...],
-               run=run_in_own_process_group, projects_dir: Path = DEFAULT_PROJECTS,
+               run=run_in_own_process_group, projects_dir: Path | None = None,
                original_cwd: Path | None = None, original_memory: Path | None = None) -> ReplayResult:
     run_dir.mkdir(parents=True, exist_ok=True)
     memory_dir = None
@@ -251,7 +251,8 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
         recordings_file = (run_dir / "mcp-recordings.json").resolve()
         recordings_file.write_text(json.dumps(settings.mcp_recordings))
     clone_tree(pristine, workdir)
-    project_folder = projects_dir / project_folder_name(workdir.resolve())
+    # Claude Code makes a folder for the clone among its projects; it is removed afterwards if left empty
+    project_folder = (projects_dir or episodes.DEFAULT_PROJECTS) / project_folder_name(workdir.resolve())
     # git must not climb out of the clone: beside a project inside a real repository it would find that
     # repository and a replay's `git commit` would land in it
     env = {**os.environ, "GIT_CEILING_DIRECTORIES": str(workdir.parent.resolve())}

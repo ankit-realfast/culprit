@@ -6,11 +6,10 @@ import json
 import os
 from pathlib import Path
 
-from culprit.answer_host import recorded_answers
+from culprit.answer_host import ASK_USER_TOOL, recorded_answers
 from culprit.episodes import Episode, content_blocks, tool_uses
 from culprit.snapshot import Tracked
 
-ASK_USER_TOOL = "AskUserQuestion"
 PROJECT_SETTINGS = (".claude/settings.json", ".claude/settings.local.json")
 
 

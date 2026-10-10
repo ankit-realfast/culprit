@@ -10,11 +10,10 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from culprit.claude import ClaudeCallFailed
+from culprit.claude import CALL_CAP_USD, ClaudeCallFailed
 from culprit.criterion import criterion_step, load_criterion
 from culprit.diagnose import diagnose
 from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget, Progress, scoped, stored_spend
-from culprit.judge import JUDGE_CALL_CAP_USD
 from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
 from culprit.replay import SetupScriptFailed, baseline_settings
 from culprit.selftest import SELFTEST_DIR
@@ -50,7 +49,7 @@ def diagnose_all(runs_dir: Path, projects_dir: Path, *, n: int, per_episode_usd:
                  replay_budget_usd: float, diagnose_fn=diagnose, find=find_episode,
                  follow=follow_up_prompts, progress: Progress | None = None) -> BatchSummary:
     summary = BatchSummary()
-    smallest_useful_usd = replay_budget_usd + JUDGE_CALL_CAP_USD  # one replay and its judgement
+    smallest_useful_usd = replay_budget_usd + CALL_CAP_USD  # one replay and its judgement
     queued = [row["summary"]["episode_id"] for row in json.loads((runs_dir / CANDIDATES_FILE).read_text())]
     # the total covers every batch ever run in this folder, not just this one
     remaining = total_usd - sum(stored_spend(folder) for folder in runs_dir.iterdir()

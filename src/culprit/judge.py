@@ -13,7 +13,6 @@ from culprit.claude import Ask, ask_claude
 from culprit.criterion import Criterion
 from culprit.replay import ReplayResult
 
-JUDGE_CALL_CAP_USD = 0.50
 MAX_DIFF_CHARS = 60_000
 MAX_ACTIONS_CHARS = 20_000
 TOOL_INPUT_CHARS = 300

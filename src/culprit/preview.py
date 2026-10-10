@@ -13,18 +13,17 @@ from pathlib import Path
 from typing import Sequence
 
 from culprit.batch import ENV_FIX_FILE, readiness_problem
+from culprit.claude import CALL_CAP_USD
 from culprit.criterion import Criterion, load_criterion
-from culprit.diagnose import BASELINE, COMBINED, CRITERION_USED_FILE, VARIANTS_DIR, criterion_key
+from culprit.diagnose import CRITERION_USED_FILE, VARIANTS_DIR, criterion_key
 from culprit.experiment import MAX_VOID_RETRIES, load_outcome, stored_spend
-from culprit.judge import JUDGE_CALL_CAP_USD
-from culprit.oracles import FABLE_PREFIX, HARNESS_BUDGET_MULTIPLIER, MAX_DRAFT_ATTEMPTS
+from culprit.oracles import DRAFTED_CAUSES, FABLE_PREFIX, HARNESS_BUDGET_MULTIPLIER, MAX_DRAFT_ATTEMPTS
 from culprit.replay import ReplaySettings
 from culprit.selftest import SELFTEST_DIR, PlantedFault, plant, selftest_dir
 from culprit.store import candidate_rows, episode_dir
 from culprit.taxonomy import ORACLE_ORDER, Cause
-from culprit.verdict import load_verdict
+from culprit.verdict import BASELINE, COMBINED, load_verdict
 
-DRAFTED_CAUSES = (Cause.TASK, Cause.AGENT_SETUP)
 CALLS_PER_DRAFT_ATTEMPT = 2  # the draft and its leak check
 
 
@@ -60,7 +59,7 @@ EMPTY = CostPlan(0, 0, 0.0, 0.0, 0.0)
 def plan_cost(replay_caps: Sequence[float], *, n: int, calls: int = 0, spent_usd: float, cap_usd: float) -> CostPlan:
     """replay_caps holds one replay budget per variant still to run."""
     per_variant = n + MAX_VOID_RETRIES
-    worst = sum((cap + JUDGE_CALL_CAP_USD) * per_variant for cap in replay_caps) + calls * JUDGE_CALL_CAP_USD
+    worst = sum((cap + CALL_CAP_USD) * per_variant for cap in replay_caps) + calls * CALL_CAP_USD
     return CostPlan(per_variant * len(replay_caps), calls, round(max(0.0, min(cap_usd - spent_usd, worst)), 2),
                     spent_usd, cap_usd)
 

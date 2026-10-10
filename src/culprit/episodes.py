@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Iterator
 
 INTERRUPT_MARKER = "[Request interrupted by user"
+# where Claude Code keeps one folder of session logs per project
+DEFAULT_PROJECTS = Path.home() / ".claude" / "projects"
 SYNTHETIC_MODEL = "<synthetic>"
 
 

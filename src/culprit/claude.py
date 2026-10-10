@@ -13,6 +13,7 @@ from typing import Callable
 NO_MCP_SERVERS = '{"mcpServers":{}}'
 DRAFTING_MODEL = "claude-sonnet-5-5"
 CALL_TIMEOUT_S = 600
+CALL_CAP_USD = 0.50  # the most one call may spend, and what culprit charges for it (the CLI reports no cost)
 # Calls run from their own empty folder, so they never read a project's CLAUDE.md and the empty
 # memory folder Claude Code creates for them is easy to recognise under ~/.claude/projects.
 CALLS_DIR = Path.home() / ".culprit" / "calls"
@@ -38,7 +39,7 @@ def structured_call_command(prompt: str, schema: dict, model: str, max_budget_us
     ]
 
 
-def ask_claude(prompt: str, schema: dict, model: str = DRAFTING_MODEL, max_budget_usd: float = 0.50,
+def ask_claude(prompt: str, schema: dict, model: str = DRAFTING_MODEL, max_budget_usd: float = CALL_CAP_USD,
                run=subprocess.run, cwd: Path = CALLS_DIR) -> dict:
     cwd.mkdir(parents=True, exist_ok=True)
     try:

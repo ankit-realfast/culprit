@@ -18,10 +18,12 @@ from culprit.claude import ClaudeCallFailed, ask_claude
 from culprit.criterion import CRITERION_FILE, Criterion, approve_criterion, criterion_step, draft_criterion, load_criterion, save_criterion
 from culprit.diagnose import diagnose, retire_if_criterion_changed
 from culprit.eligibility import project_hooks, replay_blockers
+from culprit import episodes
 from culprit.episodes import Episode, excerpt, session_files
 from culprit.experiment import PRISTINE_DIR, BudgetExhausted, EpisodeBudget, load_outcome, run_variant, stored_spend
 from culprit.locate import EpisodeNotFound, find_episode, follow_up_prompts
-from culprit.preview import DRAFTED_CAUSES, CostPlan, batch_cost, diagnose_cost, diagnose_cost_for, plan_cost, selftest_cost
+from culprit.oracles import DRAFTED_CAUSES
+from culprit.preview import CostPlan, batch_cost, diagnose_cost, diagnose_cost_for, plan_cost, selftest_cost
 from culprit.progress import ProgressPrinter
 from culprit.replay import DEFAULT_REPLAY_BUDGET_USD, OriginalModified, SetupScriptFailed, baseline_settings
 from culprit.report import REPORT_FILE, RESTORE_FILE, collect, render_report
@@ -34,10 +36,9 @@ from culprit.status import STAGES, EpisodeStatus, episode_status, next_step, que
 from culprit.store import (CANDIDATES_FILE, NotReady, UnknownEpisode, candidate_rows, confirm_step, display_id,
                            episode_dir, read_symptom, record_symptom, resolve_episode_id, save_candidates)
 from culprit.taxonomy import ORACLE_ORDER, Cause, Symptom
-from culprit.verdict import load_verdict, numbers_line
+from culprit.verdict import BASELINE, load_verdict, numbers_line
 from culprit.triage import rank_candidates, summarize_session
 
-DEFAULT_PROJECTS = Path.home() / ".claude" / "projects"
 RUNS_ENV = "CULPRIT_RUNS"
 PROJECTS_ENV = "CULPRIT_PROJECTS"
 EXIT_REFUSED = 1
@@ -48,13 +49,12 @@ RUNS_PER_VARIANT = 10  # N: the baseline and each variant are replayed this many
 # Built-in spend caps, a safety net rather than a limit: each counts what the episode (or, for the total, every
 # episode in runs/) already spent, and is the worst case preview works out at N, rounded up to $50, so a full
 # diagnose is never stopped by its default cap.
-REPLAY_BUDGET_USD = DEFAULT_REPLAY_BUDGET_USD  # one replay
 CAP_ROUNDING_USD = 50
 QUEUE_EPISODES = 20  # the batch total covers this many episodes at their worst case
 
 
 def _worst_case_cap(oracles) -> float:
-    worst = diagnose_cost(REPLAY_BUDGET_USD, oracles, n=RUNS_PER_VARIANT, spent_usd=0.0, cap_usd=float("inf"),
+    worst = diagnose_cost(DEFAULT_REPLAY_BUDGET_USD, oracles, n=RUNS_PER_VARIANT, spent_usd=0.0, cap_usd=float("inf"),
                           drafts=sum(c in DRAFTED_CAUSES for c in oracles)).max_usd
     return float(-(-worst // CAP_ROUNDING_USD) * CAP_ROUNDING_USD)
 
@@ -96,7 +96,7 @@ def default_runs() -> Path:
 
 def default_projects() -> Path:
     """The session logs: $CULPRIT_PROJECTS when set, otherwise ~/.claude/projects."""
-    return Path(os.environ.get(PROJECTS_ENV) or DEFAULT_PROJECTS)
+    return Path(os.environ.get(PROJECTS_ENV) or episodes.DEFAULT_PROJECTS)
 
 
 def require_store(runs_dir: Path) -> None:
@@ -530,13 +530,13 @@ def run_baseline(args: argparse.Namespace, episode: Episode, criterion: Criterio
     """Replay the unchanged episode N times under the episode cap and judge each run."""
     folder = episode_dir(args.runs, args.episode_id)
     spent = stored_spend(folder)
-    show_plan(plan_cost([REPLAY_BUDGET_USD], n=RUNS_PER_VARIANT, spent_usd=spent, cap_usd=EPISODE_CAP_USD))
+    show_plan(plan_cost([DEFAULT_REPLAY_BUDGET_USD], n=RUNS_PER_VARIANT, spent_usd=spent, cap_usd=EPISODE_CAP_USD))
     if retire_if_criterion_changed(folder, criterion):
         print("the criterion changed since the last runs: they were moved to superseded/ and will not be reused",
               file=sys.stderr)
     budget = EpisodeBudget(EPISODE_CAP_USD, spent_usd=spent)
     with ProgressPrinter() as progress:
-        outcome = run_variant("baseline", baseline_settings(episode, REPLAY_BUDGET_USD), n=RUNS_PER_VARIANT,
+        outcome = run_variant(BASELINE, baseline_settings(episode), n=RUNS_PER_VARIANT,
                               episode=episode, runs_dir=args.runs, criterion=criterion, budget=budget,
                               progress=progress)
     print(f"baseline: {outcome.passes} of {outcome.runs} passed, ${outcome.cost_usd:.2f} spent on replays")
@@ -563,10 +563,10 @@ def diagnose_command(args: argparse.Namespace) -> int:
     folder = episode_dir(args.runs, args.episode_id)
     env_script = folder / ENV_FIX_FILE
     budget = EpisodeBudget(EPISODE_CAP_USD, spent_usd=stored_spend(folder))
-    show_plan(diagnose_cost_for(folder, criterion, REPLAY_BUDGET_USD, model=episode.model, env_fix=env_script.exists(),
+    show_plan(diagnose_cost_for(folder, criterion, DEFAULT_REPLAY_BUDGET_USD, model=episode.model, env_fix=env_script.exists(),
                                 n=RUNS_PER_VARIANT, spent_usd=budget.spent_usd, cap_usd=EPISODE_CAP_USD))
     with ProgressPrinter() as progress:
-        verdict = diagnose(episode, criterion, symptom, baseline_settings(episode, REPLAY_BUDGET_USD),
+        verdict = diagnose(episode, criterion, symptom, baseline_settings(episode),
                            runs_dir=args.runs, follow_ups=follow_up_prompts(args.projects, args.episode_id),
                            env_script=env_script if env_script.exists() else None, n=RUNS_PER_VARIANT, budget=budget,
                            progress=progress)
@@ -620,7 +620,7 @@ def agreement_json(result) -> dict:
 
 def selftest_command(args: argparse.Namespace) -> int:
     episode, criterion = ready_to_replay(args)
-    baseline = load_outcome(episode_dir(args.runs, args.episode_id), "baseline")
+    baseline = load_outcome(episode_dir(args.runs, args.episode_id), BASELINE)
     if baseline is None:
         baseline = run_baseline(args, episode, criterion)
     if not is_control(args.runs, args.episode_id, RUNS_PER_VARIANT):
@@ -629,10 +629,10 @@ def selftest_command(args: argparse.Namespace) -> int:
               f"{control_min_passes(RUNS_PER_VARIANT)} of {RUNS_PER_VARIANT}",
               file=sys.stderr)
         return EXIT_REFUSED
-    show_plan(selftest_cost(args.runs, args.episode_id, criterion, baseline_settings(episode, REPLAY_BUDGET_USD),
+    show_plan(selftest_cost(args.runs, args.episode_id, criterion, baseline_settings(episode),
                             n=RUNS_PER_VARIANT, budget_per_fault=FAULT_CAP_USD))
     with ProgressPrinter() as progress:
-        results = run_selftest(episode, criterion, baseline_settings(episode, REPLAY_BUDGET_USD), runs_dir=args.runs,
+        results = run_selftest(episode, criterion, baseline_settings(episode), runs_dir=args.runs,
                                follow_ups=follow_up_prompts(args.projects, args.episode_id), n=RUNS_PER_VARIANT,
                                budget_per_fault=FAULT_CAP_USD, progress=progress)
     for result in results:
@@ -671,10 +671,10 @@ def diagnose_queue(args: argparse.Namespace) -> int:
         except (NotReplayable, EpisodeNotFound) as refusal:
             print(f"{shown} not restored: {refusal}")
     show_plan(batch_cost(args.runs, n=RUNS_PER_VARIANT, per_episode_usd=EPISODE_CAP_USD, total_usd=TOTAL_CAP_USD,
-                         replay_budget_usd=REPLAY_BUDGET_USD))
+                         replay_budget_usd=DEFAULT_REPLAY_BUDGET_USD))
     with ProgressPrinter() as progress:
         summary = diagnose_all(args.runs, args.projects, n=RUNS_PER_VARIANT, per_episode_usd=EPISODE_CAP_USD,
-                               total_usd=TOTAL_CAP_USD, replay_budget_usd=REPLAY_BUDGET_USD, progress=progress)
+                               total_usd=TOTAL_CAP_USD, replay_budget_usd=DEFAULT_REPLAY_BUDGET_USD, progress=progress)
     print(f"diagnosed {len(summary.diagnosed)}: {', '.join(summary.diagnosed) or 'none'}")
     for episode_id in summary.diagnosed:
         verdict = load_verdict(episode_dir(args.runs, episode_id))

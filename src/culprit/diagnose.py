@@ -12,12 +12,11 @@ from dataclasses import asdict
 from itertools import combinations
 from pathlib import Path
 
-from culprit.claude import ask_claude
+from culprit.claude import CALL_CAP_USD, ask_claude
 from culprit.criterion import Criterion
 from culprit.episodes import Episode
 from culprit.experiment import (CALLS_FILE, PRISTINE_DIR, REPLAYS_DIR, SUPERSEDED_DIR, EpisodeBudget, Progress,
                                 VariantOutcome, load_outcome, record_call_spend, run_variant)
-from culprit.judge import JUDGE_CALL_CAP_USD
 from culprit.oracles import build_variant, combine
 from culprit.replay import ReplaySettings, settings_from_json, settings_to_json
 from culprit.store import episode_dir
@@ -66,9 +65,9 @@ def diagnose(episode: Episode, criterion: Criterion, symptom: Symptom, base: Rep
     untested: dict[str, str] = {}
 
     def charged_ask(prompt: str, schema: dict) -> dict:
-        budget.ensure_room(JUDGE_CALL_CAP_USD)
-        budget.spend(JUDGE_CALL_CAP_USD)
-        record_call_spend(folder, JUDGE_CALL_CAP_USD)
+        budget.ensure_room(CALL_CAP_USD)
+        budget.spend(CALL_CAP_USD)
+        record_call_spend(folder, CALL_CAP_USD)
         return ask(prompt, schema)
 
     def measured(name: str, settings: ReplaySettings) -> VariantOutcome:

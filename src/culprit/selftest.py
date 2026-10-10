@@ -17,7 +17,7 @@ from culprit.experiment import EpisodeBudget, Progress, load_outcome, scoped, st
 from culprit.replay import ReplaySettings
 from culprit.store import episode_dir
 from culprit.taxonomy import Cause, Symptom
-from culprit.verdict import load_verdict
+from culprit.verdict import BASELINE, load_verdict
 
 SELFTEST_DIR = "selftest"
 CONTROL_MIN_SHARE = (4, 5)  # a control's baseline passes at least 4 in 5 of the N runs
@@ -80,7 +80,7 @@ def control_min_passes(n: int) -> int:
 
 
 def is_control(runs_dir: Path, episode_id: str, n: int) -> bool:
-    baseline = load_outcome(episode_dir(runs_dir, episode_id), "baseline")
+    baseline = load_outcome(episode_dir(runs_dir, episode_id), BASELINE)
     return baseline is not None and baseline.passes >= control_min_passes(n)
 
 
