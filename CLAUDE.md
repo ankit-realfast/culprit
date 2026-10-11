@@ -31,7 +31,7 @@ uv run culprit --help                     # commands: triage, confirm, diagnose,
 ```
 
 The CLI keeps flags to `triage --top` and `status --json`; the store and the logs come from `CULPRIT_RUNS`
-(default `runs/`) and `CULPRIT_PROJECTS` (default `~/.claude/projects`). Episodes can be named by row number (`3`; never `#3`, which shells treat as a comment),
+(default `runs/`) and `CULPRIT_PROJECTS` (default `~/.claude/projects`); `CULPRIT_ORACLE_MODEL`, `CULPRIT_DRAFTING_MODEL` and `CULPRIT_WEAK_MODEL` override the model aliases. Episodes can be named by row number (`3`; never `#3`, which shells treat as a comment),
 short id or unique prefix. Don't add flags or subcommands without the user asking.
 
 ## Architecture
@@ -54,24 +54,24 @@ than adding function-level imports. Pipeline per episode:
 
 episodes → triage (human confirms symptom) → criterion (human approves success criterion) → restore
 (starting files rebuilt in a throwaway dir) → baseline (N=10 unchanged replays, judged) → oracles
-(one variant per cause, leak-checked; the model cause may add an original-model-at-max-effort run) → verdict (Fisher test, first match wins, then pair test) →
+(one variant per cause, leak-checked; the model cause may add original-model-at-max-effort and latest-in-family runs) → verdict (Fisher test, first match wins, then pair test) →
 report (symptom × cause grid, ranked fix list). Calibration and selftest measure culprit's own trust.
 
 Key cross-cutting rules:
 
 - **Episode** = one human prompt plus every record after it until the next human prompt, id `<sessionId>:<promptId>`. Episodes are cut by **file order**, not by grouping on `promptId` (only `user` records carry it). Injected markup (`<task-notification>`, `<command-name>`, …) and interrupts do not open episodes.
 - **Taxonomy values and order are fixed** (first match wins): symptoms `stopped-short`, `wrong-result`, `ignored-instructions`, `wasteful` (+ `no-failure`); causes `misjudged`, `not-reproducible`, `task`, `environment`, `agent-setup`, `harness`, `model`, `multi-cause`, `unexplained`.
-- **Every model call** goes through `culprit.model.ask_claude` (no tools, empty strict MCP config, `--permission-prompts none`, `--no-session-persistence`, `--max-budget-usd`). Drafting/judge model `claude-sonnet-5-5`; oracle model `claude-fable-5-1`.
+- **Every model call** goes through `culprit.model.ask_claude` (no tools, empty strict MCP config, `--permission-prompts none`, `--no-session-persistence`, `--max-budget-usd`); the one exception is alias resolution in `model.py` (a model-free `/cost` call, capped). Models are named by alias: drafting/judge `sonnet`, oracle `fable`, selftest weak model `haiku`; each run records the id it actually ran as.
 - **Every replay is locked down**: fresh APFS clone (`cp -cR`) beside the original cwd at `<parent>/.culprit-replay-<12 hex>` (so ancestor CLAUDE.md files load), git remotes removed, no MCP, `git push`/`gh` denied, spend-capped, stream-json output. Permission mode: `auto`/`acceptEdits` as recorded, anything else → `acceptEdits` (the CLI has no `default` mode). Clone and the empty `~/.claude/projects/<encoded>/memory/` folder are deleted afterwards.
 - **The judge** decides from the criterion plus the final answer, the diff, the check results and the transcript's tool calls; a failing check or errored run fails without a model call; a run stopped at its spend or time limit is counted and judged (only infrastructure failures are void and retried).
 - **Restores never write to the original working directory**; every tracked path must resolve inside the destination.
 - **Each oracle may change only its own fields** (task → `prompt`; environment → `setup_script`; agent-setup → `claude_md_addition`, written into the replay copy's project CLAUDE.md; harness → `tools`, `disallowed_tools`, `context_preamble`, `max_budget_usd`; model → `model`, `effort`).
-- Storage is plain files under `runs/` (one folder per episode; `runs/selftest/` kept separate from real calibration).
+- Storage is plain files under `runs/` (one folder per episode; `runs/selftest/` kept separate from real calibration; `runs/models.json` caches what each alias resolves to, for a day).
 
 ## Hard constraints
 
 - `runs/` is gitignored and holds client work: **real session content never enters the repo**. Tests use synthetic records (`tests/records.py`).
 - Tests never call the real `claude` binary — inject a fake. Real calls happen only in each task's explicit manual step.
-  `tests/conftest.py` enforces this (a failing stand-in `claude` first on PATH) and points every default at
+  `tests/conftest.py` enforces this (a failing stand-in `claude` first on PATH, a fake alias resolver, model variables cleared) and points every default at
   tmp paths, so no test reads real logs or writes the repo's `runs/`; keep both guards.
 - No runtime dependencies beyond the standard library.
