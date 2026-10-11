@@ -16,12 +16,13 @@ from typing import Callable, Sequence, TextIO
 from culprit import logs, replay
 from culprit.diagnose import (BASELINE, DRAFTED_CAUSES, ENV_FIX_FILE, BudgetExhausted, CostPlan, EpisodeBudget,
                               ReplayEvent, VariantOutcome, batch_cost, diagnose, diagnose_all, diagnose_cost,
-                              diagnose_cost_for, env_fix_script, load_outcome, load_verdict, numbers_line, plan_cost,
+                              diagnose_cost_for, env_fix_script, limit_tally, limits_line, load_outcome, load_verdict,
+                              numbers_line, plan_cost,
                               pristine_dir, retire_if_criterion_changed, run_variant, stored_spend)
 from culprit.logs import (Episode, EpisodeNotFound, FailureSignals, excerpt, find_episode, follow_up_prompts,
                           load_snapshot, project_hooks, rank_candidates, replay_blockers, session_files, session_root,
                           summarize_session)
-from culprit.model import (CRITERION_FILE, ClaudeCallFailed, Criterion, approve_criterion, ask_claude, criterion_step,
+from culprit.model import (CRITERION_FILE, LIMIT_WORDS, ClaudeCallFailed, Criterion, approve_criterion, ask_claude, criterion_step,
                            draft_criterion, load_criterion, save_criterion)
 from culprit.replay import (DEFAULT_REPLAY_BUDGET_USD, OriginalModified, SetupScriptFailed, apply_episode_originals,
                             baseline_settings, check_restore, episode_originals, restore, restore_from_git)
@@ -114,6 +115,8 @@ class ProgressPrinter:
                 self.interval)
             return
         result = "void, not counted" if event.result == "void" else event.result
+        if event.limit and event.result != "void":
+            result += f" (stopped at its {LIMIT_WORDS.get(event.limit, event.limit)})"
         reused = " — reused from an earlier run" if event.reused else ""
         self.print(f"{describe(event)}: {result}, ${event.cost_usd:.2f} (episode spent ${event.spent_usd:.2f})"
                    f"{reused}")
@@ -551,6 +554,8 @@ def status_lines(status: EpisodeStatus) -> list[str]:
                      f"{r.get('unknown', 0)} unknown, {r.get('missing_backups', 0)} missing backups")
     for outcome in status.outcomes:
         void = f", {outcome.void} void" if outcome.void else ""
+        if outcome.limits:
+            void += f", {sum(outcome.limits.values())} stopped at a limit ({limit_tally(outcome.limits)})"
         lines.append(f"{outcome.variant}: {outcome.passes} of {outcome.runs} passed{void}, ${outcome.cost_usd:.2f}")
     lines.append(f"spent: ${status.spent_usd:.2f}")
     if status.verdict:
@@ -663,6 +668,8 @@ def diagnose_command(args: argparse.Namespace) -> int:
     print(f"cause: {verdict.cause}\nevidence: {verdict.evidence}")
     if numbers := numbers_line(verdict):
         print(numbers)
+    if limited := limits_line(verdict):
+        print(limited)
     if verdict.pair:
         print(f"together: {' + '.join(verdict.pair)}")
     for cause, reason in verdict.untested.items():

@@ -92,10 +92,12 @@ uv run culprit status [1]          # where episodes stand and the next command
   variant, every retry), so they never cut a diagnosis short.
 - **What caps count:** caps include money already spent, so resuming never double-spends.
 - **Plan printed first:** before spending, culprit prints the most it could spend.
-- **Void runs:** runs that fail outside the agent (API error, timeout, the per-replay cap) don't count and
-  are retried.
+- **Void runs:** only infrastructure failures (an API error or overload, a lost connection, the CLI crashing
+  or failing to start) are void: they don't count and are retried.
+- **Runs that hit a limit count:** a replay stopped by its spend cap or its time limit is scored on what it
+  produced (it usually fails), and `status`, `diagnose` and the report say how many runs stopped at each limit.
 - **Late-session episodes:** every replay re-sends the session's earlier conversation, so they cost more
-  per run and are likelier to hit the per-replay cap.
+  per run and are likelier to hit the per-replay cap (and then fail that run).
 - **Not testable:** if no result could beat the baseline, culprit stops before running any oracles.
 
 ## Safety

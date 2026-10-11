@@ -65,3 +65,20 @@ def test_a_void_run_is_not_judged(tmp_path):
     judgement = judge_replay(CRITERION, replace(replay_in(tmp_path), void_reason="API error 529"), ask=ask)
     assert (judgement.passed, judgement.by) == (False, "void")
     assert ask.calls == []
+
+
+def test_a_run_stopped_at_a_limit_is_judged_on_what_it_produced(tmp_path):
+    from dataclasses import replace
+    ask = FakeAsk({"passed": False, "reason": "unfinished"})
+    replay = replace(replay_in(tmp_path, [CheckResult("pytest -q", 0, "ok")], is_error=True), limit="budget")
+    judgement = judge_replay(CRITERION, replay, ask=ask)
+    assert judgement == Judgement(False, "unfinished", "model")
+    assert "spend limit" in ask.calls[0][0]
+
+
+def test_a_run_stopped_at_a_limit_still_fails_a_failing_check_without_a_model(tmp_path):
+    from dataclasses import replace
+    ask = FakeAsk()
+    replay = replace(replay_in(tmp_path, [CheckResult("pytest -q", 1, "1 failed")], is_error=True), limit="time")
+    assert judge_replay(CRITERION, replay, ask=ask).by == "check"
+    assert ask.calls == []

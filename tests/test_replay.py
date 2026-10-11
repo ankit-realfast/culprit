@@ -124,7 +124,7 @@ def test_a_timed_out_replay_is_an_error_and_cleans_up(tmp_path):
     result = run_replay(settings(), pristine_tree(tmp_path), tmp_path / "run0", workdir, (), run=run,
                         projects_dir=tmp_path / "p")
     assert result.is_error is True
-    assert "timed out" in result.result_text
+    assert "time limit" in result.result_text
     assert not workdir.exists()
 
 
@@ -204,10 +204,10 @@ def test_a_replay_that_changes_the_original_project_is_stopped_loudly(tmp_path):
 
 @pytest.mark.parametrize("result_line, void", [
     ({"type": "result", "subtype": "success", "is_error": False, "result": "ok"}, None),
-    ({"type": "result", "subtype": "error_max_budget_usd", "is_error": True, "result": ""}, "error_max_budget_usd"),
+    ({"type": "result", "subtype": "error_during_execution", "is_error": True, "result": ""}, "error_during_execution"),
     ({"type": "result", "subtype": "success", "is_error": True, "api_error_status": 529, "result": ""}, "API error 529"),
 ])
-def test_runs_that_fail_for_reasons_outside_the_agent_are_void(tmp_path, result_line, void):
+def test_runs_that_fail_for_infrastructure_reasons_are_void(tmp_path, result_line, void):
     result = run_replay(settings(), pristine_tree(tmp_path), tmp_path / "run0", tmp_path / ".culprit-replay-v", (),
                         run=FakeRun(claude_stdout=json.dumps(result_line)), projects_dir=tmp_path / "p")
     assert (result.void_reason is None) == (void is None)
@@ -215,11 +215,43 @@ def test_runs_that_fail_for_reasons_outside_the_agent_are_void(tmp_path, result_
         assert void in result.void_reason
 
 
-def test_a_timed_out_or_resultless_run_is_void(tmp_path):
-    timed_out = run_replay(settings(), pristine_tree(tmp_path), tmp_path / "run0", tmp_path / ".culprit-replay-t", (),
-                           run=FakeRun(claude_raises=subprocess.TimeoutExpired(cmd="claude", timeout=1)),
-                           projects_dir=tmp_path / "p")
-    assert "timed out" in timed_out.void_reason
+def test_a_run_stopped_by_its_spend_cap_counts_and_records_the_limit(tmp_path):
+    line = {"type": "result", "subtype": "error_max_budget_usd", "is_error": True, "total_cost_usd": 2.01,
+            "num_turns": 30}
+    result = run_replay(settings(), pristine_tree(tmp_path), tmp_path / "run0", tmp_path / ".culprit-replay-b", (),
+                        run=FakeRun(claude_stdout=json.dumps(line)), projects_dir=tmp_path / "p")
+    assert result.void_reason is None
+    assert result.limit == "budget"
+    assert result.cost_usd == 2.01
+    assert json.loads((tmp_path / "run0" / "result.json").read_text())["limit"] == "budget"
+
+
+def test_a_timed_out_run_counts_records_the_limit_and_keeps_what_it_wrote(tmp_path):
+    partial = json.dumps({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash",
+                                                                         "input": {"command": "make"}}]}})
+    run = FakeRun(claude_raises=subprocess.TimeoutExpired(cmd="claude", timeout=1, output=partial + "\n"))
+    result = run_replay(settings(), pristine_tree(tmp_path), tmp_path / "run0", tmp_path / ".culprit-replay-t", (),
+                        run=run, projects_dir=tmp_path / "p")
+    assert result.void_reason is None
+    assert result.limit == "time"
+    assert "time limit" in result.result_text
+    assert "make" in (tmp_path / "run0" / "transcript.jsonl").read_text()
+
+
+def test_a_run_that_crashed_without_a_result_line_is_void(tmp_path):
+    result = run_replay(settings(), pristine_tree(tmp_path), tmp_path / "run0", tmp_path / ".culprit-replay-x", (),
+                        run=FakeRun(claude_stdout=""), projects_dir=tmp_path / "p")
+    assert "no result line" in result.void_reason
+    assert result.limit is None
+
+
+def test_a_timeout_kills_the_command_and_hands_back_what_it_printed(tmp_path):
+    from culprit.replay import run_in_own_process_group
+    import sys
+    script = "import sys, time; print('partial', flush=True); time.sleep(30)"
+    with pytest.raises(subprocess.TimeoutExpired) as raised:
+        run_in_own_process_group([sys.executable, "-c", script], timeout=1)
+    assert "partial" in raised.value.stdout
 
 
 def test_a_run_whose_cost_is_unknown_is_charged_its_cap(tmp_path):

@@ -132,3 +132,11 @@ def test_an_agent_setup_verdict_shows_the_tested_lines_and_the_untested_placemen
 def test_other_verdicts_show_no_placement(tmp_path):
     sample(tmp_path)
     assert "suggested placement" not in render_report(collect(tmp_path), [])
+
+
+def test_each_verdict_says_how_many_runs_stopped_at_a_limit(tmp_path):
+    outcomes = {"baseline": {"variant": "baseline", "passes": 0, "runs": 10, "cost_usd": 1.0, "void": 0,
+                             "limits": {"budget": 6, "time": 1}},
+                "harness": {"variant": "harness", "passes": 8, "runs": 10, "cost_usd": 1.0, "void": 0}}
+    save_verdict(tmp_path / "a__1", Verdict("a:1", "wrong-result", "harness", "e", outcomes, {}))
+    assert "stopped at a limit: baseline 7 of 10 (budget 6, time 1)" in render_report(collect(tmp_path), [])

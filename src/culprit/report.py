@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from culprit.diagnose import (BASELINE, VariantOutcome, Verdict, load_instructions_draft, load_outcome, load_outcomes,
-                              load_verdict, numbers_line, pristine_dir, stored_spend)
+                              load_verdict, limits_line, numbers_line, pristine_dir, stored_spend)
 from culprit.model import Criterion, criterion_step, load_criterion
 from culprit.store import (SELFTEST_DIR, Cause, Symptom, confirm_step, display_id, episode_dir, known_episode_ids,
                            load_restore, queued_ids, read_symptom)
@@ -53,6 +53,7 @@ class Row:
     restore: dict | None = None
     numbers: str | None = None  # the pass counts and p behind the verdict
     instructions: tuple[str, dict] | None = None  # agent-setup: the tested lines and the drafter's note
+    limits: str | None = None  # how many counted runs per variant stopped at a limit
 
 
 @dataclass(frozen=True)
@@ -77,7 +78,8 @@ def collect(runs_dir: Path) -> list[Row]:
         if verdict is not None:
             rows.append(Row(verdict.episode_id, verdict.symptom, verdict.cause, verdict.evidence, verdict.pair,
                             verdict.untested, load_restore(folder), numbers_line(verdict),
-                            load_instructions_draft(folder) if verdict.cause == Cause.AGENT_SETUP.value else None))
+                            load_instructions_draft(folder) if verdict.cause == Cause.AGENT_SETUP.value else None,
+                            limits_line(verdict)))
     return rows
 
 
@@ -150,6 +152,8 @@ def render_report(rows: list[Row], trust: list[str]) -> str:
         lines.append(f"- **{row.episode_id}** — {row.symptom} → **{row.cause}**: {row.evidence}")
         if row.numbers:
             lines.append(f"  - {row.numbers}")
+        if row.limits:
+            lines.append(f"  - {row.limits}")
         if row.instructions:
             text, note = row.instructions
             lines.append(f"  - tested: adding these lines to {note.get('written_to') or 'the project CLAUDE.md'} "

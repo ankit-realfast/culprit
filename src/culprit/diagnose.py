@@ -47,7 +47,7 @@ OUTCOME_FILE = "outcome.json"
 JUDGEMENT_FILE = "judgement.json"
 CALLS_FILE = "calls.json"
 SUPERSEDED_DIR = "superseded"  # runs judged against an earlier criterion, kept so their spend still counts
-MAX_VOID_RETRIES = 5  # extra attempts per variant when runs fail for reasons outside the agent
+MAX_VOID_RETRIES = 5  # extra attempts per variant when infrastructure fails a run (a run stopped at a limit counts)
 
 
 def pristine_dir(runs_dir: Path, episode_id: str) -> Path:
@@ -80,6 +80,7 @@ class VariantOutcome:
     runs: int  # counted runs; void runs are retried and left out
     cost_usd: float
     void: int = 0
+    limits: dict = field(default_factory=dict)  # counted runs stopped at a limit, by limit ("budget", "time")
 
 
 @dataclass(frozen=True)
@@ -94,6 +95,7 @@ class ReplayEvent:
     cost_usd: float = 0.0  # finish: what this replay cost
     spent_usd: float = 0.0  # the episode's spend so far, this run and its judgement included
     reused: bool = False  # finish: paid for before a stop and read back from disk
+    limit: str | None = None  # finish: the limit the replay stopped at, if any (it still counts)
     scope: str = ""  # who is running it when that is not obvious: a planted fault, an episode's short id
 
 
@@ -114,6 +116,7 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
     folder = out_dir or episode_folder
     variant_dir = folder / REPLAYS_DIR / variant
     passes = counted = void = 0
+    limits: dict[str, int] = {}
     cost = 0.0
     attempt = 0
     tell = progress or (lambda event: None)
@@ -124,7 +127,8 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
         reused = (run_dir / RESULT_FILE).is_file() and (run_dir / JUDGEMENT_FILE).is_file()
         if reused:
             # paid for before a stop: reuse it rather than pay again
-            run_cost = float(read_json(run_dir / RESULT_FILE).get("cost_usd") or 0)
+            stored = read_json(run_dir / RESULT_FILE)
+            run_cost, limit = float(stored.get("cost_usd") or 0), stored.get("limit")
             judgement = Judgement(**read_json(run_dir / JUDGEMENT_FILE))
         else:
             budget.ensure_room(settings.max_budget_usd + CALL_CAP_USD)
@@ -133,7 +137,7 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
                             criterion.checks, original_cwd=Path(episode.cwd),
                             original_memory=episode.session_file.parent / MEMORY_DIR)
             budget.spend(result.cost_usd)  # charged before judging, so a judge failure cannot lose it
-            run_cost = result.cost_usd
+            run_cost, limit = result.cost_usd, result.limit
             judgement = judge(criterion, result)
             if judgement.by == "model":
                 budget.spend(CALL_CAP_USD)
@@ -141,13 +145,15 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
         cost += run_cost
         verdict = "void" if judgement.by == "void" else "pass" if judgement.passed else "fail"
         tell(replace(event, kind="finish", result=verdict, cost_usd=run_cost, spent_usd=round(budget.spent_usd, 4),
-                     reused=reused))
+                     reused=reused, limit=limit))
         if judgement.by == "void":
             void += 1
             continue
         counted += 1
+        if limit:
+            limits[limit] = limits.get(limit, 0) + 1
         passes += int(judgement.passed)
-    outcome = VariantOutcome(variant, passes, counted, round(cost, 4), void)
+    outcome = VariantOutcome(variant, passes, counted, round(cost, 4), void, limits)
     write_json(variant_dir / OUTCOME_FILE, asdict(outcome))
     return outcome
 
@@ -231,6 +237,19 @@ def numbers_line(verdict: Verdict) -> str | None:
         return line
     won, p = verdict.outcomes[winner], p_of[winner]
     return f"{line} → {won['passes']}/{won['runs']}, p {'< 0.0001' if p < 0.0001 else f'= {p:.4f}'}"
+
+
+def limit_tally(limits: dict | None) -> str:
+    """`budget 6, time 1`: counted runs stopped at each limit."""
+    return ", ".join(f"{name} {count}" for name, count in sorted((limits or {}).items()))
+
+
+def limits_line(verdict: Verdict) -> str | None:
+    """Which variants had counted runs stopped at a limit, e.g. `stopped at a limit: baseline 7 of 10 (budget 6,
+    time 1)`; None when no run was."""
+    parts = [f"{name} {sum(o['limits'].values())} of {o['runs']} ({limit_tally(o['limits'])})"
+             for name, o in verdict.outcomes.items() if o.get("limits")]
+    return f"stopped at a limit: {', '.join(parts)}" if parts else None
 
 
 def save_verdict(folder: Path, verdict: Verdict) -> Path:
@@ -871,8 +890,9 @@ def diagnose_all(runs_dir: Path, projects_dir: Path, *, n: int, per_episode_usd:
 
 
 # --- preview: The most a replaying command can run and spend, worked out and printed before it starts. ---
-# Every count follows the real code path: each variant runs up to n + MAX_VOID_RETRIES replays, each replay is
-# capped at its settings' budget plus one judge call, and drafting a task or instructions costs model calls.
+# Every count follows the real code path: each variant runs up to n + MAX_VOID_RETRIES replays (retries only replace
+# runs infrastructure voided), each replay is capped at its settings' budget plus one judge call, and drafting a
+# task or instructions costs model calls.
 
 CALLS_PER_DRAFT_ATTEMPT = 2  # the draft and its leak check
 
@@ -898,7 +918,7 @@ class CostPlan:
     def lines(self) -> list[str]:
         calls = f" and {self.calls} drafting calls" if self.calls else ""
         return [f"plan: up to {self.replays} replays{calls} (each variant: n runs plus up to {MAX_VOID_RETRIES} "
-                f"void retries)",
+                f"retries of runs lost to infrastructure failures)",
                 f"cost: at most ${self.max_usd:.2f} more — ${self.spent_usd + self.max_usd:.2f} in total with the "
                 f"${self.spent_usd:.2f} already spent (cap ${self.cap_usd:.2f})"]
 

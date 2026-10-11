@@ -132,3 +132,26 @@ def test_progress_hears_each_replay_start_and_finish_with_the_spend_so_far(write
         ReplayEvent("start", "baseline", attempt=2, index=2, n=2, spent_usd=1.05),
         ReplayEvent("finish", "baseline", attempt=2, index=2, n=2, result="fail", cost_usd=0.25, spent_usd=1.8),
     ]
+
+
+def test_runs_stopped_at_a_limit_count_and_the_outcome_tallies_each_limit(write_session, tmp_path):
+    from dataclasses import replace as replaced
+    episode = episode_at(write_session, tmp_path)
+    runs = tmp_path / "runs"
+    done = episode_dir(runs, episode.episode_id) / "replays" / "baseline" / "0"
+    done.mkdir(parents=True)
+    (done / "result.json").write_text(json.dumps({"cost_usd": 1.0, "limit": "time"}))
+    (done / "judgement.json").write_text(json.dumps({"passed": False, "reason": "r", "by": "model"}))
+    plain = fake_replay(cost=1.0)
+    limits = iter(["budget", None])
+
+    def replay(*args, **kwargs):
+        return replaced(plain(*args, **kwargs), limit=next(limits))
+
+    events = []
+    outcome = run_variant("baseline", SETTINGS, n=3, episode=episode, runs_dir=runs, criterion=CRITERION,
+                          budget=EpisodeBudget(10.0), replay=replay, judge=judge_sequence(False, True),
+                          progress=events.append)
+    assert (outcome.passes, outcome.runs, outcome.void) == (1, 3, 0)
+    assert outcome.limits == {"time": 1, "budget": 1}
+    assert [e.limit for e in events if e.kind == "finish"] == ["time", "budget", None]

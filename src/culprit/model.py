@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Callable
 
 from culprit.logs import Episode
-from culprit.replay import DIFF_FILE, NO_MCP_SERVERS, TRANSCRIPT_FILE, ReplayResult
+from culprit.replay import DIFF_FILE, LIMIT_BUDGET, LIMIT_TIME, NO_MCP_SERVERS, TRANSCRIPT_FILE, ReplayResult
 from culprit.store import NotReady, display_id, episode_dir, read_json, write_json
 
 
@@ -231,6 +231,17 @@ def actions_from_transcript(transcript: str) -> str:
     return text
 
 
+LIMIT_WORDS = {LIMIT_BUDGET: "spend limit", LIMIT_TIME: "time limit"}
+
+
+def _limit_note(replay: ReplayResult) -> str:
+    """A run stopped at a limit is judged like any other; the judge is told it was cut off."""
+    if not replay.limit:
+        return ""
+    return (f"The attempt was stopped when it reached its {LIMIT_WORDS.get(replay.limit, replay.limit)}; judge "
+            f"what it had done by then.\n\n")
+
+
 def judging_prompt(criterion: Criterion, replay: ReplayResult, diff: str, actions: str) -> str:
     if len(diff) > MAX_DIFF_CHARS:
         diff = diff[:MAX_DIFF_CHARS] + f"\n[diff truncated: {len(diff) - MAX_DIFF_CHARS} more characters]"
@@ -249,7 +260,7 @@ Checks run after the attempt:
 The agent's final answer:
 <answer>{replay.result_text}</answer>
 
-What the agent did, every tool call in order ({replay.num_turns} turns, ${replay.cost_usd:.2f}):
+{_limit_note(replay)}What the agent did, every tool call in order ({replay.num_turns} turns, ${replay.cost_usd:.2f}):
 <actions>
 {actions or "(no tool calls)"}
 </actions>
@@ -269,7 +280,7 @@ def judge_replay(criterion: Criterion, replay: ReplayResult, ask: Ask = ask_clau
     failed = [check for check in replay.checks if check.exit_code != 0]
     if failed:
         return Judgement(False, f"check failed: {failed[0].command} (exit {failed[0].exit_code})", "check")
-    if replay.is_error:
+    if replay.is_error and not replay.limit:
         return Judgement(False, f"the replay ended in an error: {replay.result_text[:300]}", "replay")
     diff = (replay.run_dir / DIFF_FILE).read_text(errors="replace")
     transcript_path = replay.run_dir / TRANSCRIPT_FILE

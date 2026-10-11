@@ -79,3 +79,11 @@ def test_stopping_the_real_heartbeat_wakes_it_at_once():
     heartbeat = Heartbeat(lambda: beats.append(1), 3600)
     heartbeat.stop()  # would hang for an hour if the wait were a sleep
     assert beats == []
+
+
+def test_a_finished_replay_that_hit_a_limit_says_which():
+    out = io.StringIO()
+    printer = ProgressPrinter(out, heartbeat=FakeHeartbeat)
+    printer(ReplayEvent("finish", "baseline", attempt=0, index=1, n=5, result="fail", cost_usd=10.0, spent_usd=10.5,
+                        limit="budget"))
+    assert "baseline #1 of 5: fail (stopped at its spend limit), $10.00" in out.getvalue()

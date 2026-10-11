@@ -263,6 +263,17 @@ that fails, the cause is **Unexplained**; if it passes, pairs are tried in cause
 that beats the baseline is the **Multi-cause** verdict; if no pair does, the verdict is Multi-cause with
 the full set.
 
+**Runs that hit a limit are counted.** A replay stopped by its spend cap (`error_max_budget_usd`) or by
+culprit's time limit is a counted run, judged like any other on what it produced — its diff, its checks and the
+tool calls in its transcript (a timed-out run keeps whatever it printed before it was killed), with the judge
+told it was cut off; it usually fails. The run records `limit: budget` or `limit: time`, and `status`,
+`diagnose` and the report count the runs each variant lost to a limit. Only infrastructure failures are
+**void** (not counted, retried up to 5 times per variant): an API error or overload (`api_error_status`), the
+CLI failing during execution (`error_during_execution`), crashing or never starting (no result line), and
+culprit's own errors. This follows Inspect AI's practice — sample limits "don't result in errors, but rather an
+early exit… still scored". Counting cap hits as void made "ran out of room" invisible in the baseline, so the
+harness oracle's doubled budget could never show its effect.
+
 Every verdict states the numbers behind it — the baseline's pass count, the winning variant's (the pair or
 `combined` for Multi-cause) and the Fisher p, e.g. `harness: baseline 0/10 → 8/10, p = 0.0004` — in
 `diagnose` output and under each verdict in the report. Verdicts with no winner show the baseline only.
@@ -300,7 +311,7 @@ Every verdict states the numbers behind it — the baseline's pass count, the wi
 - v1 replays from the episode's start (with its session's earlier conversation in place), not from the
   step where it went wrong; mid-episode branching is deferred until v1 proves the method.
 - A late-session episode re-sends its whole earlier conversation on every replay, so it costs more per run
-  and can hit the per-replay cap; a run stopped by the cap is void and retried, not counted.
+  and can hit the per-replay cap; a run stopped by the cap counts, and usually fails.
 - A Harness verdict cannot say whether the fix is yours (configuration) or the vendor's (a Claude Code
   bug): an intervention shows what made it pass, not who must change it. The human reads the evidence.
 - Cost: about 60 replays per episode (baseline ×10 plus five variants ×10), ~50 minutes at the median turn

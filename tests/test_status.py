@@ -118,3 +118,12 @@ def test_status_refuses_a_missing_store(tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("CULPRIT_RUNS", str(tmp_path / "nowhere"))
     assert cli.main(["status"]) == 3
     assert "no culprit store" in capsys.readouterr().err
+
+
+def test_status_shows_runs_stopped_at_a_limit():
+    from culprit.cli import status_lines
+    from culprit.report import EpisodeStatus
+    from culprit.diagnose import VariantOutcome
+    status = EpisodeStatus(ID, "baselined", "run it", outcomes=(VariantOutcome("baseline", 1, 10, 30.0, 0,
+                                                                               {"budget": 4}),))
+    assert "baseline: 1 of 10 passed, 4 stopped at a limit (budget 4), $30.00" in status_lines(status)

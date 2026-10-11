@@ -225,7 +225,13 @@ DEFAULT_REPLAY_BUDGET_USD = 2.0
 OUTPUT_TAIL_CHARS = 2000
 REPLAY_DIR_PREFIX = ".culprit-replay-"
 WRITE_TOOLS = ("Edit", "Write", "NotebookEdit")
-VOID_SUBTYPES = ("error_max_budget_usd", "error_during_execution")
+# Only infrastructure failures are void (not counted, retried): an API error, the CLI failing during execution,
+# crashing or never starting. A run that reaches one of culprit's own limits ends early but is still a run, scored
+# on what it produced, so running out of room shows in the pass rates (Inspect AI scores limited samples the same way).
+VOID_SUBTYPES = ("error_during_execution",)
+BUDGET_LIMIT_SUBTYPE = "error_max_budget_usd"
+LIMIT_BUDGET = "budget"
+LIMIT_TIME = "time"
 DIFF_EXCLUDES = (".git", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", "dist", "build", ".next",
                  "target")
 DIFF_TIMEOUT_S = 120
@@ -275,7 +281,8 @@ class ReplayResult:
     cost_usd: float
     num_turns: int
     checks: tuple[CheckResult, ...]
-    void_reason: str | None = None  # set when the run failed for a reason outside the agent: it does not count
+    void_reason: str | None = None  # set when infrastructure failed the run: it does not count
+    limit: str | None = None  # LIMIT_BUDGET or LIMIT_TIME when the run stopped at culprit's cap: it still counts
 
 
 class SetupScriptFailed(RuntimeError):
@@ -446,7 +453,12 @@ def run_in_own_process_group(command: list[str], *, input: str | None = None, ca
                                start_new_session=True)
     try:
         stdout, stderr = process.communicate(input, timeout=timeout)
-    except (subprocess.TimeoutExpired, KeyboardInterrupt):
+    except subprocess.TimeoutExpired as timed_out:
+        os.killpg(process.pid, signal.SIGKILL)
+        # what the command printed before it was killed: a replay stopped at its time limit is still judged on it
+        timed_out.stdout, timed_out.stderr = process.communicate()
+        raise
+    except KeyboardInterrupt:
         os.killpg(process.pid, signal.SIGKILL)
         process.communicate()
         raise
@@ -551,8 +563,9 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
                             text=True, timeout=REPLAY_TIMEOUT_S, env=env,
                             input=_stdin_for(settings, replay_prompt(settings, original_cwd, workdir)))
             stdout, stderr, exit_code = completed.stdout, completed.stderr, completed.returncode
-        except subprocess.TimeoutExpired:
-            stdout, stderr, exit_code = "", f"timed out after {REPLAY_TIMEOUT_S}s", -1
+        except subprocess.TimeoutExpired as timed_out:
+            stdout, exit_code = _text(timed_out.stdout), -1
+            stderr = f"{_text(timed_out.stderr)}\ntimed out after {REPLAY_TIMEOUT_S}s"
         (run_dir / TRANSCRIPT_FILE).write_text(stdout)
         (run_dir / "stderr.txt").write_text(stderr)
         result_line = _result_line(stdout)
@@ -560,16 +573,23 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
         if addition is not None:
             _take_back_from_claude_md(*addition)
         (run_dir / DIFF_FILE).write_text(_bounded_diff(pristine, workdir, run))
-        if result_line is None:
-            reason = "timed out" if exit_code == -1 else f"no result line (exit {exit_code})"
-            # the cost is unknown, so it is charged at the cap rather than as free
+        if exit_code == -1:
+            # stopped at the time limit: counted and judged on its diff, checks and tool calls; the cost is unknown,
+            # so it is charged at the cap rather than as free
+            replay = ReplayResult(run_dir, exit_code, True,
+                                  f"stopped at the {REPLAY_TIMEOUT_S}s time limit before a final answer",
+                                  settings.max_budget_usd, 0, check_results, limit=LIMIT_TIME)
+        elif result_line is None:
+            reason = f"no result line (exit {exit_code})"
+            # the CLI crashed or never started: infrastructure, so void; charged at the cap as its cost is unknown
             replay = ReplayResult(run_dir, exit_code, True, f"{reason}: {stderr[-300:]}", settings.max_budget_usd, 0,
                                   check_results, void_reason=reason)
         else:
+            limit = LIMIT_BUDGET if result_line.get("subtype") == BUDGET_LIMIT_SUBTYPE else None
             replay = ReplayResult(run_dir, exit_code, bool(result_line.get("is_error")),
                                   str(result_line.get("result") or ""), float(result_line.get("total_cost_usd") or 0),
                                   int(result_line.get("num_turns") or 0), check_results,
-                                  void_reason=_void_reason(result_line))
+                                  void_reason=_void_reason(result_line), limit=limit)
         (run_dir / RESULT_FILE).write_text(json.dumps(asdict(replay), default=str, indent=2))
         if watched:
             after = tree_fingerprint(watched)
@@ -603,6 +623,10 @@ def _bounded_diff(pristine: Path, workdir: Path, run) -> str:
     if len(data) <= MAX_DIFF_BYTES:
         return diff
     return data[:MAX_DIFF_BYTES].decode(errors="ignore") + f"\n[diff cut: {len(data) - MAX_DIFF_BYTES} more bytes]\n"
+
+
+def _text(output: str | bytes | None) -> str:
+    return output.decode(errors="replace") if isinstance(output, bytes) else output or ""
 
 
 def _void_reason(result_line: dict) -> str | None:
