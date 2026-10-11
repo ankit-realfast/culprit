@@ -42,7 +42,7 @@ Claude Code did until the next human prompt, identified as `<sessionId>:<promptI
 | 4 | Environment | Only the outside world is fixed (flaky test, network, broken repo state), and it passes | Repo or infrastructure |
 | 5 | Agent setup | Same model and tools, better instructions or role, and it passes | CLAUDE.md, rules, skills, subagent definitions |
 | 6 | Harness | Same model and instructions, given what it lacked (context, a working tool, permission, an unharmed compaction), and it passes | Tools, MCP, hooks, settings |
-| 7 | Model | Only a stronger model (`claude-fable-5-1`) makes it pass | `--model` or routing |
+| 7 | Model | Only a stronger model or more effort (`claude-fable-5-1` at `--effort max`) makes it pass | `--effort`, `--model` or routing |
 | 8 | Multi-cause | No single variant passes, but a pair does; the pair is reported | Both layers |
 | 9 | Unexplained | Nothing passes | Human review |
 
@@ -209,8 +209,8 @@ claude -p \                      # the episode or variant prompt goes on stdin
   2026-10-11, 79 of 5,256 real episodes (1.5%) had one. The duration is the failure signals' (the sum of its
   `turn_duration` records, else its first-to-last timestamp span; 90% have `turn_duration`). Each model call is
   capped at $0.50. Built-in caps stop further replays: per episode and per planted fault, the worst case at
-  N = 10 for that episode's per-replay cap (rounded up to $50: $3,600 and $2,650 at the $10 floor), and
-  for a whole-queue `diagnose` 20 episodes at the floor's worst case ($72,000), inside which each episode
+  N = 10 for that episode's per-replay cap (rounded up to $50: $3,750 and $2,850 at the $10 floor), and
+  for a whole-queue `diagnose` 20 episodes at the floor's worst case ($75,000), inside which each episode
   keeps its own cap (see §5). The plan printed before spending shows the per-replay cap.
 
 ### Which episodes are replayable
@@ -230,7 +230,18 @@ hook the project's own settings define, because those hooks run in every replay.
 | Environment | A fix script the human supplies (`culprit env-fix`) runs in the clone before the replay | No script supplied (the common case in v1) |
 | Agent setup | Standing instructions drafted from the criterion, the instructions the agent already loads and the starting folder layout (gaps filled, no task-specific facts, at most 12 lines), appended to the clone's project `CLAUDE.md` under a `## More working rules` heading before Claude starts (`.claude/CLAUDE.md` when only that exists; a new `CLAUDE.md` when neither does) — the way the real fix would arrive, as a user message, not through the stronger `--append-system-prompt` channel. The addition is removed again before the diff, so the judge sees only the agent's changes; combined and pair variants write it too | The leak check rejects it twice |
 | Harness | The default tool set with every non-safety restriction lifted, the files the episode read or edited preloaded into the prompt as context, and double the spend cap | Never |
-| Model | `--model claude-fable-5-1` | The episode already ran on Fable |
+| Model | `--model claude-fable-5-1 --effort max` (an episode already on Fable keeps its Fable model and only raises the effort); see the effort step below | The episode already ran on Fable at max effort |
+
+**The model oracle's effort step.** Every replay runs at the effort level the episode logged (the `effort`
+field on its first assistant record; none logged leaves Claude Code's default), and the model oracle may change
+only `model` and `effort`. `max` is the highest `claude --effort` level (2.1.296: low, medium, high, xhigh,
+max). When Fable at max effort beats the baseline, one more variant runs, `original-max-effort`: the episode's
+own model at max effort, everything else as the baseline. The verdict stays Model — the taxonomy and cause order
+are fixed — and its evidence names the fix: "raise effort (original model at max effort also passed a/b)" when
+that variant beats the baseline too, else "needs Fable (original model at max effort did not pass: a/b)". The
+extra variant is skipped when the answer is already known: an episode on Fable at lower effort ("raise effort
+(Fable at max effort passed …)"), or one that already ran at max effort ("needs Fable", from its baseline). The
+cost preview counts the extra variant whenever it could run.
 
 **What a drafter may see.** Anything the agent could have known before the episode started; nothing from
 during or after it (the leak check against the prompt and follow-ups is unchanged).
@@ -319,7 +330,7 @@ in the report, and `status --json` gives each outcome's totals plus `usd_per_run
 
 - An episode in which Claude asked the human a question replays only when the log recorded the
   human's answer (the answer host gives it back); one with no recorded answer is not replayable.
-- Episodes already run on Fable cannot test the Model cause; reported as untestable.
+- Episodes already run on Fable at max effort cannot test the Model cause; reported as untestable.
 - The Agent setup addition is an uncommitted change to the clone's `CLAUDE.md`, so an agent that runs
   `git status` or `git diff` can see it, where a real fix would be committed.
 - An MCP call or a question the original session never made cannot be answered in a replay.
@@ -333,8 +344,8 @@ in the report, and `status --json` gives each outcome's totals plus `usd_per_run
   bug): an intervention shows what made it pass, not who must change it. The human reads the evidence.
 - Cost: about 60 replays per episode (baseline ×10 plus five variants ×10), ~50 minutes at the median turn
   length. Built-in caps are a safety net sized from the worst case at N = 10 (every oracle, combined and
-  every pair, all void retries) at the episode's per-replay cap: $3,600 per episode and $2,650 per planted
-  fault at the $10 floor, $72,000 per queue. v1 is capped at 10–20 episodes.
+  every pair, the effort step, all void retries) at the episode's per-replay cap: $3,750 per episode and $2,850 per planted
+  fault at the $10 floor, $75,000 per queue. v1 is capped at 10–20 episodes.
 - The logs are client work; everything runs locally and only the model calls Claude Code already makes
   leave the machine.
 

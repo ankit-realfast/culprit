@@ -77,14 +77,28 @@ def test_the_environment_oracle_needs_a_human_script(write_session, tmp_path):
     assert build(Cause.ENVIRONMENT, episode, tmp_path, env_script=script).settings == replace(BASE, setup_script=script)
 
 
-def test_the_model_oracle_swaps_in_fable(write_session, tmp_path):
-    assert build(Cause.MODEL, episode_with(write_session, tmp_path), tmp_path).settings == replace(BASE, model=ORACLE_MODEL)
+def test_the_model_oracle_swaps_in_fable_at_max_effort(write_session, tmp_path):
+    assert build(Cause.MODEL, episode_with(write_session, tmp_path), tmp_path).settings == \
+        replace(BASE, model=ORACLE_MODEL, effort="max")
 
 
-def test_the_model_oracle_is_untested_for_an_episode_already_on_fable(write_session, tmp_path):
-    built = build(Cause.MODEL, episode_with(write_session, tmp_path), tmp_path, base=replace(BASE, model="claude-fable-5"))
+def test_the_model_oracle_is_untested_for_an_episode_already_on_fable_at_max_effort(write_session, tmp_path):
+    built = build(Cause.MODEL, episode_with(write_session, tmp_path), tmp_path,
+                  base=replace(BASE, model="claude-fable-5", effort="max"))
     assert built.settings is None
-    assert "already ran on Fable" in built.untested_reason
+    assert "already ran on Fable at max effort" in built.untested_reason
+
+
+def test_an_episode_on_fable_at_lower_effort_tests_fable_at_max_effort(write_session, tmp_path):
+    for effort in ("xhigh", None):  # an unrecorded effort was the default, which is not max
+        base = replace(BASE, model="claude-fable-5-1", effort=effort)
+        built = build(Cause.MODEL, episode_with(write_session, tmp_path), tmp_path, base=base)
+        assert built.settings == replace(base, effort="max")
+
+
+def test_the_model_oracle_may_change_only_the_model_and_its_effort():
+    from culprit.diagnose import VARIANT_FIELDS
+    assert VARIANT_FIELDS[Cause.MODEL] == ("model", "effort")
 
 
 def test_the_harness_oracle_lifts_restrictions_preloads_files_and_doubles_the_cap(write_session, tmp_path):

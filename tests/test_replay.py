@@ -674,3 +674,14 @@ def test_a_timed_out_run_counts_the_tokens_its_messages_reported(tmp_path):
                         run=run, projects_dir=tmp_path / "p")
     assert result.usage == {"input_tokens": 20, "output_tokens": 12, "cache_creation_input_tokens": 0,
                             "cache_read_input_tokens": 200}
+
+
+def test_the_recorded_effort_is_replayed_and_sent_as_a_flag(write_session):
+    from records import assistant as said
+    record = said(model="claude-opus-4-8")
+    record["effort"] = "xhigh"
+    (episode,) = episodes_from_session(write_session([human("fix it", "p1"), record]))
+    assert baseline_settings(episode).effort == "xhigh"
+    command = replay_command(settings(effort="max"))
+    assert command[command.index("--effort") + 1] == "max"
+    assert "--effort" not in replay_command(settings())

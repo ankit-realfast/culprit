@@ -25,7 +25,7 @@ guesses the cause.
    | your fix script runs first | **environment**: fix the repo or infrastructure |
    | better standing instructions | **agent-setup**: change CLAUDE.md, rules, skills |
    | all tools, relevant files preloaded, double budget | **harness**: change tools, MCP, settings |
-   | Fable instead of the original model | **model**: change or route the model |
+   | Fable at max effort instead of the original model | **model**: raise the effort, or change or route the model |
 
    The restated prompt and the standing instructions are drafted by a model that sees only what the agent
    could have known before the episode began. For a follow-up, the prompt drafter also sees the session's
@@ -35,6 +35,11 @@ guesses the cause.
    them: appended to the project's `CLAUDE.md` in the throwaway copy (never your project). The drafter also
    suggests where they belong (project `CLAUDE.md`, `CLAUDE.local.md`, a path-scoped rule, your user
    `CLAUDE.md` or managed policy); the report shows that as an untested suggestion beside the verdict.
+
+   Replays keep the effort level the episode logged. When Fable at max effort passes, the original model
+   at max effort is replayed too, and the model verdict says which fix it points at: "raise effort
+   (original model at max effort also passed)" or "needs Fable (original model at max effort did not
+   pass)". An episode already on Fable is tested at max effort only if it ran lower.
 
    If no single change works, the changes are tried together and in pairs: **multi-cause**, or
    **unexplained** if nothing works. Each verdict shows its numbers, e.g.
@@ -85,9 +90,9 @@ uv run culprit status [1]          # where episodes stand and the next command
 | Per replay | 3× what the original episode cost, at least $10 (harness variants twice that) |
 | Per replay, time | 3× how long the original episode took, at least 30 minutes |
 | Per judge or drafting call | $0.50, charged at the cap |
-| Per episode | the worst case at its per-replay cap: $3,600 at the $10 floor |
-| Per selftest fault | the same for a planted fault: $2,650 at the $10 floor |
-| `diagnose` with no id, in total | $72,000 (20 episodes at the floor; each keeps its own cap inside it) |
+| Per episode | the worst case at its per-replay cap: $3,750 at the $10 floor |
+| Per selftest fault | the same for a planted fault: $2,850 at the $10 floor |
+| `diagnose` with no id, in total | $75,000 (20 episodes at the floor; each keeps its own cap inside it) |
 
 - **The episode's own cost:** read from the session's running total (`cost-state` records, `totalCostUSD`) at
   the end of the episode less the one before it. Claude Code writes those rarely (about 1.5% of episodes in

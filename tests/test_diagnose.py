@@ -75,7 +75,8 @@ def test_the_first_cause_that_beats_the_baseline_wins_and_later_ones_are_not_run
 
 
 def test_untested_causes_are_skipped_and_recorded(write_session, tmp_path):
-    run = scripted_run({"baseline": 0, "task": 0, "agent-setup": 0, "harness": 0, "model": 4})
+    run = scripted_run({"baseline": 0, "task": 0, "agent-setup": 0, "harness": 0, "model": 4,
+                        "original-max-effort": 0})
     verdict = run_diagnose(write_session, tmp_path, run, build=build_all_tested(untested=(Cause.ENVIRONMENT,)))
     assert verdict.cause == "model"
     assert verdict.untested["environment"] == "environment untested"
@@ -113,10 +114,11 @@ def test_one_tested_oracle_that_fails_is_unexplained(write_session, tmp_path):
 
 
 def test_a_rerun_reuses_saved_variants_and_outcomes(write_session, tmp_path):
-    first = scripted_run({"baseline": 0, "task": 0, "environment": 0, "agent-setup": 0, "harness": 0, "model": 5})
+    first = scripted_run({"baseline": 0, "task": 0, "environment": 0, "agent-setup": 0, "harness": 0, "model": 5,
+                          "original-max-effort": 0})
     run_diagnose(write_session, tmp_path, first)
     folder = episode_dir(tmp_path / "runs", "s1:p1")
-    for name in ["baseline", "task", "environment", "agent-setup", "harness", "model"]:
+    for name in ["baseline", "task", "environment", "agent-setup", "harness", "model", "original-max-effort"]:
         (folder / "replays" / name).mkdir(parents=True, exist_ok=True)
         (folder / "replays" / name / "outcome.json").write_text(
             json.dumps({"variant": name, "passes": 5 if name == "model" else 0, "runs": 5, "cost_usd": 1.0}))
@@ -198,3 +200,59 @@ def test_progress_reaches_every_variant_run(write_session, tmp_path):
              progress=listener.append)
     assert [name for name, _ in seen] == ["baseline", "task"]
     assert all(p == listener.append for _, p in seen)
+
+
+def test_when_fable_at_max_effort_wins_the_original_model_at_max_effort_runs_next(write_session, tmp_path):
+    from culprit.diagnose import build_variant
+    run = scripted_run({"baseline": 0, "task": 0, "agent-setup": 0, "harness": 0, "model": 5,
+                        "original-max-effort": 4})
+
+    def build(cause, base, **kwargs):
+        if cause is Cause.MODEL:
+            return build_variant(cause, base, **kwargs)
+        return VariantBuild(None, "untested") if cause is Cause.ENVIRONMENT else VariantBuild(base, None)
+
+    verdict = run_diagnose(write_session, tmp_path, run, build=build)
+    assert verdict.cause == "model"
+    name, settings = run.calls[-1]
+    assert name == "original-max-effort"
+    assert (settings.model, settings.effort) == ("claude-opus-5", "max")
+    assert "raise effort (original model at max effort also passed 4/5)" in verdict.evidence
+    assert verdict.outcomes["original-max-effort"]["passes"] == 4
+
+
+def test_when_only_fable_passes_the_verdict_says_it_needs_fable(write_session, tmp_path):
+    run = scripted_run({"baseline": 0, "task": 0, "agent-setup": 0, "harness": 0, "model": 5,
+                        "original-max-effort": 1})
+    verdict = run_diagnose(write_session, tmp_path, run, build=build_all_tested(untested=(Cause.ENVIRONMENT,)))
+    assert verdict.cause == "model"
+    assert "needs Fable (original model at max effort did not pass: 1/5)" in verdict.evidence
+
+
+def test_an_episode_on_fable_at_lower_effort_tests_fable_at_max_effort_only(write_session, tmp_path):
+    from culprit.diagnose import build_variant
+    (episode,) = episodes_from_session(write_session([human("fix", "p1", session_id="s1", cwd=str(tmp_path))]))
+    run = scripted_run({"baseline": 0, "task": 0, "agent-setup": 0, "harness": 0, "model": 5})
+
+    def build(cause, base, **kwargs):
+        if cause is Cause.MODEL:
+            return build_variant(cause, base, **kwargs)
+        return VariantBuild(None, "untested") if cause is Cause.ENVIRONMENT else VariantBuild(base, None)
+
+    fable = replace(BASE, model="claude-fable-5-1", effort="high")
+    verdict = diagnose(episode, CRITERION, Symptom.WRONG_RESULT, fable, runs_dir=tmp_path / "runs", follow_ups=[],
+                       env_script=None, n=5, budget=EpisodeBudget(100.0), run=run, build=build)
+    assert verdict.cause == "model"
+    assert [name for name, _ in run.calls][-1] == "model"
+    assert run.calls[-1][1].effort == "max"
+    assert "raise effort (Fable at max effort passed" in verdict.evidence
+
+
+def test_an_episode_already_at_max_effort_needs_no_effort_step_to_say_it_needs_fable(write_session, tmp_path):
+    (episode,) = episodes_from_session(write_session([human("fix", "p1", session_id="s1", cwd=str(tmp_path))]))
+    run = scripted_run({"baseline": 0, "task": 0, "agent-setup": 0, "harness": 0, "model": 5})
+    verdict = diagnose(episode, CRITERION, Symptom.WRONG_RESULT, replace(BASE, effort="max"),
+                       runs_dir=tmp_path / "runs", follow_ups=[], env_script=None, n=5, budget=EpisodeBudget(100.0),
+                       run=run, build=build_all_tested(untested=(Cause.ENVIRONMENT,)))
+    assert "original-max-effort" not in [name for name, _ in run.calls]
+    assert "needs Fable (the original model already ran at max effort" in verdict.evidence

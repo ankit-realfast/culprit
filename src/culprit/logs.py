@@ -119,6 +119,17 @@ def _first_real_model(records: list[dict]) -> str | None:
     return None
 
 
+def original_effort(episode: Episode) -> str | None:
+    """The effort level the episode ran at, as its first real assistant record logged it (`effort`); None when
+    the log did not record one."""
+    for record in episode.records:
+        message = record.get("message") or {}
+        if record.get("type") == "assistant" and message.get("model") not in (None, SYNTHETIC_MODEL):
+            effort = record.get("effort")
+            return effort if isinstance(effort, str) and effort else None
+    return None
+
+
 def _episode(session_file: Path, prompt: dict, records: list[dict]) -> Episode:
     return Episode(
         session_id=prompt.get("sessionId") or session_file.stem,

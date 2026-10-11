@@ -67,7 +67,7 @@ def test_the_plan_is_printed_on_stderr_and_nothing_is_asked(write_session, tmp_p
     monkeypatch.setattr("builtins.input", no_questions)
     assert cli.main(["selftest", "s1:p1"]) == 1  # replays the missing baseline, which is not a control
     captured = capsys.readouterr()
-    assert "up to 15 replays" in captured.err and "cap $3600.00" in captured.err
+    assert "up to 15 replays" in captured.err and "cap $3750.00" in captured.err
     assert "per replay: up to $10.00" in captured.err
     assert "up to" not in captured.out
     assert spy == ["baseline"]
@@ -76,9 +76,10 @@ def test_the_plan_is_printed_on_stderr_and_nothing_is_asked(write_session, tmp_p
 def test_diagnose_plan_counts_every_variant(write_session, tmp_path, capsys, spy):
     ready(write_session, tmp_path)
     assert cli.main(["diagnose", "s1:p1"]) == 0
-    # no env-fix: baseline + 4 oracles + combined + 6 pairs, 15 attempts each (N = 10 plus 5 void retries)
+    # no env-fix: baseline + 4 oracles + combined + 6 pairs + the original model at max effort, 15 attempts each
+    # (N = 10 plus 5 void retries)
     err = capsys.readouterr().err
-    assert "up to 180 replays and 8 drafting calls" in err
+    assert "up to 195 replays and 8 drafting calls" in err
     assert "per replay: up to $10.00 (twice that in harness variants)" in err
     assert spy == ["diagnose"]
 
@@ -87,7 +88,7 @@ def test_selftest_plan_sums_every_planted_fault(write_session, tmp_path, capsys,
     ready(write_session, tmp_path, control=True)
     assert cli.main(["selftest", "s1:p1"]) == 0
     err = capsys.readouterr().err
-    assert "up to 900 replays" in err and "cap $13250.00" in err  # five faults at $2650 each
+    assert "up to 975 replays" in err and "cap $14250.00" in err  # five faults at $2850 each
     assert spy == ["selftest"]
 
 
@@ -98,7 +99,7 @@ def test_diagnose_queue_plan_covers_only_ready_episodes_within_the_total(write_s
                                                       {"summary": {"episode_id": "s2:p1"}, "score": 2}]))
     assert cli.main(["diagnose"]) == 0
     err = capsys.readouterr().err
-    assert "up to 180 replays" in err and "at most $2644.00 more" in err and "cap $72000.00" in err
+    assert "up to 195 replays" in err and "at most $2801.50 more" in err and "cap $75000.00" in err
     assert spy == ["diagnose-all"]
 
 
@@ -113,8 +114,8 @@ def test_the_default_caps_never_stop_a_full_diagnose_at_n():
                                 n=cli.RUNS_PER_VARIANT, spent_usd=0, cap_usd=float("inf"), drafts=2)
         assert every_oracle.max_usd <= cli.episode_cap_usd(replay_cap)
         assert planted.max_usd <= cli.fault_cap_usd(replay_cap)
-    assert cli.episode_cap_usd(REPLAY_BUDGET_FLOOR_USD) == 3600.0
-    assert cli.fault_cap_usd(REPLAY_BUDGET_FLOOR_USD) == 2650.0
+    assert cli.episode_cap_usd(REPLAY_BUDGET_FLOOR_USD) == 3750.0
+    assert cli.fault_cap_usd(REPLAY_BUDGET_FLOOR_USD) == 2850.0
     # the batch total covers 20 episodes at the floor's worst case; each episode keeps its own cap within it
     assert cli.TOTAL_CAP_USD == 20 * cli.episode_cap_usd(REPLAY_BUDGET_FLOOR_USD)
 

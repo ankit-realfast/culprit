@@ -44,7 +44,7 @@ def test_plans_add_up_and_a_shared_total_caps_them():
 
 
 def test_on_disk_missing_env_fix_and_a_fable_episode_drop_their_oracles(tmp_path):
-    plan = diagnose_cost_for(tmp_path, CRITERION, 1.0, model="claude-fable-5-1", env_fix=False, n=5,
+    plan = diagnose_cost_for(tmp_path, CRITERION, 1.0, model="claude-fable-5-1", effort="max", env_fix=False, n=5,
                              spent_usd=0.0, cap_usd=1e4)
     # task, agent-setup, harness: baseline + 3 + combined + 3 pairs
     assert plan.replays == 8 * 10 and plan.calls == 8
@@ -60,8 +60,9 @@ def test_on_disk_reuses_drafted_variants_stored_outcomes_and_skips_untested_ones
     baseline.mkdir(parents=True)
     (baseline / "outcome.json").write_text(json.dumps({"variant": "baseline", "passes": 0, "runs": 5, "cost_usd": 1}))
     plan = diagnose_cost_for(tmp_path, CRITERION, 1.0, model=None, env_fix=False, n=5, spent_usd=0.0, cap_usd=1e4)
-    # agent-setup, harness, model: 3 + combined + 3 pairs, baseline already stored, no drafting left
-    assert plan.replays == 7 * 10 and plan.calls == 0
+    # agent-setup, harness, model: 3 + combined + 3 pairs + the original model at max effort, baseline already
+    # stored, no drafting left
+    assert plan.replays == 8 * 10 and plan.calls == 0
 
 
 def test_on_disk_a_changed_criterion_reuses_nothing(tmp_path):
@@ -70,7 +71,7 @@ def test_on_disk_a_changed_criterion_reuses_nothing(tmp_path):
     baseline.mkdir(parents=True)
     (baseline / "outcome.json").write_text(json.dumps({"variant": "baseline", "passes": 0, "runs": 5, "cost_usd": 1}))
     plan = diagnose_cost_for(tmp_path, CRITERION, 1.0, model=None, env_fix=True, n=5, spent_usd=0.0, cap_usd=1e4)
-    assert plan.replays == 17 * 10
+    assert plan.replays == 18 * 10  # baseline, 5 oracles, combined, 10 pairs, the original model at max effort
 
 
 def test_the_preview_counts_every_call_a_drafted_oracle_can_make(write_session, tmp_path):
@@ -100,3 +101,14 @@ def test_the_preview_counts_every_call_a_drafted_oracle_can_make(write_session, 
                       episode=episode, follow_ups=[], criterion=Criterion("done", (), (), approved=True),
                       symptom=Symptom.STOPPED_SHORT, pristine=pristine, env_script=None, ask=ask)
         assert len(calls) == MAX_DRAFT_ATTEMPTS * CALLS_PER_DRAFT_ATTEMPT
+
+
+def test_the_model_oracle_adds_the_original_model_at_max_effort_unless_the_episode_ran_on_fable(tmp_path):
+    with_step = diagnose_cost(1.0, [Cause.MODEL], n=5, spent_usd=0.0, cap_usd=1e4, effort_step=True)
+    assert with_step.replays == 30  # baseline, Fable at max effort, the original model at max effort
+    on_fable = diagnose_cost_for(tmp_path, CRITERION, 1.0, model="claude-fable-5-1", effort="high", env_fix=False,
+                                 n=5, spent_usd=0.0, cap_usd=1e4)
+    on_opus = diagnose_cost_for(tmp_path, CRITERION, 1.0, model="claude-opus-5", effort="high", env_fix=False,
+                                n=5, spent_usd=0.0, cap_usd=1e4)
+    # opus: baseline + 4 oracles + combined + 6 pairs + the effort step; fable at high: the same minus the step
+    assert on_opus.replays == 13 * 10 and on_fable.replays == 12 * 10

@@ -14,7 +14,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from culprit import logs
-from culprit.logs import Episode, Tracked, is_follow_up, prompt_images, recorded_answers, records_before
+from culprit.logs import (Episode, Tracked, is_follow_up, original_effort, prompt_images, recorded_answers,
+                          records_before)
 from culprit.stubs import MCP_PREFIX, PERMISSION_PROMPT_TOOL, SERVER as ANSWER_SERVER, recordings_from_episode
 
 
@@ -226,6 +227,7 @@ REPLAY_TIMEOUT_MULTIPLE = 3
 REPLAY_BUDGET_FLOOR_USD = 10.0
 REPLAY_BUDGET_MULTIPLE = 3
 CHECK_TIMEOUT_S = 600
+MAX_EFFORT = "max"  # the highest `claude --effort` level (2.1.296: low, medium, high, xhigh, max)
 OUTPUT_TAIL_CHARS = 2000
 REPLAY_DIR_PREFIX = ".culprit-replay-"
 WRITE_TOOLS = ("Edit", "Write", "NotebookEdit")
@@ -257,6 +259,7 @@ class ReplaySettings:
     prompt: str
     model: str | None
     permission_mode: str
+    effort: str | None = None  # --effort; None leaves Claude Code's default
     claude_md_addition: str | None = None  # standing instructions appended to the clone's project CLAUDE.md
     tools: str | None = None  # None keeps Claude Code's default tool set
     disallowed_tools: tuple[str, ...] = ()  # restrictions beyond SAFETY_DENIED_TOOLS
@@ -319,7 +322,7 @@ def replay_timeout_s(episode: Episode) -> float:
 
 
 def baseline_settings(episode: Episode, max_budget_usd: float | None = None) -> ReplaySettings:
-    return ReplaySettings(prompt=episode.prompt_text, model=episode.model,
+    return ReplaySettings(prompt=episode.prompt_text, model=episode.model, effort=original_effort(episode),
                           permission_mode=replay_permission_mode(episode.permission_mode),
                           max_budget_usd=replay_budget_usd(episode) if max_budget_usd is None else max_budget_usd,
                           timeout_s=replay_timeout_s(episode), prompt_images=tuple(prompt_images(episode)),
@@ -372,6 +375,8 @@ def replay_command(settings: ReplaySettings, original_cwd: Path | None = None,
         command += ["--input-format", "stream-json"]  # the only way to send images headless (verified live)
     if settings.model:
         command += ["--model", settings.model]
+    if settings.effort:
+        command += ["--effort", settings.effort]
     if settings.tools is not None:
         command += ["--tools", settings.tools]
     denied = [*SAFETY_DENIED_TOOLS, *settings.disallowed_tools]

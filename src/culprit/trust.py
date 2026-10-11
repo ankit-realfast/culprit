@@ -208,5 +208,6 @@ def selftest_cost(runs_dir: Path, episode_id: str, criterion: Criterion, base: R
         planted_base, planted_criterion = plant(fault, base, criterion)
         folder = selftest_dir(runs_dir, episode_id, fault)
         total += diagnose_cost_for(folder, planted_criterion, planted_base.max_budget_usd, model=planted_base.model,
+                                   effort=planted_base.effort,
                                    env_fix=False, n=n, spent_usd=stored_spend(folder), cap_usd=budget_per_fault)
     return total

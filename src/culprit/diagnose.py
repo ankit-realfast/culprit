@@ -18,7 +18,7 @@ from culprit.logs import (Episode, EpisodeNotFound, find_episode, follow_up_prom
                           records_before, text_of, tool_uses)
 from culprit.model import (CALL_CAP_USD, Ask, ClaudeCallFailed, Criterion, Judgement, ask_claude, check_leak,
                            criterion_step, judge_replay, load_criterion)
-from culprit.replay import (MEMORY_DIR, REPLAY_BUDGET_FLOOR_USD, RESULT_FILE, ReplaySettings, SetupScriptFailed, baseline_settings,
+from culprit.replay import (MAX_EFFORT, MEMORY_DIR, REPLAY_BUDGET_FLOOR_USD, RESULT_FILE, ReplaySettings, SetupScriptFailed, baseline_settings,
                             claude_md_target, replay_workdir, run_replay, settings_from_json, settings_to_json,
                             target_inside)
 from culprit.store import (ORACLE_ORDER, SELFTEST_DIR, Cause, Symptom, confirm_step, display_id, episode_dir,
@@ -332,8 +332,11 @@ VARIANT_FIELDS: dict[Cause, tuple[str, ...]] = {
     Cause.ENVIRONMENT: ("setup_script",),
     Cause.AGENT_SETUP: ("claude_md_addition",),
     Cause.HARNESS: ("tools", "disallowed_tools", "context_preamble", "max_budget_usd"),
-    Cause.MODEL: ("model",),
+    Cause.MODEL: ("model", "effort"),
 }
+# After Fable at max effort beats the baseline, the original model at max effort is replayed too: if it also passes,
+# raising the effort is the cheaper fix. The verdict stays Model either way.
+ORIGINAL_MAX_EFFORT = "original-max-effort"
 
 SYMPTOM_DESCRIPTIONS = {
     Symptom.STOPPED_SHORT: "the agent stopped before delivering what was asked",
@@ -639,19 +642,30 @@ def harness_context(episode: Episode, pristine: Path) -> str:
     return "These files from the working directory are relevant to the request below:\n\n" + "".join(blocks)
 
 
-def cannot_build(cause: Cause, *, model: str | None, env_fix: bool) -> str | None:
+def on_fable(model: str | None) -> bool:
+    return (model or "").startswith(FABLE_PREFIX)
+
+
+def cannot_build(cause: Cause, *, model: str | None, env_fix: bool, effort: str | None = None) -> str | None:
     """Why this cause's oracle cannot be built for the episode, decided before any model call; None if it can."""
     if cause is Cause.ENVIRONMENT and not env_fix:
         return "no environment fix supplied (culprit env-fix)"
-    if cause is Cause.MODEL and (model or "").startswith(FABLE_PREFIX):
-        return "the episode already ran on Fable, the strongest model"
+    if cause is Cause.MODEL and on_fable(model) and effort == MAX_EFFORT:
+        return "the episode already ran on Fable at max effort, the strongest model at its highest effort"
     return None
+
+
+def effort_step(model: str | None, effort: str | None) -> bool:
+    """Whether a winning model oracle is followed by the original model at max effort: not when the episode ran on
+    Fable (the oracle already was its model at max effort), nor when it already ran at max effort (its baseline
+    is that replay)."""
+    return not on_fable(model) and effort != MAX_EFFORT
 
 
 def build_variant(cause: Cause, base: ReplaySettings, *, episode: Episode, follow_ups: list[str],
                   criterion: Criterion, symptom: Symptom, pristine: Path, env_script: Path | None,
                   ask: Ask = ask_claude) -> VariantBuild:
-    if reason := cannot_build(cause, model=base.model, env_fix=env_script is not None):
+    if reason := cannot_build(cause, model=base.model, env_fix=env_script is not None, effort=base.effort):
         return VariantBuild(None, reason)
     if cause is Cause.TASK:
         history = earlier_conversation(episode)
@@ -673,7 +687,9 @@ def build_variant(cause: Cause, base: ReplaySettings, *, episode: Episode, follo
         return VariantBuild(replace(base, tools="default", disallowed_tools=(), context_preamble=context,
                                     max_budget_usd=base.max_budget_usd * HARNESS_BUDGET_MULTIPLIER), None)
     if cause is Cause.MODEL:
-        return VariantBuild(replace(base, model=ORACLE_MODEL), None)
+        # Fable at max effort; an episode already on Fable keeps its own Fable model
+        return VariantBuild(replace(base, model=base.model if on_fable(base.model) else ORACLE_MODEL,
+                                    effort=MAX_EFFORT), None)
     raise ValueError(f"{cause} has no oracle")
 
 
@@ -793,7 +809,10 @@ def diagnose(episode: Episode, criterion: Criterion, symptom: Symptom, base: Rep
         if beats(result, baseline):
             for later in ORACLE_ORDER[position + 1:]:
                 untested.setdefault(later.value, NOT_RUN_REASON)
-            return finish(cause, f"{cause.value} passed {_rate(result)} against the baseline's {_rate(baseline)}")
+            evidence = f"{cause.value} passed {_rate(result)} against the baseline's {_rate(baseline)}"
+            if cause is Cause.MODEL:
+                evidence += f" — {model_fix(base, baseline, measured)}"
+            return finish(cause, evidence)
 
     if len(built) < 2:
         return finish(Cause.UNEXPLAINED, "no single change made it pass, and fewer than two changes could be tested")
@@ -808,6 +827,20 @@ def diagnose(episode: Episode, criterion: Criterion, symptom: Symptom, base: Rep
                           (first.value, second.value))
     return finish(Cause.MULTI_CAUSE, f"only every change together passed ({_rate(together)})",
                   tuple(c.value for c in built))
+
+
+def model_fix(base: ReplaySettings, baseline: VariantOutcome, measured) -> str:
+    """Which model fix the winning model oracle points at: raising the effort, or Fable itself. Runs the original
+    model at max effort when that is still an open question."""
+    if on_fable(base.model):
+        return (f"raise effort (Fable at max effort passed; the episode ran on Fable at "
+                f"{base.effort or 'the default'} effort)")
+    if base.effort == MAX_EFFORT:
+        return f"needs Fable (the original model already ran at max effort: the baseline passed {_rate(baseline)})"
+    effort_only = measured(ORIGINAL_MAX_EFFORT, replace(base, effort=MAX_EFFORT))
+    if beats(effort_only, baseline):
+        return f"raise effort (original model at max effort also passed {_rate(effort_only)})"
+    return f"needs Fable (original model at max effort did not pass: {_rate(effort_only)})"
 
 
 def _oracle(folder: Path, cause: Cause, base: ReplaySettings, untested: dict[str, str], make) -> ReplaySettings | None:
@@ -991,8 +1024,9 @@ def plan_cost(replay_caps: Sequence[float], *, n: int, calls: int = 0, spent_usd
 
 
 def diagnose_cost(base_cap: float, oracles: Sequence[Cause], *, n: int, spent_usd: float, cap_usd: float,
-                  done: frozenset[str] = frozenset(), drafts: int = 0) -> CostPlan:
-    """Baseline, every oracle, and when two or more can run, all of them together and every pair."""
+                  done: frozenset[str] = frozenset(), drafts: int = 0, effort_step: bool = False) -> CostPlan:
+    """Baseline, every oracle, and when two or more can run, all of them together and every pair; with
+    effort_step, the original model at max effort after the model oracle."""
     def cap_for(causes) -> float:
         return base_cap * (HARNESS_BUDGET_MULTIPLIER if Cause.HARNESS in causes else 1)
 
@@ -1000,13 +1034,15 @@ def diagnose_cost(base_cap: float, oracles: Sequence[Cause], *, n: int, spent_us
     if len(oracles) >= 2:
         caps[COMBINED] = cap_for(oracles)
         caps.update({pair_variant(a.value, b.value): cap_for({a, b}) for a, b in combinations(oracles, 2)})
+    if effort_step and Cause.MODEL in oracles:
+        caps[ORIGINAL_MAX_EFFORT] = base_cap
     return plan_cost([cap for name, cap in caps.items() if name not in done], n=n,
                      calls=drafts * MAX_DRAFT_ATTEMPTS * CALLS_PER_DRAFT_ATTEMPT, spent_usd=spent_usd, cap_usd=cap_usd,
                      replay_cap_usd=base_cap)
 
 
 def diagnose_cost_for(folder: Path, criterion: Criterion, base_cap: float, *, model: str | None, env_fix: bool,
-                      n: int, spent_usd: float, cap_usd: float) -> CostPlan:
+                      n: int, spent_usd: float, cap_usd: float, effort: str | None = None) -> CostPlan:
     """diagnose_cost for what is on disk: stored outcomes and drafted variants are reused, not paid again."""
     stale = criterion_changed(folder, criterion)
     oracles, drafts = [], 0
@@ -1015,14 +1051,15 @@ def diagnose_cost_for(folder: Path, criterion: Criterion, base_cap: float, *, mo
         if data is not None and "untested" in data:
             continue
         if data is None:
-            if cannot_build(cause, model=model, env_fix=env_fix):
+            if cannot_build(cause, model=model, env_fix=env_fix, effort=effort):
                 continue
             drafts += cause in DRAFTED_CAUSES
         oracles.append(cause)
-    names = [BASELINE, COMBINED, *(c.value for c in oracles),
+    names = [BASELINE, COMBINED, ORIGINAL_MAX_EFFORT, *(c.value for c in oracles),
              *(pair_variant(a.value, b.value) for a, b in combinations(oracles, 2))]
     done = frozenset() if stale else frozenset(name for name in names if load_outcome(folder, name) is not None)
-    return diagnose_cost(base_cap, oracles, n=n, spent_usd=spent_usd, cap_usd=cap_usd, done=done, drafts=drafts)
+    return diagnose_cost(base_cap, oracles, n=n, spent_usd=spent_usd, cap_usd=cap_usd, done=done, drafts=drafts,
+                         effort_step=effort_step(model, effort))
 
 
 def batch_cost(runs_dir: Path, projects_dir: Path, *, n: int, per_episode_usd: Callable[[float], float],
@@ -1039,8 +1076,10 @@ def batch_cost(runs_dir: Path, projects_dir: Path, *, n: int, per_episode_usd: C
             episode = find(projects_dir, episode_id)
         except EpisodeNotFound:
             continue
-        replay_cap = baseline_settings(episode).max_budget_usd
-        plan += diagnose_cost_for(folder, load_criterion(runs_dir, episode_id), replay_cap, model=episode.model,
+        base = baseline_settings(episode)
+        replay_cap = base.max_budget_usd
+        plan += diagnose_cost_for(folder, load_criterion(runs_dir, episode_id), replay_cap, model=base.model,
+                                  effort=base.effort,
                                   env_fix=env_fix_script(folder) is not None, n=n, spent_usd=stored_spend(folder),
                                   cap_usd=per_episode_usd(replay_cap))
     return CostPlan(plan.replays, plan.calls, round(max(0.0, min(plan.max_usd, total_usd - spent)), 2),
