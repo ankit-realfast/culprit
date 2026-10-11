@@ -208,6 +208,36 @@ def _count_system(records: tuple[dict, ...], subtype: str) -> int:
     return sum(1 for record in records if record.get("type") == "system" and record.get("subtype") == subtype)
 
 
+COST_STATE = "cost-state"  # Claude Code's running total of a session's spend, written now and then
+
+
+def episode_cost_usd(episode: Episode) -> float | None:
+    """What the episode cost, from the session's running total (a cost-state record's totalCostUSD): the last
+    total inside the episode less the last one before it — or less nothing for the session's first episode.
+    None when no total was written inside the episode, or a follow-up has none before it (measured 2026-10-11:
+    about 1.5% of episodes have one, so most fall back to the floor)."""
+    inside = [record["totalCostUSD"] for record in episode.records if _running_total(record)]
+    if not inside or not episode.session_file.is_file():
+        return None
+    before, follow_up = None, False
+    for record in read_records(episode.session_file):
+        if _is_prompt_of(record, episode):
+            break
+        follow_up = follow_up or is_human_prompt(record)
+        if _running_total(record):
+            before = record["totalCostUSD"]
+    else:
+        return None
+    if before is None and follow_up:
+        return None  # the totals since the session began include the earlier episodes' spend
+    return max(0.0, float(inside[-1]) - float(before or 0))
+
+
+def _running_total(record: dict) -> bool:
+    total = record.get("totalCostUSD")
+    return record.get("type") == COST_STATE and isinstance(total, (int, float)) and not isinstance(total, bool)
+
+
 # --- triage: Rank episodes by how likely they are to have failed, for a human to confirm. ---
 # The score orders the human's review queue; it never labels an episode a failure on its own.
 # A prompt that is only a slash command (/compact, /clear, /model opus) asks Claude Code, not the agent,

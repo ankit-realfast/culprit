@@ -50,7 +50,7 @@ def spending_diagnose(costs, raises=()):
 
 
 def run(runs, fake, total=400.0, per=40.0):
-    return diagnose_all(runs, runs / "projects", n=5, per_episode_usd=per, total_usd=total, replay_budget_usd=2.0,
+    return diagnose_all(runs, runs / "projects", n=5, per_episode_usd=lambda replay_cap: per, total_usd=total,
                         diagnose_fn=fake, find=lambda projects, episode_id: FakeEpisode(episode_id),
                         follow=lambda projects, episode_id: [])
 
@@ -87,7 +87,7 @@ def test_one_episode_over_its_cap_does_not_stop_the_others(tmp_path):
     prepare(runs, "a:1")
     prepare(runs, "b:1")
     summary = run(runs, spending_diagnose({"a:1": 40.0, "b:1": 10.0}, raises=("a:1",)))
-    assert summary.over_cap == ["a:1"] and summary.diagnosed == ["b:1"]
+    assert summary.over_cap == {"a:1": 40.0} and summary.diagnosed == ["b:1"]
     assert summary.stopped_at is None
     assert summary.spent_usd == 50.0
 
@@ -112,7 +112,7 @@ def test_a_total_that_runs_out_inside_an_episode_is_reported_as_the_stop(tmp_pat
     prepare(runs, "b:1")
     summary = run(runs, spending_diagnose({"a:1": 9.0}, raises=("a:1",)), total=11.0)
     assert summary.stopped_at == "a:1"
-    assert summary.over_cap == []
+    assert summary.over_cap == {}
 
 
 def test_the_total_counts_what_earlier_batches_spent(tmp_path):
@@ -163,7 +163,19 @@ def test_batch_progress_names_the_episode(tmp_path):
         save_verdict(episode_dir(kwargs["runs_dir"], episode.episode_id), verdict)
         return verdict
 
-    diagnose_all(tmp_path, tmp_path / "projects", n=5, per_episode_usd=40.0, total_usd=400.0, replay_budget_usd=2.0,
+    diagnose_all(tmp_path, tmp_path / "projects", n=5, per_episode_usd=lambda replay_cap: 40.0, total_usd=400.0,
                  diagnose_fn=fake, find=lambda projects, episode_id: FakeEpisode(episode_id),
                  follow=lambda projects, episode_id: [], progress=events.append)
     assert [e.scope for e in events] == ["aaaaaaaa:bbbbbbbb"]
+
+
+def test_each_episodes_cap_comes_from_its_own_per_replay_cap(tmp_path):
+    queue(tmp_path, "a:1")
+    prepare(tmp_path, "a:1")
+    fake = spending_diagnose({})
+    seen = []
+    diagnose_all(tmp_path, tmp_path / "projects", n=5, per_episode_usd=lambda cap: seen.append(cap) or 100.0,
+                 total_usd=400.0, diagnose_fn=fake, find=lambda projects, episode_id: FakeEpisode(episode_id),
+                 follow=lambda projects, episode_id: [])
+    assert seen == [10.0]  # no recorded cost: the floor
+    assert fake.calls == [("a:1", 100.0)]

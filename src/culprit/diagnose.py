@@ -18,7 +18,7 @@ from culprit.logs import (Episode, EpisodeNotFound, find_episode, follow_up_prom
                           records_before, text_of, tool_uses)
 from culprit.model import (CALL_CAP_USD, Ask, ClaudeCallFailed, Criterion, Judgement, ask_claude, check_leak,
                            criterion_step, judge_replay, load_criterion)
-from culprit.replay import (MEMORY_DIR, RESULT_FILE, ReplaySettings, SetupScriptFailed, baseline_settings,
+from culprit.replay import (MEMORY_DIR, REPLAY_BUDGET_FLOOR_USD, RESULT_FILE, ReplaySettings, SetupScriptFailed, baseline_settings,
                             claude_md_target, replay_workdir, run_replay, settings_from_json, settings_to_json,
                             target_inside)
 from culprit.store import (ORACLE_ORDER, SELFTEST_DIR, Cause, Symptom, confirm_step, display_id, episode_dir,
@@ -809,7 +809,7 @@ ENV_FIX_FILE = "env-fix.sh"
 class BatchSummary:
     diagnosed: list[str] = field(default_factory=list)
     skipped: dict[str, str] = field(default_factory=dict)
-    over_cap: list[str] = field(default_factory=list)
+    over_cap: dict[str, float] = field(default_factory=dict)  # episode -> the cap it hit
     stopped_at: str | None = None
     spent_usd: float = 0.0
 
@@ -840,11 +840,12 @@ def readiness_problem(runs_dir: Path, episode_id: str) -> str | None:
     return None
 
 
-def diagnose_all(runs_dir: Path, projects_dir: Path, *, n: int, per_episode_usd: float, total_usd: float,
-                 replay_budget_usd: float, diagnose_fn=diagnose, find=find_episode,
+def diagnose_all(runs_dir: Path, projects_dir: Path, *, n: int, per_episode_usd: Callable[[float], float],
+                 total_usd: float, diagnose_fn=diagnose, find=find_episode,
                  follow=follow_up_prompts, progress: Progress | None = None) -> BatchSummary:
+    """per_episode_usd gives an episode's own cap from its per-replay cap."""
     summary = BatchSummary()
-    smallest_useful_usd = replay_budget_usd + CALL_CAP_USD  # one replay and its judgement
+    smallest_useful_usd = REPLAY_BUDGET_FLOOR_USD + CALL_CAP_USD  # the cheapest replay there is, and its judgement
     require_queue(runs_dir)
     queued = queued_ids(runs_dir)
     # the total covers every batch ever run in this folder, not just this one
@@ -861,24 +862,30 @@ def diagnose_all(runs_dir: Path, projects_dir: Path, *, n: int, per_episode_usd:
         if remaining < smallest_useful_usd:
             summary.stopped_at = episode_id
             break
+        try:
+            episode = find(projects_dir, episode_id)
+        except EpisodeNotFound as error:
+            summary.skipped[episode_id] = f"failed: {error}"
+            continue
+        base = baseline_settings(episode)
+        own_cap = per_episode_usd(base.max_budget_usd)
         already = stored_spend(folder)
-        cap = min(per_episode_usd, already + remaining)
+        cap = min(own_cap, already + remaining)
         budget = EpisodeBudget(cap, spent_usd=already)
         stop = False
         try:
-            episode = find(projects_dir, episode_id)
             diagnose_fn(episode, load_criterion(runs_dir, episode_id), read_symptom(runs_dir, episode_id),
-                        baseline_settings(episode, replay_budget_usd), runs_dir=runs_dir,
+                        base, runs_dir=runs_dir,
                         follow_ups=follow(projects_dir, episode_id),
                         env_script=env_fix_script(folder), n=n, budget=budget,
                         progress=scoped(progress, short_id(episode_id)))
             summary.diagnosed.append(episode_id)
         except BudgetExhausted:
-            if cap < per_episode_usd:  # the total ran out, not this episode's own cap
+            if cap < own_cap:  # the total ran out, not this episode's own cap
                 summary.stopped_at = episode_id
                 stop = True
             else:
-                summary.over_cap.append(episode_id)
+                summary.over_cap[episode_id] = own_cap
         except (ClaudeCallFailed, SetupScriptFailed, EpisodeNotFound) as error:
             summary.skipped[episode_id] = f"failed: {error}"
         spent_now = budget.spent_usd - already
@@ -904,34 +911,40 @@ class CostPlan:
     max_usd: float  # most it can add to what is already spent
     spent_usd: float  # already spent, counted against the caps
     cap_usd: float
+    replay_cap_usd: float = 0.0  # one replay's spend cap (harness variants twice it); the largest across episodes
 
     def __add__(self, other: CostPlan) -> CostPlan:
         return CostPlan(self.replays + other.replays, self.calls + other.calls,
                         round(self.max_usd + other.max_usd, 2), round(self.spent_usd + other.spent_usd, 4),
-                        round(self.cap_usd + other.cap_usd, 2))
+                        round(self.cap_usd + other.cap_usd, 2), max(self.replay_cap_usd, other.replay_cap_usd))
 
     def within(self, room_usd: float) -> CostPlan:
         """The same plan when only room_usd is left to spend overall."""
         return CostPlan(self.replays, self.calls, round(max(0.0, min(self.max_usd, room_usd)), 2), self.spent_usd,
-                        self.cap_usd)
+                        self.cap_usd, self.replay_cap_usd)
 
     def lines(self) -> list[str]:
         calls = f" and {self.calls} drafting calls" if self.calls else ""
         return [f"plan: up to {self.replays} replays{calls} (each variant: n runs plus up to {MAX_VOID_RETRIES} "
                 f"retries of runs lost to infrastructure failures)",
                 f"cost: at most ${self.max_usd:.2f} more — ${self.spent_usd + self.max_usd:.2f} in total with the "
-                f"${self.spent_usd:.2f} already spent (cap ${self.cap_usd:.2f})"]
+                f"${self.spent_usd:.2f} already spent (cap ${self.cap_usd:.2f})"] + (
+                [f"per replay: up to ${self.replay_cap_usd:.2f} (twice that in harness variants)"]
+                if self.replay_cap_usd else [])
 
 
 EMPTY = CostPlan(0, 0, 0.0, 0.0, 0.0)
 
 
-def plan_cost(replay_caps: Sequence[float], *, n: int, calls: int = 0, spent_usd: float, cap_usd: float) -> CostPlan:
-    """replay_caps holds one replay budget per variant still to run."""
+def plan_cost(replay_caps: Sequence[float], *, n: int, calls: int = 0, spent_usd: float, cap_usd: float,
+              replay_cap_usd: float | None = None) -> CostPlan:
+    """replay_caps holds one replay budget per variant still to run; replay_cap_usd is the episode's own per-replay
+    cap (the smallest of replay_caps when not given)."""
     per_variant = n + MAX_VOID_RETRIES
     worst = sum((cap + CALL_CAP_USD) * per_variant for cap in replay_caps) + calls * CALL_CAP_USD
+    shown = replay_cap_usd if replay_cap_usd is not None else min(replay_caps, default=0.0)
     return CostPlan(per_variant * len(replay_caps), calls, round(max(0.0, min(cap_usd - spent_usd, worst)), 2),
-                    spent_usd, cap_usd)
+                    spent_usd, cap_usd, shown)
 
 
 def diagnose_cost(base_cap: float, oracles: Sequence[Cause], *, n: int, spent_usd: float, cap_usd: float,
@@ -945,7 +958,8 @@ def diagnose_cost(base_cap: float, oracles: Sequence[Cause], *, n: int, spent_us
         caps[COMBINED] = cap_for(oracles)
         caps.update({pair_variant(a.value, b.value): cap_for({a, b}) for a, b in combinations(oracles, 2)})
     return plan_cost([cap for name, cap in caps.items() if name not in done], n=n,
-                     calls=drafts * MAX_DRAFT_ATTEMPTS * CALLS_PER_DRAFT_ATTEMPT, spent_usd=spent_usd, cap_usd=cap_usd)
+                     calls=drafts * MAX_DRAFT_ATTEMPTS * CALLS_PER_DRAFT_ATTEMPT, spent_usd=spent_usd, cap_usd=cap_usd,
+                     replay_cap_usd=base_cap)
 
 
 def diagnose_cost_for(folder: Path, criterion: Criterion, base_cap: float, *, model: str | None, env_fix: bool,
@@ -968,17 +982,23 @@ def diagnose_cost_for(folder: Path, criterion: Criterion, base_cap: float, *, mo
     return diagnose_cost(base_cap, oracles, n=n, spent_usd=spent_usd, cap_usd=cap_usd, done=done, drafts=drafts)
 
 
-def batch_cost(runs_dir: Path, *, n: int, per_episode_usd: float, total_usd: float,
-               replay_budget_usd: float) -> CostPlan:
-    """Every queued episode `diagnose` with no id would take on, at worst case (any model), within the shared total."""
+def batch_cost(runs_dir: Path, projects_dir: Path, *, n: int, per_episode_usd: Callable[[float], float],
+               total_usd: float, find=find_episode) -> CostPlan:
+    """Every queued episode `diagnose` with no id would take on, each at its own per-replay cap and episode cap,
+    within the shared total. An episode whose log is gone is left out, as the batch skips it."""
     spent = total_spend(runs_dir)
     plan = EMPTY
     for episode_id in queued_ids(runs_dir):
         folder = episode_dir(runs_dir, episode_id)
         if load_verdict(folder) is not None or readiness_problem(runs_dir, episode_id):
             continue
-        plan += diagnose_cost_for(folder, load_criterion(runs_dir, episode_id), replay_budget_usd, model=None,
+        try:
+            episode = find(projects_dir, episode_id)
+        except EpisodeNotFound:
+            continue
+        replay_cap = baseline_settings(episode).max_budget_usd
+        plan += diagnose_cost_for(folder, load_criterion(runs_dir, episode_id), replay_cap, model=episode.model,
                                   env_fix=env_fix_script(folder) is not None, n=n, spent_usd=stored_spend(folder),
-                                  cap_usd=per_episode_usd)
+                                  cap_usd=per_episode_usd(replay_cap))
     return CostPlan(plan.replays, plan.calls, round(max(0.0, min(plan.max_usd, total_usd - spent)), 2),
-                    round(spent, 4), total_usd)
+                    round(spent, 4), total_usd, plan.replay_cap_usd)

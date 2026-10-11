@@ -42,7 +42,7 @@ def test_a_missing_baseline_is_replayed_unchanged_and_its_pass_rate_printed(writ
 
     monkeypatch.setattr(cli, "run_variant", fake_run_variant)
     assert cli.main(["selftest", "s1:p1"]) == 1  # 1 pass is not a control
-    assert seen["variant"] == "baseline" and seen["n"] == cli.RUNS_PER_VARIANT and seen["cap"] == cli.EPISODE_CAP_USD
+    assert seen["variant"] == "baseline" and seen["n"] == cli.RUNS_PER_VARIANT and seen["cap"] == cli.episode_cap_usd(10.0)
     assert seen["settings"].prompt == "fix a"
     captured = capsys.readouterr()
     assert f"baseline: 1 of {cli.RUNS_PER_VARIANT} passed" in captured.out

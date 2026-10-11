@@ -82,11 +82,17 @@ uv run culprit status [1]          # where episodes stand and the next command
 
 | Cap | Value |
 |---|---|
-| Per replay | $2 (harness variants $4) |
+| Per replay | 3× what the original episode cost, at least $10 (harness variants twice that) |
+| Per replay, time | 3× how long the original episode took, at least 30 minutes |
 | Per judge or drafting call | $0.50, charged at the cap |
-| Per episode | $850 |
-| Per selftest fault | $650 |
-| `diagnose` with no id, in total | $17,000 |
+| Per episode | the worst case at its per-replay cap: $3,600 at the $10 floor |
+| Per selftest fault | the same for a planted fault: $2,650 at the $10 floor |
+| `diagnose` with no id, in total | $72,000 (20 episodes at the floor; each keeps its own cap inside it) |
+
+- **The episode's own cost:** read from the session's running total (`cost-state` records, `totalCostUSD`) at
+  the end of the episode less the one before it. Claude Code writes those rarely (about 1.5% of episodes in
+  one real set of logs), so most episodes get the $10 floor. Its duration comes from its `turn_duration`
+  records (or its first and last timestamps). The plan shows the per-replay cap.
 
 - **Typical diagnosis:** about 60 replays. The episode and selftest caps cover the worst case (every
   variant, every retry), so they never cut a diagnosis short.

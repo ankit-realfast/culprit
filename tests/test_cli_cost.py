@@ -1,4 +1,4 @@
-from culprit.replay import DEFAULT_REPLAY_BUDGET_USD
+from culprit.replay import REPLAY_BUDGET_FLOOR_USD
 import json
 
 import pytest
@@ -67,7 +67,8 @@ def test_the_plan_is_printed_on_stderr_and_nothing_is_asked(write_session, tmp_p
     monkeypatch.setattr("builtins.input", no_questions)
     assert cli.main(["selftest", "s1:p1"]) == 1  # replays the missing baseline, which is not a control
     captured = capsys.readouterr()
-    assert "up to 15 replays" in captured.err and "cap $850.00" in captured.err
+    assert "up to 15 replays" in captured.err and "cap $3600.00" in captured.err
+    assert "per replay: up to $10.00" in captured.err
     assert "up to" not in captured.out
     assert spy == ["baseline"]
 
@@ -76,7 +77,9 @@ def test_diagnose_plan_counts_every_variant(write_session, tmp_path, capsys, spy
     ready(write_session, tmp_path)
     assert cli.main(["diagnose", "s1:p1"]) == 0
     # no env-fix: baseline + 4 oracles + combined + 6 pairs, 15 attempts each (N = 10 plus 5 void retries)
-    assert "up to 180 replays and 8 drafting calls" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "up to 180 replays and 8 drafting calls" in err
+    assert "per replay: up to $10.00 (twice that in harness variants)" in err
     assert spy == ["diagnose"]
 
 
@@ -84,7 +87,7 @@ def test_selftest_plan_sums_every_planted_fault(write_session, tmp_path, capsys,
     ready(write_session, tmp_path, control=True)
     assert cli.main(["selftest", "s1:p1"]) == 0
     err = capsys.readouterr().err
-    assert "up to 900 replays" in err and "cap $3250.00" in err
+    assert "up to 900 replays" in err and "cap $13250.00" in err  # five faults at $2650 each
     assert spy == ["selftest"]
 
 
@@ -95,7 +98,7 @@ def test_diagnose_queue_plan_covers_only_ready_episodes_within_the_total(write_s
                                                       {"summary": {"episode_id": "s2:p1"}, "score": 2}]))
     assert cli.main(["diagnose"]) == 0
     err = capsys.readouterr().err
-    assert "up to 180 replays" in err and "at most $604.00 more" in err and "cap $17000.00" in err
+    assert "up to 180 replays" in err and "at most $2644.00 more" in err and "cap $72000.00" in err
     assert spy == ["diagnose-all"]
 
 
@@ -103,10 +106,30 @@ def test_the_default_caps_never_stop_a_full_diagnose_at_n():
     from culprit.diagnose import diagnose_cost
     from culprit.store import ORACLE_ORDER, Cause
     assert cli.RUNS_PER_VARIANT == 10
-    every_oracle = diagnose_cost(DEFAULT_REPLAY_BUDGET_USD, ORACLE_ORDER, n=cli.RUNS_PER_VARIANT, spent_usd=0,
-                                 cap_usd=float("inf"), drafts=2)
-    planted = diagnose_cost(DEFAULT_REPLAY_BUDGET_USD, [c for c in ORACLE_ORDER if c is not Cause.ENVIRONMENT],
-                            n=cli.RUNS_PER_VARIANT, spent_usd=0, cap_usd=float("inf"), drafts=2)
-    assert every_oracle.max_usd <= cli.EPISODE_CAP_USD == 850.0
-    assert planted.max_usd <= cli.FAULT_CAP_USD == 650.0
-    assert cli.TOTAL_CAP_USD == 20 * cli.EPISODE_CAP_USD
+    for replay_cap in (REPLAY_BUDGET_FLOOR_USD, 15.0, 42.0):
+        every_oracle = diagnose_cost(replay_cap, ORACLE_ORDER, n=cli.RUNS_PER_VARIANT, spent_usd=0,
+                                     cap_usd=float("inf"), drafts=2)
+        planted = diagnose_cost(replay_cap, [c for c in ORACLE_ORDER if c is not Cause.ENVIRONMENT],
+                                n=cli.RUNS_PER_VARIANT, spent_usd=0, cap_usd=float("inf"), drafts=2)
+        assert every_oracle.max_usd <= cli.episode_cap_usd(replay_cap)
+        assert planted.max_usd <= cli.fault_cap_usd(replay_cap)
+    assert cli.episode_cap_usd(REPLAY_BUDGET_FLOOR_USD) == 3600.0
+    assert cli.fault_cap_usd(REPLAY_BUDGET_FLOOR_USD) == 2650.0
+    # the batch total covers 20 episodes at the floor's worst case; each episode keeps its own cap within it
+    assert cli.TOTAL_CAP_USD == 20 * cli.episode_cap_usd(REPLAY_BUDGET_FLOOR_USD)
+
+
+def test_an_episode_that_cost_more_gets_a_bigger_per_replay_and_episode_cap(write_session, tmp_path, capsys, spy):
+    from records import assistant, cost_state
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_session([snapshot("u-p1", {}), human("fix a", "p1", session_id="s1", cwd=str(repo)), assistant(),
+                   cost_state(6.0)], name="s1.jsonl")
+    runs = tmp_path / "runs"
+    save_criterion(runs, "s1:p1", Criterion("works", (), (), approved=True))
+    (episode_dir(runs, "s1:p1") / "pristine").mkdir(parents=True)
+    (episode_dir(runs, "s1:p1") / "symptom.json").write_text('{"episode_id": "s1:p1", "symptom": "wrong-result"}')
+    assert cli.main(["diagnose", "s1:p1"]) == 0
+    err = capsys.readouterr().err
+    assert "per replay: up to $18.00" in err  # 3 × $6.00
+    assert f"cap ${cli.episode_cap_usd(18.0):.2f}" in err

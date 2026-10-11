@@ -93,3 +93,8 @@ def write_result(prompt_id, file_path, original_file=None, kind="create"):
         "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
     }
 
+
+
+def cost_state(total_usd, session_id="s1"):
+    """Claude Code's running cost record: the session's spend so far."""
+    return {"type": "cost-state", "sessionId": session_id, "totalCostUSD": total_usd, "hasUnknownModelCost": False}

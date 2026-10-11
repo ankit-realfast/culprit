@@ -219,9 +219,13 @@ def target_inside(cwd: Path, destination: Path, tracked_path: str,
 NO_MCP_SERVERS = '{"mcpServers":{}}'
 SAFETY_DENIED_TOOLS = ("Bash(git push *)", "Bash(gh *)")
 REPLAY_PERMISSION_MODES = ("auto", "acceptEdits")
-REPLAY_TIMEOUT_S = 1800
+# Each replay's caps follow what the original episode took: three times its cost and its duration, never below the
+# floors. The cost comes from the session's running total and is usually unknown (then the floor applies).
+REPLAY_TIMEOUT_S = 1800  # the floor of the time limit
+REPLAY_TIMEOUT_MULTIPLE = 3
+REPLAY_BUDGET_FLOOR_USD = 10.0
+REPLAY_BUDGET_MULTIPLE = 3
 CHECK_TIMEOUT_S = 600
-DEFAULT_REPLAY_BUDGET_USD = 2.0
 OUTPUT_TAIL_CHARS = 2000
 REPLAY_DIR_PREFIX = ".culprit-replay-"
 WRITE_TOOLS = ("Edit", "Write", "NotebookEdit")
@@ -257,7 +261,8 @@ class ReplaySettings:
     disallowed_tools: tuple[str, ...] = ()  # restrictions beyond SAFETY_DENIED_TOOLS
     context_preamble: str | None = None
     setup_script: Path | None = None
-    max_budget_usd: float = DEFAULT_REPLAY_BUDGET_USD
+    max_budget_usd: float = REPLAY_BUDGET_FLOOR_USD
+    timeout_s: float = REPLAY_TIMEOUT_S  # the time limit, from the episode's duration
     prompt_images: tuple[dict, ...] = ()  # image blocks the human attached, resent with the prompt
     mcp_recordings: dict = field(default_factory=dict)  # per MCP server, the calls the episode made and their results
     recorded_answers: dict = field(default_factory=dict)  # question -> what the human answered in the original
@@ -300,10 +305,22 @@ def replay_permission_mode(original: str | None) -> str:
     return original if original in REPLAY_PERMISSION_MODES else "acceptEdits"
 
 
-def baseline_settings(episode: Episode, max_budget_usd: float = DEFAULT_REPLAY_BUDGET_USD) -> ReplaySettings:
+def replay_budget_usd(episode: Episode) -> float:
+    """The per-replay spend cap: REPLAY_BUDGET_MULTIPLE × what the episode cost, at least the floor."""
+    cost = logs.episode_cost_usd(episode)
+    return max(REPLAY_BUDGET_FLOOR_USD, round(REPLAY_BUDGET_MULTIPLE * cost, 2) if cost else 0.0)
+
+
+def replay_timeout_s(episode: Episode) -> float:
+    """The per-replay time limit: REPLAY_TIMEOUT_MULTIPLE × how long the episode took, at least the floor."""
+    return max(REPLAY_TIMEOUT_S, round(REPLAY_TIMEOUT_MULTIPLE * logs.signals_for(episode).duration_s))
+
+
+def baseline_settings(episode: Episode, max_budget_usd: float | None = None) -> ReplaySettings:
     return ReplaySettings(prompt=episode.prompt_text, model=episode.model,
                           permission_mode=replay_permission_mode(episode.permission_mode),
-                          max_budget_usd=max_budget_usd, prompt_images=tuple(prompt_images(episode)),
+                          max_budget_usd=replay_budget_usd(episode) if max_budget_usd is None else max_budget_usd,
+                          timeout_s=replay_timeout_s(episode), prompt_images=tuple(prompt_images(episode)),
                           mcp_recordings=recordings_from_episode(episode),
                           recorded_answers=recorded_answers(episode), **_history(episode))
 
@@ -560,12 +577,12 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
                                            resume_id),
                             cwd=workdir,
                             capture_output=True,
-                            text=True, timeout=REPLAY_TIMEOUT_S, env=env,
+                            text=True, timeout=settings.timeout_s, env=env,
                             input=_stdin_for(settings, replay_prompt(settings, original_cwd, workdir)))
             stdout, stderr, exit_code = completed.stdout, completed.stderr, completed.returncode
         except subprocess.TimeoutExpired as timed_out:
             stdout, exit_code = _text(timed_out.stdout), -1
-            stderr = f"{_text(timed_out.stderr)}\ntimed out after {REPLAY_TIMEOUT_S}s"
+            stderr = f"{_text(timed_out.stderr)}\ntimed out after {settings.timeout_s:.0f}s"
         (run_dir / TRANSCRIPT_FILE).write_text(stdout)
         (run_dir / "stderr.txt").write_text(stderr)
         result_line = _result_line(stdout)
@@ -577,7 +594,7 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
             # stopped at the time limit: counted and judged on its diff, checks and tool calls; the cost is unknown,
             # so it is charged at the cap rather than as free
             replay = ReplayResult(run_dir, exit_code, True,
-                                  f"stopped at the {REPLAY_TIMEOUT_S}s time limit before a final answer",
+                                  f"stopped at the {settings.timeout_s:.0f}s time limit before a final answer",
                                   settings.max_budget_usd, 0, check_results, limit=LIMIT_TIME)
         elif result_line is None:
             reason = f"no result line (exit {exit_code})"

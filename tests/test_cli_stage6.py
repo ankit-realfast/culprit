@@ -24,13 +24,13 @@ def test_diagnose_without_an_id_prints_the_summary_and_writes_the_report(tmp_pat
     def fake_all(runs_dir, projects_dir, **kwargs):
         seen.update(kwargs)
         return BatchSummary(diagnosed=["a:1"], skipped={"b:1": "not restored — `culprit diagnose b:1` restores it"},
-                            over_cap=["c:1"], stopped_at="d:1", spent_usd=88.5)
+                            over_cap={"c:1": 3600.0}, stopped_at="d:1", spent_usd=88.5)
 
     monkeypatch.setattr(cli, "diagnose_all", fake_all)
     assert cli.main(["diagnose"]) == 0
     out = capsys.readouterr().out
-    assert seen["total_usd"] == cli.TOTAL_CAP_USD and seen["per_episode_usd"] == cli.EPISODE_CAP_USD and seen["n"] == cli.RUNS_PER_VARIANT
-    for expected in ["diagnosed 1", "b:1 skipped: not restored", "c:1 hit its $850.00 cap",
+    assert seen["total_usd"] == cli.TOTAL_CAP_USD and seen["per_episode_usd"] == cli.episode_cap_usd and seen["n"] == cli.RUNS_PER_VARIANT
+    for expected in ["diagnosed 1", "b:1 skipped: not restored", "c:1 hit its $3600.00 cap",
                      "stopped at d:1", "$88.50", "rerun",
                      "a:1 harness: baseline 0/5 → 4/5, p = 0.0238"]:
         assert expected in out

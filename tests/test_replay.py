@@ -41,6 +41,25 @@ def test_baseline_settings_copy_the_episode(write_session):
     s = baseline_settings(episode, max_budget_usd=1.5)
     assert (s.prompt, s.model, s.permission_mode, s.max_budget_usd) == ("fix it", "claude-opus-4-8", "acceptEdits", 1.5)
     assert (s.claude_md_addition, s.tools, s.disallowed_tools, s.context_preamble, s.setup_script) == (None, None, (), None, None)
+    assert baseline_settings(episode).max_budget_usd == 10.0  # no recorded cost: the floor
+    assert baseline_settings(episode).timeout_s == 1800  # a short episode: the default time limit
+
+
+def test_the_replay_caps_scale_with_what_the_original_episode_took(write_session):
+    from records import cost_state, system
+    (episode,) = episodes_from_session(write_session([human("fix it", "p1"), assistant(),
+                                                      system("turn_duration", durationMs=1_000_000),
+                                                      cost_state(5.0)]))
+    s = baseline_settings(episode)
+    assert s.max_budget_usd == 15.0  # 3 × $5.00, above the $10 floor
+    assert s.timeout_s == 3000  # 3 × 1000 s, above the 1800 s default
+
+
+def test_the_time_limit_is_the_settings_own(tmp_path):
+    run = FakeRun(claude_stdout=RESULT)
+    run_replay(settings(timeout_s=2400), pristine_tree(tmp_path), tmp_path / "run0", tmp_path / ".culprit-replay-tl",
+               (), run=run, projects_dir=tmp_path / "p")
+    assert next(kwargs for command, kwargs in run.calls if command[0] == "claude")["timeout"] == 2400
 
 
 def test_the_command_is_locked_down_and_carries_every_setting():
@@ -51,7 +70,7 @@ def test_the_command_is_locked_down_and_carries_every_setting():
     assert replay_prompt(settings(context_preamble="FILES")) == "FILES\n\nfix the bug"
     for required in ["--output-format stream-json", "--verbose", "--strict-mcp-config",
                      '--mcp-config {"mcpServers":{}}', "--permission-prompts none", "--permission-mode auto",
-                     "--no-session-persistence", "--max-budget-usd 2.00", "--model claude-opus-5",
+                     "--no-session-persistence", "--max-budget-usd 10.00", "--model claude-opus-5",
                      "--tools default"]:
         assert required in joined
     assert "--append-system-prompt" not in joined and "verify first" not in joined  # it goes into CLAUDE.md

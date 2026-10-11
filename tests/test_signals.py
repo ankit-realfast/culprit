@@ -50,3 +50,23 @@ def test_unparseable_timestamps_leave_duration_zero(write_session):
     episode = only_episode(write_session, [human("x", "p1"), odd, interrupt("p1")])
     assert signals_for(episode).duration_s == 0.0
 
+
+
+def test_an_episodes_cost_is_the_running_total_it_ends_on_less_the_one_before_it(write_session):
+    from culprit.logs import episode_cost_usd
+    from records import cost_state
+    first, second, third = episodes_from_session(write_session([
+        human("a", "p1"), assistant(), cost_state(1.5),
+        human("b", "p2"), assistant(), cost_state(4.0),
+        human("c", "p3"), assistant()]))
+    assert episode_cost_usd(first) == 1.5  # a session's first episode starts from nothing
+    assert episode_cost_usd(second) == 2.5
+    assert episode_cost_usd(third) is None  # no running total recorded after it
+
+
+def test_a_follow_up_with_no_earlier_running_total_has_no_known_cost(write_session):
+    from culprit.logs import episode_cost_usd
+    from records import cost_state
+    _, second = episodes_from_session(write_session([human("a", "p1"), assistant(),
+                                                     human("b", "p2"), assistant(), cost_state(4.0)]))
+    assert episode_cost_usd(second) is None  # 4.0 includes the first episode's spend

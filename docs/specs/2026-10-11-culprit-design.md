@@ -201,9 +201,17 @@ claude -p \                      # the episode or variant prompt goes on stdin
   `acceptEdits`, because in the original the human approved those prompts and no human is present now.
 - **Cleanup:** after each replay culprit deletes the clone, the forked session copy, and the clone's
   folder under `~/.claude/projects/` when nothing but an empty `memory/` folder is left in it.
-- **Spend:** `--max-budget-usd` per replay ($2 by default; the harness variant doubles it), each model
-  call capped at $0.50, and built-in caps that stop further replays: $850 per episode, $650 per planted
-  fault, $17,000 for a whole-queue `diagnose` (see §5).
+- **Spend and time:** each replay's caps follow the original episode. `--max-budget-usd` is 3× what the
+  episode cost, at least $10 (the harness variant doubles it); the time limit is 3× how long it took, at
+  least 1,800 s. The cost is the session's running total (`cost-state` records' `totalCostUSD`) at the
+  episode's last such record less the last one before it (nothing before a session's first episode); with no
+  record inside the episode, or none before a follow-up, it is unknown and the floor applies — measured
+  2026-10-11, 79 of 5,256 real episodes (1.5%) had one. The duration is the failure signals' (the sum of its
+  `turn_duration` records, else its first-to-last timestamp span; 90% have `turn_duration`). Each model call is
+  capped at $0.50. Built-in caps stop further replays: per episode and per planted fault, the worst case at
+  N = 10 for that episode's per-replay cap (rounded up to $50: $3,600 and $2,650 at the $10 floor), and
+  for a whole-queue `diagnose` 20 episodes at the floor's worst case ($72,000), inside which each episode
+  keeps its own cap (see §5). The plan printed before spending shows the per-replay cap.
 
 ### Which episodes are replayable
 
@@ -316,7 +324,8 @@ Every verdict states the numbers behind it — the baseline's pass count, the wi
   bug): an intervention shows what made it pass, not who must change it. The human reads the evidence.
 - Cost: about 60 replays per episode (baseline ×10 plus five variants ×10), ~50 minutes at the median turn
   length. Built-in caps are a safety net sized from the worst case at N = 10 (every oracle, combined and
-  every pair, all void retries): $850 per episode, $650 per planted fault, $17,000 per queue. v1 is capped at 10–20 episodes.
+  every pair, all void retries) at the episode's per-replay cap: $3,600 per episode and $2,650 per planted
+  fault at the $10 floor, $72,000 per queue. v1 is capped at 10–20 episodes.
 - The logs are client work; everything runs locally and only the model calls Claude Code already makes
   leave the machine.
 
