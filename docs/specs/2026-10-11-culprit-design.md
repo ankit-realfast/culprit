@@ -156,6 +156,15 @@ its tier), so culprit follows new releases without a code change: the model orac
 drafting, leak-check and judge call `sonnet`, and selftest's weak-model fault `haiku`. `CULPRIT_ORACLE_MODEL`,
 `CULPRIT_DRAFTING_MODEL` and `CULPRIT_WEAK_MODEL` pin another alias or id; each is read when it is used.
 
+culprit knows four families (`fable`, `opus`, `sonnet`, `haiku`, parsed from ids like `claude-<family>-<version>`).
+A model of any other family may be a newer, stronger tier the oracle alias does not cover, so when the logs show
+one, `triage` (once per run, listing every such id among the episodes it scanned) and single-episode `diagnose`
+print a one-line warning on stderr: "your sessions used <id>; if it is stronger than <resolved oracle>, set
+CULPRIT_ORACLE_MODEL=<id>". `triage` calls no model, so it names the oracle as last resolved (or by its alias);
+`diagnose` resolves it first. No warning is given for the model `CULPRIT_ORACLE_MODEL` already names. Only the
+unknown-family case is warned about: whether a known family's newer release outranks Fable is not knowable from
+the logs.
+
 ### The command line
 
 Eight commands: `triage`, `confirm`, `env-fix`, `diagnose`, `report`, `status`, `review` and `selftest`.

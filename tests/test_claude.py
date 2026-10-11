@@ -151,3 +151,10 @@ def test_an_alias_that_cannot_be_resolved_is_not_cached(tmp_path, monkeypatch):
     monkeypatch.setattr(model, "resolve_alias", lambda alias: model.Resolution(None, 0.05))
     assert model.resolved_model(tmp_path / "runs", "fable") == model.Resolution(None, 0.05)
     assert model.cached_model(tmp_path / "runs", "fable") is None
+
+
+def test_model_families_are_parsed_from_ids_and_aliases():
+    from culprit.model import model_family
+    assert [model_family(m) for m in ["claude-opus-4-8", "claude-opus-5-5", "claude-sonnet-4-6", "claude-fable-5",
+                                      "fable", "claude-3-5-sonnet-20241022", "claude-mythos-1", "<synthetic>", None]] \
+        == ["opus", "opus", "sonnet", "fable", "fable", "sonnet", "mythos", None, None]

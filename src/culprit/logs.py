@@ -276,11 +276,12 @@ class EpisodeSummary:
     prompt_excerpt: str
     signals: FailureSignals
     slash_command: bool = False
+    model: str | None = None
 
     @classmethod
     def from_episode(cls, episode: Episode) -> EpisodeSummary:
         return cls(episode.episode_id, str(episode.session_file), excerpt(episode.prompt_text), signals_for(episode),
-                   is_slash_command(episode.prompt_text))
+                   is_slash_command(episode.prompt_text), episode.model)
 
 
 def summarize_session(session_file: Path) -> list[EpisodeSummary]:

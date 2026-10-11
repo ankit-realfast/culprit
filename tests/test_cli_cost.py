@@ -135,3 +135,29 @@ def test_an_episode_that_cost_more_gets_a_bigger_per_replay_and_episode_cap(writ
     err = capsys.readouterr().err
     assert "per replay: up to $18.00" in err  # 3 × $6.00
     assert f"cap ${cli.episode_cap_usd(18.0):.2f}" in err
+
+
+def test_diagnose_resolves_the_oracle_first_and_warns_about_an_unknown_model(write_session, tmp_path, capsys, spy):
+    from records import assistant
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_session([snapshot("u-p1", {}), human("fix a", "p1", session_id="s1", cwd=str(repo)),
+                   assistant(model="claude-mythos-1")], name="s1.jsonl")
+    runs = tmp_path / "runs"
+    save_criterion(runs, "s1:p1", Criterion("works", (), (), approved=True))
+    (episode_dir(runs, "s1:p1") / "pristine").mkdir(parents=True)
+    (episode_dir(runs, "s1:p1") / "symptom.json").write_text('{"episode_id": "s1:p1", "symptom": "wrong-result"}')
+    assert cli.main(["diagnose", "s1:p1"]) == 0
+    err = capsys.readouterr().err
+    assert ("warning: your sessions used claude-mythos-1; if it is stronger than claude-fable-5-1, set "
+            "CULPRIT_ORACLE_MODEL=claude-mythos-1") in err
+    assert json.loads((runs / "models.json").read_text())["fable"]["model"] == "claude-fable-5-1"
+
+
+def test_a_paid_resolution_before_diagnose_is_charged_to_the_episode(write_session, tmp_path, monkeypatch, spy):
+    import culprit.model as model
+    from culprit.diagnose import stored_spend
+    monkeypatch.setattr(model, "resolve_alias", lambda alias: model.Resolution("claude-fable-5-1", 0.05))
+    ready(write_session, tmp_path)
+    assert cli.main(["diagnose", "s1:p1"]) == 0
+    assert stored_spend(episode_dir(tmp_path / "runs", "s1:p1")) == 0.05

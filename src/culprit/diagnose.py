@@ -18,7 +18,7 @@ from culprit.logs import (Episode, EpisodeNotFound, find_episode, follow_up_prom
                           records_before, text_of, tool_uses)
 from culprit.model import (CALL_CAP_USD, KNOWN_FAMILIES, MODEL_RAN_KEY, Ask, ClaudeCallFailed, Criterion, Judgement, ask_claude, check_leak,
                            cached_model, criterion_step, judge_replay, load_criterion, model_family,
-                           resolved_model)
+                           resolved_model, unknown_models)
 from culprit.replay import (MAX_EFFORT, MEMORY_DIR, REPLAY_BUDGET_FLOOR_USD, RESULT_FILE, ReplaySettings, SetupScriptFailed, baseline_settings,
                             claude_md_target, replay_workdir, run_replay, settings_from_json, settings_to_json,
                             target_inside)
@@ -685,6 +685,19 @@ def harness_context(episode: Episode, pristine: Path) -> str:
 def oracle_model() -> str:
     """The model the model oracle tries: $CULPRIT_ORACLE_MODEL, else the fable alias (read on every call)."""
     return os.environ.get(ORACLE_MODEL_ENV) or ORACLE_MODEL
+
+
+def unknown_model_warning(models, oracle_shown: str) -> str | None:
+    """A one-line warning when the episodes ran on a model of a family culprit does not know (it may be stronger
+    than the oracle), naming what the oracle is; None when there is none or it is already the oracle model."""
+    unknown = [m for m in unknown_models(models) if m != oracle_model()]
+    if not unknown:
+        return None
+    if len(unknown) == 1:
+        return (f"your sessions used {unknown[0]}; if it is stronger than {oracle_shown}, set "
+                f"{ORACLE_MODEL_ENV}={unknown[0]}")
+    return (f"your sessions used {', '.join(unknown)}; if one is stronger than {oracle_shown}, set "
+            f"{ORACLE_MODEL_ENV}=<its id>")
 
 
 def on_oracle(model: str | None, oracle_id: str | None) -> bool:

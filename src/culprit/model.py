@@ -127,6 +127,11 @@ def model_family(model: str | None) -> str | None:
     return known[0] if model.startswith("claude-") and known else None
 
 
+def unknown_models(models) -> list[str]:
+    """The model ids, among those given, whose family culprit does not know (sorted, each once)."""
+    return sorted({m for m in models if model_family(m) and model_family(m) not in KNOWN_FAMILIES})
+
+
 @dataclass(frozen=True)
 class Resolution:
     model: str | None  # the id the alias resolved to; None when it could not be resolved

@@ -18,12 +18,13 @@ from culprit.diagnose import (BASELINE, DRAFTED_CAUSES, ENV_FIX_FILE, BudgetExha
                               ReplayEvent, VariantOutcome, batch_cost, diagnose, diagnose_all, diagnose_cost,
                               costs_line, diagnose_cost_for, env_fix_script, known_oracle_id, limit_tally,
                               limits_line, load_outcome, load_verdict, models_line, numbers_line, plan_cost, tokens_per_run, usd_per_run,
-                              pristine_dir, retire_if_criterion_changed, run_variant, stored_spend)
+                              oracle_model, pristine_dir, record_call_spend, retire_if_criterion_changed, run_variant,
+                              stored_spend, unknown_model_warning)
 from culprit.logs import (Episode, EpisodeNotFound, FailureSignals, excerpt, find_episode, follow_up_prompts,
                           load_snapshot, project_hooks, rank_candidates, replay_blockers, session_files, session_root,
                           summarize_session)
-from culprit.model import (CRITERION_FILE, LIMIT_WORDS, ClaudeCallFailed, Criterion, approve_criterion, ask_claude, criterion_step,
-                           draft_criterion, load_criterion, save_criterion)
+from culprit.model import (CRITERION_FILE, LIMIT_WORDS, ClaudeCallFailed, Criterion, approve_criterion, ask_claude,
+                           criterion_step, draft_criterion, load_criterion, resolved_model, save_criterion)
 from culprit.replay import (REPLAY_BUDGET_FLOOR_USD, OriginalModified, SetupScriptFailed, apply_episode_originals,
                             baseline_settings, check_restore, episode_originals, restore, restore_from_git)
 from culprit.report import (REPORT_FILE, STAGES, EpisodeStatus, collect, episode_status, next_step, queue_status,
@@ -330,6 +331,9 @@ def triage_command(args: argparse.Namespace) -> int:
           f"refer to an episode by its row number, short id or any unique prefix")
     if len(queue) > len(candidates):
         print(f"{len(queue) - len(candidates)} more queued, not in this top {len(candidates)} — see `culprit status`")
+    # triage calls no model: the oracle is named as last resolved, or by its alias
+    if warning := unknown_model_warning((s.model for s in summaries), known_oracle_id(args.runs) or oracle_model()):
+        print(f"culprit: warning: {warning}", file=sys.stderr)
     return 0
 
 
@@ -677,6 +681,12 @@ def diagnose_command(args: argparse.Namespace) -> int:
     folder = episode_dir(args.runs, args.episode_id)
     env_script = env_fix_script(folder)
     base = baseline_settings(episode)
+    # what the oracle alias means today, before the preview counts the model oracle; a paid resolution is the episode's
+    oracle = resolved_model(args.runs, oracle_model())
+    if oracle.usd:
+        record_call_spend(folder, oracle.usd)
+    if warning := unknown_model_warning([episode.model], oracle.model or oracle_model()):
+        print(f"culprit: warning: {warning}", file=sys.stderr)
     cap = episode_cap_usd(base.max_budget_usd)
     budget = EpisodeBudget(cap, spent_usd=stored_spend(folder))
     show_plan(diagnose_cost_for(folder, criterion, base.max_budget_usd, model=base.model, effort=base.effort,

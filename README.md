@@ -83,6 +83,9 @@ uv run culprit status [1]          # where episodes stand and the next command
 - **Models:** named by Claude Code alias, which means the latest model of that tier: the model oracle tries
   `fable`, drafting and judging use `sonnet`, and selftest's weak model is `haiku`. Pin another with
   `CULPRIT_ORACLE_MODEL`, `CULPRIT_DRAFTING_MODEL` or `CULPRIT_WEAK_MODEL` (an alias or a full model id).
+  If your logs show a model of a family culprit doesn't know (not fable, opus, sonnet or haiku), `triage` and
+  `diagnose` print a one-line warning on stderr: "your sessions used <id>; if it is stronger than
+  claude-fable-5-1, set CULPRIT_ORACLE_MODEL=<id>".
 - **Output:** results go to stdout. Progress (one line per replay, plus a heartbeat every 30 s) and
   `next:` hints go to stderr. `status --json` prints one JSON document.
 - **Exit codes:** 0 done · 1 refused or failed · 2 bad arguments · 3 a prior step is missing · 4 spend

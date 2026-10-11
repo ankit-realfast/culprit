@@ -135,3 +135,36 @@ def test_triage_rows_are_numbered_contiguously_when_kept_episodes_are_not_shown(
     assert main(["confirm", "1", "wasteful"]) == 0
     assert read_symptom(runs, "s2:p4").value == "wasteful"
 
+
+
+def test_triage_warns_once_about_models_of_a_family_culprit_does_not_know(write_session, tmp_path, capsys):
+    write_session([human("a", "p1", session_id="s1"), assistant(model="claude-mythos-1"), interrupt("p1"),
+                   human("b", "p2", session_id="s1"), assistant(model="claude-mythos-1"),
+                   human("c", "p3", session_id="s1"), assistant(model="claude-opus-4-8")])
+    main(["triage"])
+    err = capsys.readouterr().err
+    assert err.count("warning:") == 1
+    assert ("your sessions used claude-mythos-1; if it is stronger than fable, set "
+            "CULPRIT_ORACLE_MODEL=claude-mythos-1") in err
+
+
+def test_the_triage_warning_names_what_the_oracle_resolved_to_and_every_unknown_id(write_session, tmp_path, capsys):
+    import json
+    import time
+    write_session([human("a", "p1", session_id="s1"), assistant(model="claude-mythos-1"), interrupt("p1"),
+                   human("b", "p2", session_id="s1"), assistant(model="claude-zeta-2")])
+    (tmp_path / "runs").mkdir()
+    (tmp_path / "runs" / "models.json").write_text(json.dumps({"fable": {"model": "claude-fable-5-1",
+                                                                         "at": time.time()}}))
+    main(["triage"])
+    assert ("your sessions used claude-mythos-1, claude-zeta-2; if one is stronger than claude-fable-5-1, set "
+            "CULPRIT_ORACLE_MODEL=<its id>") in capsys.readouterr().err
+
+
+def test_triage_says_nothing_about_known_families_or_the_model_already_chosen(write_session, monkeypatch, capsys):
+    write_session([human("a", "p1", session_id="s1"), assistant(model="claude-mythos-1"), interrupt("p1"),
+                   human("b", "p2", session_id="s1"), assistant(model="claude-sonnet-4-6"),
+                   human("c", "p3", session_id="s1"), assistant(model="<synthetic>")])
+    monkeypatch.setenv("CULPRIT_ORACLE_MODEL", "claude-mythos-1")
+    main(["triage"])
+    assert "warning" not in capsys.readouterr().err
