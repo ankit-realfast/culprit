@@ -45,6 +45,7 @@ def isolated_from_real_data(tmp_path, monkeypatch):
     import culprit.cli as cli
     import culprit.diagnose as diagnose
     import culprit.logs as logs
+    import culprit.model as model
     import culprit.replay as replay
 
     cwd = tmp_path / "cwd"
@@ -59,6 +60,10 @@ def isolated_from_real_data(tmp_path, monkeypatch):
     monkeypatch.setattr(diagnose, "MANAGED_INSTRUCTIONS", (tmp_path / "no-real-policy" / "CLAUDE.md",))
     monkeypatch.setattr(diagnose, "MANAGED_SETTINGS", (tmp_path / "no-real-policy" / "managed-settings.json",))
     monkeypatch.setattr(diagnose, "ANCESTOR_ROOT", tmp_path)
+    # what an alias means today is asked of claude: answer as Claude Code 2.1.296 did on 2026-10-11, for free
+    today = {"fable": "claude-fable-5-1", "opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5",
+             "haiku": "claude-haiku-5-5"}
+    monkeypatch.setattr(model, "resolve_alias", lambda alias: model.Resolution(today.get(alias, alias), 0.0))
     # the CLI drafts a criterion on confirm; tests that care about the draft install their own FakeAsk
     monkeypatch.setattr(cli, "ask_claude", lambda prompt, schema: {"success_means": "works", "checks": [],
                                                                    "must_not": []})

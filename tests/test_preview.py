@@ -45,9 +45,12 @@ def test_plans_add_up_and_a_shared_total_caps_them():
 
 def test_on_disk_missing_env_fix_and_a_fable_episode_drop_their_oracles(tmp_path):
     plan = diagnose_cost_for(tmp_path, CRITERION, 1.0, model="claude-fable-5-1", effort="max", env_fix=False, n=5,
-                             spent_usd=0.0, cap_usd=1e4)
+                             spent_usd=0.0, cap_usd=1e4, oracle_id="claude-fable-5-1")
     # task, agent-setup, harness: baseline + 3 + combined + 3 pairs
     assert plan.replays == 8 * 10 and plan.calls == 8
+    older = diagnose_cost_for(tmp_path, CRITERION, 1.0, model="claude-fable-5", effort="max", env_fix=False, n=5,
+                              spent_usd=0.0, cap_usd=1e4, oracle_id="claude-fable-5-1")
+    assert older.replays > plan.replays  # an older Fable still tests the model oracle
 
 
 def test_on_disk_reuses_drafted_variants_stored_outcomes_and_skips_untested_ones(tmp_path):
@@ -107,7 +110,7 @@ def test_the_model_oracle_adds_the_original_model_at_max_effort_unless_the_episo
     with_step = diagnose_cost(1.0, [Cause.MODEL], n=5, spent_usd=0.0, cap_usd=1e4, effort_step=True)
     assert with_step.replays == 30  # baseline, Fable at max effort, the original model at max effort
     on_fable = diagnose_cost_for(tmp_path, CRITERION, 1.0, model="claude-fable-5-1", effort="high", env_fix=False,
-                                 n=5, spent_usd=0.0, cap_usd=1e4)
+                                 n=5, spent_usd=0.0, cap_usd=1e4, oracle_id="claude-fable-5-1")
     on_opus = diagnose_cost_for(tmp_path, CRITERION, 1.0, model="claude-opus-5", effort="high", env_fix=False,
                                 n=5, spent_usd=0.0, cap_usd=1e4)
     # opus: baseline + 4 oracles + combined + 6 pairs + the effort step; fable at high: the same minus the step

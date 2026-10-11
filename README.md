@@ -39,7 +39,8 @@ guesses the cause.
    Replays keep the effort level the episode logged. When Fable at max effort passes, the original model
    at max effort is replayed too, and the model verdict says which fix it points at: "raise effort
    (original model at max effort also passed)" or "needs Fable (original model at max effort did not
-   pass)". An episode already on Fable is tested at max effort only if it ran lower.
+   pass)". An episode already on what `fable` means today (resolved for free and kept a day in
+   `runs/models.json`) is tested at max effort only if it ran lower; one on an older Fable is tested as usual.
 
    If no single change works, the changes are tried together and in pairs: **multi-cause**, or
    **unexplained** if nothing works. Each verdict shows its numbers, e.g.

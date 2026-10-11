@@ -89,17 +89,38 @@ def test_the_oracle_model_is_the_fable_alias_unless_culprit_oracle_model_says_ot
     assert build(Cause.MODEL, episode_with(write_session, tmp_path), tmp_path).settings.model == "claude-fable-6"
 
 
-def test_the_model_oracle_is_untested_for_an_episode_already_on_fable_at_max_effort(write_session, tmp_path):
-    built = build(Cause.MODEL, episode_with(write_session, tmp_path), tmp_path,
-                  base=replace(BASE, model="claude-fable-5", effort="max"))
+def test_the_model_oracle_is_untested_for_an_episode_already_on_the_resolved_oracle_at_max_effort(write_session,
+                                                                                                 tmp_path):
+    episode = episode_with(write_session, tmp_path)
+    built = build_variant(Cause.MODEL, replace(BASE, model="claude-fable-5-1", effort="max"), episode=episode,
+                          follow_ups=[], criterion=CRITERION, symptom=Symptom.WRONG_RESULT,
+                          pristine=tmp_path / "pristine", env_script=None, ask=FakeAsk(),
+                          oracle_id="claude-fable-5-1")
     assert built.settings is None
-    assert "already ran on Fable at max effort" in built.untested_reason
+    assert "already ran on claude-fable-5-1 (what fable means today) at max effort" in built.untested_reason
 
 
-def test_an_episode_on_fable_at_lower_effort_tests_fable_at_max_effort(write_session, tmp_path):
+def test_an_older_fable_at_max_effort_is_tested_against_the_latest_fable(write_session, tmp_path):
+    episode = episode_with(write_session, tmp_path)
+    base = replace(BASE, model="claude-fable-5", effort="max")
+    built = build_variant(Cause.MODEL, base, episode=episode, follow_ups=[], criterion=CRITERION,
+                          symptom=Symptom.WRONG_RESULT, pristine=tmp_path / "pristine", env_script=None,
+                          ask=FakeAsk(), oracle_id="claude-fable-5-1")
+    assert built.settings == replace(base, model="fable", effort="max")
+
+
+def test_an_unresolved_oracle_never_skips_the_model_oracle(write_session, tmp_path):
+    built = build(Cause.MODEL, episode_with(write_session, tmp_path), tmp_path,
+                  base=replace(BASE, model="claude-fable-5-1", effort="max"))
+    assert built.settings == replace(BASE, model="fable", effort="max")
+
+
+def test_an_episode_on_the_oracle_at_lower_effort_tests_it_at_max_effort(write_session, tmp_path):
     for effort in ("xhigh", None):  # an unrecorded effort was the default, which is not max
         base = replace(BASE, model="claude-fable-5-1", effort=effort)
-        built = build(Cause.MODEL, episode_with(write_session, tmp_path), tmp_path, base=base)
+        built = build_variant(Cause.MODEL, base, episode=episode_with(write_session, tmp_path), follow_ups=[],
+                              criterion=CRITERION, symptom=Symptom.WRONG_RESULT, pristine=tmp_path / "pristine",
+                              env_script=None, ask=FakeAsk(), oracle_id="claude-fable-5-1")
         assert built.settings == replace(base, effort="max")
 
 

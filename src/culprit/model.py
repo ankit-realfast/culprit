@@ -6,12 +6,15 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 from dataclasses import asdict, dataclass, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
 from culprit.logs import Episode
-from culprit.replay import DIFF_FILE, LIMIT_BUDGET, LIMIT_TIME, NO_MCP_SERVERS, TRANSCRIPT_FILE, ReplayResult
+from culprit.replay import (DIFF_FILE, LIMIT_BUDGET, LIMIT_TIME, NO_MCP_SERVERS, TRANSCRIPT_FILE, ReplayResult,
+                            ran_as)
 from culprit.store import NotReady, display_id, episode_dir, read_json, write_json
 
 
@@ -89,6 +92,88 @@ def model_used(payload: dict) -> str | None:
         return None
     return max(usage, key=lambda name: (usage[name] or {}).get("outputTokens") or 0
                if isinstance(usage[name], dict) else 0)
+
+
+# --- resolve: What an alias means today. ---
+# `--model fable` runs the latest Fable, so deciding whether an episode already ran on the strongest model needs the
+# id the alias stands for. A local slash command answers that for free: Claude Code handles `/cost` without calling
+# a model, yet its stream-json init event still names the resolved model (verified 2026-10-11 on 2.1.296: fable →
+# claude-fable-5-1, total_cost_usd 0, num_turns 0). Should a build stop doing that, one trivial call capped at
+# RESOLVE_CAP_USD reads the same event. The answer is kept in the store for a day.
+
+MODELS_FILE = "models.json"  # in the store: each alias's resolved id and when it was resolved
+RESOLVE_MAX_AGE_S = 24 * 3600
+RESOLVE_CAP_USD = 0.05
+RESOLVE_TIMEOUT_S = 120
+FREE_PROBE = "/cost"
+PAID_PROBE = "Reply with the single word OK."
+
+
+@dataclass(frozen=True)
+class Resolution:
+    model: str | None  # the id the alias resolved to; None when it could not be resolved
+    usd: float  # what resolving it spent
+
+
+def resolve_command(alias: str) -> list[str]:
+    return [os.environ.get("CULPRIT_CLAUDE_BIN", "claude"), "-p",
+            "--model", alias,
+            "--output-format", "stream-json", "--verbose",
+            "--tools", "",
+            "--strict-mcp-config", "--mcp-config", NO_MCP_SERVERS,
+            "--permission-prompts", "none",
+            "--no-session-persistence",
+            "--max-budget-usd", f"{RESOLVE_CAP_USD:.2f}"]
+
+
+def _probe(alias: str, prompt: str, run, cwd: Path) -> tuple[str | None, float | None]:
+    """The model the probe's init event names and what its result line says it cost (None when unknown)."""
+    try:
+        completed = run(resolve_command(alias), input=prompt, capture_output=True, text=True,
+                        timeout=RESOLVE_TIMEOUT_S, cwd=cwd)
+    except (subprocess.TimeoutExpired, OSError):
+        return None, None
+    cost = None
+    for line in completed.stdout.splitlines():
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict) and record.get("type") == "result" and record.get("total_cost_usd") is not None:
+            cost = float(record["total_cost_usd"])
+    return ran_as(completed.stdout), cost
+
+
+def resolve_alias(alias: str, run=subprocess.run, cwd: Path = CALLS_DIR) -> Resolution:
+    """What `--model <alias>` runs as today: free through a local command, else one capped trivial call."""
+    cwd.mkdir(parents=True, exist_ok=True)
+    model, cost = _probe(alias, FREE_PROBE, run, cwd)
+    spent = cost or 0.0
+    if model:
+        return Resolution(model, spent)
+    model, cost = _probe(alias, PAID_PROBE, run, cwd)
+    return Resolution(model, round(spent + (cost if cost is not None else RESOLVE_CAP_USD), 4))
+
+
+def cached_model(runs_dir: Path, alias: str, now: float | None = None) -> str | None:
+    """The alias's resolved id if the store resolved it within the last day; never calls anything."""
+    entry = read_json(runs_dir / MODELS_FILE, {}).get(alias) or {}
+    fresh = (now if now is not None else time.time()) - float(entry.get("at") or 0) < RESOLVE_MAX_AGE_S
+    return entry.get("model") if fresh else None
+
+
+def resolved_model(runs_dir: Path, alias: str, now: float | None = None) -> Resolution:
+    """The alias's resolved id: from the store when resolved within a day, else resolved now and stored."""
+    now = now if now is not None else time.time()
+    if (cached := cached_model(runs_dir, alias, now)) is not None:
+        return Resolution(cached, 0.0)
+    resolution = resolve_alias(alias)  # looked up when called, so tests can stand a fake in
+    if resolution.model:
+        stored = read_json(runs_dir / MODELS_FILE, {})
+        stored[alias] = {"model": resolution.model, "at": now,
+                         "resolved_at": datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds")}
+        write_json(runs_dir / MODELS_FILE, stored)
+    return resolution
 
 
 # --- criterion ---

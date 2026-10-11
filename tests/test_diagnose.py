@@ -256,3 +256,44 @@ def test_an_episode_already_at_max_effort_needs_no_effort_step_to_say_it_needs_f
                        run=run, build=build_all_tested(untested=(Cause.ENVIRONMENT,)))
     assert "original-max-effort" not in [name for name, _ in run.calls]
     assert "needs Fable (the original model already ran at max effort" in verdict.evidence
+
+
+def model_only_build(cause, base, **kwargs):
+    from culprit.diagnose import build_variant
+    if cause is Cause.MODEL:
+        return build_variant(cause, base, **kwargs)
+    return VariantBuild(None, "untested")
+
+
+def test_diagnose_resolves_the_oracle_alias_and_tests_an_older_fable_against_it(write_session, tmp_path):
+    (episode,) = episodes_from_session(write_session([human("fix", "p1", session_id="s1", cwd=str(tmp_path))]))
+    run = scripted_run({"baseline": 0, "model": 0})
+    verdict = diagnose(episode, CRITERION, Symptom.WRONG_RESULT, replace(BASE, model="claude-fable-5", effort="max"),
+                       runs_dir=tmp_path / "runs", follow_ups=[], env_script=None, n=5, budget=EpisodeBudget(100.0),
+                       run=run, build=model_only_build)
+    assert [name for name, _ in run.calls] == ["baseline", "model"]
+    assert run.calls[1][1].model == "fable"
+    assert "model" not in verdict.untested
+
+
+def test_an_episode_on_what_the_oracle_means_today_at_max_effort_skips_the_model_oracle(write_session, tmp_path):
+    (episode,) = episodes_from_session(write_session([human("fix", "p1", session_id="s1", cwd=str(tmp_path))]))
+    run = scripted_run({"baseline": 0})
+    verdict = diagnose(episode, CRITERION, Symptom.WRONG_RESULT, replace(BASE, model="claude-fable-5-1", effort="max"),
+                       runs_dir=tmp_path / "runs", follow_ups=[], env_script=None, n=5, budget=EpisodeBudget(100.0),
+                       run=run, build=model_only_build)
+    assert [name for name, _ in run.calls] == ["baseline"]
+    assert "claude-fable-5-1" in verdict.untested["model"]
+
+
+def test_a_paid_resolution_is_charged_to_the_episode(write_session, tmp_path, monkeypatch):
+    import culprit.model as model
+    from culprit.diagnose import stored_spend
+    monkeypatch.setattr(model, "resolve_alias", lambda alias: model.Resolution("claude-fable-5-1", 0.05))
+    (episode,) = episodes_from_session(write_session([human("fix", "p1", session_id="s1", cwd=str(tmp_path))]))
+    budget = EpisodeBudget(100.0)
+    diagnose(episode, CRITERION, Symptom.WRONG_RESULT, BASE, runs_dir=tmp_path / "runs", follow_ups=[],
+             env_script=None, n=5, budget=budget, run=scripted_run({"baseline": 0, "model": 0}),
+             build=model_only_build)
+    assert budget.spent_usd == 0.05
+    assert stored_spend(episode_dir(tmp_path / "runs", "s1:p1")) == 0.05

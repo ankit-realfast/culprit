@@ -3,6 +3,7 @@ import json
 import pytest
 
 from culprit.model import ClaudeCallFailed, ask_claude, structured_call_command
+from culprit.model import resolve_alias  # the real one: conftest stands a fake in for culprit.model.resolve_alias
 from fakes import completed
 
 SCHEMA = {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]}
@@ -80,3 +81,73 @@ def test_calls_ask_for_the_sonnet_alias_unless_culprit_drafting_model_says_other
     monkeypatch.setenv("CULPRIT_DRAFTING_MODEL", "claude-sonnet-5-5")
     ask_claude("q", SCHEMA, run=run, cwd=tmp_path)
     assert [c[c.index("--model") + 1] for c in commands] == ["sonnet", "claude-sonnet-5-5"]
+
+
+INIT = json.dumps({"type": "system", "subtype": "init", "model": "claude-fable-5-1"})
+
+
+def stream_result(cost):
+    return json.dumps({"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": cost,
+                       "num_turns": 0})
+
+
+def test_an_alias_is_resolved_for_free_by_a_local_command_that_still_names_the_model(tmp_path):
+    from culprit.model import Resolution
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return completed(INIT + "\n" + stream_result(0) + "\n")
+
+    assert resolve_alias("fable", run=run, cwd=tmp_path) == Resolution("claude-fable-5-1", 0.0)
+    [(command, kwargs)] = calls
+    joined = " ".join(command)
+    for required in ["-p", "--model fable", "--output-format stream-json", "--verbose", "--no-session-persistence",
+                     "--max-budget-usd 0.05", "--strict-mcp-config", "--permission-prompts none"]:
+        assert required in joined
+    assert command[command.index("--tools") + 1] == ""
+    assert kwargs["input"] == "/cost" and kwargs["cwd"] == tmp_path
+
+
+def test_when_the_free_way_names_no_model_one_capped_trivial_call_does(tmp_path):
+    from culprit.model import RESOLVE_CAP_USD, Resolution
+    inputs = []
+
+    def run(command, **kwargs):
+        inputs.append(kwargs["input"])
+        return completed(stream_result(0)) if len(inputs) == 1 else completed(INIT + "\n" + stream_result(0.003))
+
+    assert resolve_alias("fable", run=run, cwd=tmp_path) == Resolution("claude-fable-5-1", 0.003)
+    assert inputs[0] == "/cost" and inputs[1] != "/cost"
+
+    def broken(command, **kwargs):
+        return completed("", stderr="boom", returncode=1)
+
+    # a paid attempt that reports no cost is charged at its cap
+    assert resolve_alias("fable", run=broken, cwd=tmp_path) == Resolution(None, RESOLVE_CAP_USD)
+
+
+def test_a_resolved_alias_is_cached_in_the_store_for_a_day(tmp_path, monkeypatch):
+    import culprit.model as model
+    asked = []
+
+    def resolve(alias):
+        asked.append(alias)
+        return model.Resolution(f"claude-{alias}-{len(asked)}", 0.05)
+
+    monkeypatch.setattr(model, "resolve_alias", resolve)
+    runs = tmp_path / "runs"
+    assert model.resolved_model(runs, "fable", now=1000.0) == model.Resolution("claude-fable-1", 0.05)
+    assert model.resolved_model(runs, "fable", now=1000.0 + 3600) == model.Resolution("claude-fable-1", 0.0)
+    assert model.cached_model(runs, "fable", now=1000.0 + 3600) == "claude-fable-1"
+    assert json.loads((runs / "models.json").read_text())["fable"]["model"] == "claude-fable-1"
+    assert model.resolved_model(runs, "fable", now=1000.0 + 86400 + 1).model == "claude-fable-2"
+    assert model.cached_model(runs, "opus") is None
+    assert asked == ["fable", "fable"]
+
+
+def test_an_alias_that_cannot_be_resolved_is_not_cached(tmp_path, monkeypatch):
+    import culprit.model as model
+    monkeypatch.setattr(model, "resolve_alias", lambda alias: model.Resolution(None, 0.05))
+    assert model.resolved_model(tmp_path / "runs", "fable") == model.Resolution(None, 0.05)
+    assert model.cached_model(tmp_path / "runs", "fable") is None

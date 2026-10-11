@@ -235,7 +235,7 @@ hook the project's own settings define, because those hooks run in every replay.
 | Environment | A fix script the human supplies (`culprit env-fix`) runs in the clone before the replay | No script supplied (the common case in v1) |
 | Agent setup | Standing instructions drafted from the criterion, the instructions the agent already loads and the starting folder layout (gaps filled, no task-specific facts, at most 12 lines), appended to the clone's project `CLAUDE.md` under a `## More working rules` heading before Claude starts (`.claude/CLAUDE.md` when only that exists; a new `CLAUDE.md` when neither does) — the way the real fix would arrive, as a user message, not through the stronger `--append-system-prompt` channel. The addition is removed again before the diff, so the judge sees only the agent's changes; combined and pair variants write it too | The leak check rejects it twice |
 | Harness | The default tool set with every non-safety restriction lifted, the files the episode read or edited preloaded into the prompt as context, and double the spend cap | Never |
-| Model | `--model fable --effort max` (an episode already on Fable keeps its Fable model and only raises the effort); see the effort step below | The episode already ran on Fable at max effort |
+| Model | `--model fable --effort max` (an episode already on what `fable` means today keeps its model and only raises the effort); see the effort step below | The episode already ran on what `fable` resolves to today (an older Fable is still tested), at max effort |
 
 **The model oracle's effort step.** Every replay runs at the effort level the episode logged (the `effort`
 field on its first assistant record; none logged leaves Claude Code's default), and the model oracle may change
@@ -244,9 +244,19 @@ max). When Fable at max effort beats the baseline, one more variant runs, `origi
 own model at max effort, everything else as the baseline. The verdict stays Model — the taxonomy and cause order
 are fixed — and its evidence names the fix: "raise effort (original model at max effort also passed a/b)" when
 that variant beats the baseline too, else "needs Fable (original model at max effort did not pass: a/b)". The
-extra variant is skipped when the answer is already known: an episode on Fable at lower effort ("raise effort
+extra variant is skipped when the answer is already known: an episode on the oracle's model at lower effort ("raise effort
 (Fable at max effort passed …)"), or one that already ran at max effort ("needs Fable", from its baseline). The
 cost preview counts the extra variant whenever it could run.
+
+**What the oracle alias means today.** Whether an episode already ran on the strongest model is decided against
+the id the oracle alias resolves to, not a name prefix. culprit resolves it for free: `claude -p --model <alias>
+--output-format stream-json --verbose --tools "" --no-session-persistence --max-budget-usd 0.05` with the local
+command `/cost` on stdin answers without calling a model, yet its `init` event names the resolved model
+(verified 2026-10-11 on 2.1.296: `fable` → `claude-fable-5-1`, `opus` → `claude-opus-5-5`, $0, no turns). If a
+build stops naming it, one trivial prompt under the same $0.05 cap reads the same event, and that call's cost
+(its cap when unknown) is charged to the episode being diagnosed. The answer is kept in `runs/models.json` with
+its time and refreshed after a day; the cost preview reads only that file, and with no fresh answer it counts the
+model oracle as runnable. An alias that cannot be resolved never skips the model oracle.
 
 **Which model ran.** A replay asked for an alias runs as whatever that alias means on the day, so each replay's
 `result.json` records the model id it actually ran as: the `model` of its stream-json `init` event, else the first
@@ -342,7 +352,8 @@ in the report, and `status --json` gives each outcome's totals plus `usd_per_run
 
 - An episode in which Claude asked the human a question replays only when the log recorded the
   human's answer (the answer host gives it back); one with no recorded answer is not replayable.
-- Episodes already run on Fable at max effort cannot test the Model cause; reported as untestable.
+- Episodes already run on what `fable` resolves to today, at max effort, cannot test the Model cause; reported as
+  untestable. An episode on an older Fable (say claude-fable-5 once claude-fable-5-1 exists) is tested.
 - The Agent setup addition is an uncommitted change to the clone's `CLAUDE.md`, so an agent that runs
   `git status` or `git diff` can see it, where a real fix would be committed.
 - An MCP call or a question the original session never made cannot be answered in a replay.

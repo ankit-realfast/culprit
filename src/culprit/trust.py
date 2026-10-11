@@ -9,7 +9,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from culprit.diagnose import (BASELINE, EMPTY, JUDGEMENT_FILE, REPLAYS_DIR, CostPlan, EpisodeBudget, Progress, diagnose,
-                              diagnose_cost_for, load_outcome, load_verdict, scoped, stored_spend)
+                              diagnose_cost_for, known_oracle_id, load_outcome, load_verdict, scoped, stored_spend)
 from culprit.logs import Episode
 from culprit.model import Criterion
 from culprit.replay import DIFF_FILE, RESULT_FILE, ReplaySettings
@@ -210,6 +210,6 @@ def selftest_cost(runs_dir: Path, episode_id: str, criterion: Criterion, base: R
         planted_base, planted_criterion = plant(fault, base, criterion)
         folder = selftest_dir(runs_dir, episode_id, fault)
         total += diagnose_cost_for(folder, planted_criterion, planted_base.max_budget_usd, model=planted_base.model,
-                                   effort=planted_base.effort,
+                                   effort=planted_base.effort, oracle_id=known_oracle_id(runs_dir),
                                    env_fix=False, n=n, spent_usd=stored_spend(folder), cap_usd=budget_per_fault)
     return total
