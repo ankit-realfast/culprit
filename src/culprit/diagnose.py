@@ -375,7 +375,7 @@ Return the instructions as text, with placement and reason."""
 # What the agent knew before the episode began: the instructions Claude Code loads at launch, in its documented
 # load order (code.claude.com/docs/en/memory), and the starting layout. CLAUDE.md files in subfolders and
 # rules scoped by `paths:` load on demand during the episode, so they are left out.
-MAX_INSTRUCTIONS_CHARS = 20_000  # every instruction file the drafter sees, together
+MAX_INSTRUCTIONS_CHARS = 200_000  # every instruction file the drafter sees, together (~50k tokens; real sets reach ~60k chars)
 MAX_INSTRUCTION_FILE_BYTES = 4 * 1024 * 1024  # Claude Code skips larger files
 MAX_IMPORT_DEPTH = 5  # how deep `@path` imports are followed, as Claude Code does
 MAX_LAYOUT_ENTRIES = 150

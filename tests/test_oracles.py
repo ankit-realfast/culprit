@@ -240,6 +240,21 @@ def test_the_instruction_cap_keeps_the_files_nearest_the_working_directory(tmp_p
     assert sum(len(text) for _, text in shown) == MAX_INSTRUCTIONS_CHARS
 
 
+def test_a_real_sized_instruction_set_reaches_the_drafter_whole(tmp_path):
+    # A real project loaded ~61k characters at launch (parent CLAUDE.md, project CLAUDE.md, a large import, four
+    # rules); a cap below that hid most of what the agent knew, so the drafter repeated or contradicted it.
+    from culprit.diagnose import existing_instructions
+    cwd = tmp_path / "repo"
+    pristine = tmp_path / "pristine"
+    write_files({tmp_path / "CLAUDE.md": "p" * 4_000, pristine / "CLAUDE.md": "c" * 17_000 + "\n@ops.md",
+                 pristine / "ops.md": "o" * 28_500,
+                 **{pristine / ".claude" / "rules" / f"r{i}.md": "r" * 4_000 for i in range(4)}})
+    episode = Episode("s", "p", None, tmp_path / "none.jsonl", "fix", "", str(cwd), None, None, None, ())
+    shown = existing_instructions(episode, pristine)
+    assert len(shown) == 7
+    assert sum(len(text) for _, text in shown) >= 4_000 + 17_000 + 28_500 + 16_000
+
+
 def write_files(files):
     for path, text in files.items():
         path.parent.mkdir(parents=True, exist_ok=True)

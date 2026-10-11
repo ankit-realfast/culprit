@@ -65,7 +65,7 @@ Key cross-cutting rules:
 - **Every replay is locked down**: fresh APFS clone (`cp -cR`) beside the original cwd at `<parent>/.culprit-replay-<12 hex>` (so ancestor CLAUDE.md files load), git remotes removed, no MCP, `git push`/`gh` denied, spend-capped, stream-json output. Permission mode: `auto`/`acceptEdits` as recorded, anything else → `acceptEdits` (the CLI has no `default` mode). Clone and the empty `~/.claude/projects/<encoded>/memory/` folder are deleted afterwards.
 - **The judge** decides from the criterion plus the final answer, the diff, the check results and the transcript's tool calls; a failing check or errored run fails without a model call.
 - **Restores never write to the original working directory**; every tracked path must resolve inside the destination.
-- **Each oracle may change only its own fields** (task → `prompt`; environment → `setup_script`; agent-setup → `append_system_prompt`; harness → `tools`, `disallowed_tools`, `context_preamble`, `max_budget_usd`; model → `model`).
+- **Each oracle may change only its own fields** (task → `prompt`; environment → `setup_script`; agent-setup → `claude_md_addition`, written into the replay copy's project CLAUDE.md; harness → `tools`, `disallowed_tools`, `context_preamble`, `max_budget_usd`; model → `model`).
 - Storage is plain files under `runs/` (one folder per episode; `runs/selftest/` kept separate from real calibration).
 
 ## Hard constraints

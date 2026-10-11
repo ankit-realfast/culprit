@@ -243,7 +243,7 @@ during or after it (the leak check against the prompt and follow-ups is unchange
   frontmatter (both load on demand), files over 4 MiB, and files a `claudeMdExcludes` glob in the user or
   project settings matches (never managed policy). Files under the working folder are read from the
   restored starting copy, so edits made during or after the episode never reach the drafter; folders above
-  it are read from disk as they are now, as the replay itself reads them. Together at most 20,000
+  it are read from disk as they are now, as the replay itself reads them. Together at most 200,000
   characters, keeping the files nearest the working folder when trimming. It also sees the starting copy's
   top two folder levels (skipping `.git`, `node_modules`, virtualenvs, caches and build output), at most
   150 lines. The draft is appended to those instructions, so it is told to fill their gaps rather than repeat
