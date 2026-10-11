@@ -3,6 +3,7 @@
 Run as: python -m culprit.stubs mcp <recordings.json> <server name>
     or: python -m culprit.stubs answers <answers.json>
     or: python -m culprit.stubs bash-hook <network-recordings.json>   (a PreToolUse hook)
+    or: python -m culprit.stubs web-hook <network-recordings.json>    (a PreToolUse hook)
 
 This module imports nothing heavier than logs, so a stand-in process starts fast."""
 
@@ -215,15 +216,23 @@ def _runs_network_tool(words: list[str]) -> bool:
 
 
 def network_recordings_from_episode(episode: Episode) -> dict[str, list[dict]]:
-    """Every network shell command the episode ran, in order, with the output and exit status it got."""
+    """Every network shell command the episode ran, in order, with the output and exit status it got
+    ("shell"), and every WebFetch and WebSearch call with its result ("web")."""
     calls: dict[str, str] = {}
+    web_calls: dict[str, tuple[str, dict]] = {}
     shell: list[dict] = []
+    web: list[dict] = []
     for record in episode.records:
         for block in content_blocks(record):
             if block.get("type") == "tool_use" and block.get("name") == BASH_TOOL:
                 command = str((block.get("input") or {}).get("command", ""))
                 if uses_network(command):
                     calls[block.get("id")] = command
+            elif block.get("type") == "tool_use" and block.get("name") in WEB_TOOLS:
+                web_calls[block.get("id")] = (block["name"], _web_key(block["name"], block.get("input") or {}))
+            elif block.get("type") == "tool_result" and block.get("tool_use_id") in web_calls:
+                tool, key = web_calls.pop(block["tool_use_id"])
+                web.append({"tool": tool, "input": key, "text": _result_text(block.get("content"))})
             elif block.get("type") == "tool_result" and block.get("tool_use_id") in calls:
                 text = _result_text(block.get("content"))
                 exit_code = 0
@@ -233,7 +242,7 @@ def network_recordings_from_episode(episode: Episode) -> dict[str, list[dict]]:
                     exit_code = int(stated.group(1)) if stated else 1
                     text = text[stated.end():] if stated else text
                 shell.append({"command": calls.pop(block["tool_use_id"]), "output": text, "exit_code": exit_code})
-    return {"shell": shell} if shell else {}
+    return {name: found for name, found in (("shell", shell), ("web", web)) if found}
 
 
 def normalise(command: str) -> str:
@@ -253,7 +262,7 @@ def prepare_network_recordings(recordings: dict, folder: Path, rewrite) -> Path:
         shell.append({"command": normalise(rewrite(recording["command"])), "output_file": str(output_file),
                       "exit_code": int(recording["exit_code"])})
     path = (folder / NETWORK_RECORDINGS).resolve()
-    path.write_text(json.dumps({"shell": shell}))
+    path.write_text(json.dumps({"shell": shell, "web": list(recordings.get("web") or [])}))
     (folder / NETWORK_LOG).unlink(missing_ok=True)
     return path
 
@@ -293,6 +302,55 @@ def _log(log: Path, tool: str, call: str, served: bool) -> None:
         out.write(json.dumps({"tool": tool, "call": call, "served": served}) + "\n")
 
 
+# --- web-hook: WebFetch and WebSearch are never live in a replay ---
+# They run outside the shell sandbox (its allow list does not limit them), so culprit's PreToolUse hook denies
+# every call. A call identical to one the episode made (same url and prompt, same query) is denied with a reason
+# that carries the recorded result; any other is denied as not recorded. An approximation: the agent sees a
+# denial holding the content rather than a normal tool result.
+
+WEB_TOOLS = ("WebFetch", "WebSearch")
+WEB_KEYS = {"WebFetch": ("url", "prompt"), "WebSearch": ("query",)}
+MAX_WEB_RESULT_CHARS = 20_000
+WEB_SERVED = "offline replay; the recorded result of this exact call was: "
+WEB_NOT_RECORDED = "offline replay: not recorded"
+
+
+def _web_key(tool: str, tool_input: dict) -> dict:
+    return {key: tool_input.get(key) for key in WEB_KEYS[tool]}
+
+
+def web_hook(event: dict, recordings_file: Path) -> dict | None:
+    """The PreToolUse reply for one WebFetch or WebSearch call: always a denial, carrying the recorded result
+    when this exact call was recorded."""
+    tool = event.get("tool_name")
+    if tool not in WEB_TOOLS:
+        return None
+    key = _web_key(tool, event.get("tool_input") or {})
+    recordings = json.loads(Path(recordings_file).read_text()).get("web") or []
+    match = next((r for r in recordings if r["tool"] == tool and r["input"] == key), None)
+    _log(Path(recordings_file).parent / NETWORK_LOG, tool, json.dumps(key, sort_keys=True), served=match is not None)
+    if match is None:
+        return _deny(WEB_NOT_RECORDED)
+    text = match["text"]
+    if len(text) > MAX_WEB_RESULT_CHARS:
+        text = f"{text[:MAX_WEB_RESULT_CHARS]}\n[recorded result cut at {MAX_WEB_RESULT_CHARS} characters]"
+    return _deny(WEB_SERVED + text)
+
+
+def _deny(reason: str) -> dict:
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                   "permissionDecisionReason": reason}}
+
+
+def web_hook_main(args: list[str]) -> None:
+    """`web-hook <network-recordings.json>`: deny one WebFetch or WebSearch call, read on stdin."""
+    try:
+        reply = web_hook(json.loads(sys.stdin.read()), Path(args[0])) or _deny(WEB_NOT_RECORDED)
+    except Exception:  # whatever goes wrong, the call is still denied: the web is never live in a replay
+        reply = _deny(WEB_NOT_RECORDED)
+    sys.stdout.write(json.dumps(reply))
+
+
 def bash_hook_main(args: list[str]) -> None:
     """`bash-hook <network-recordings.json>`: read one PreToolUse event on stdin, print the reply if any."""
     try:
@@ -305,7 +363,7 @@ def bash_hook_main(args: list[str]) -> None:
 
 # --- entry point ---
 
-STAND_INS = {"mcp": mcp_main, "answers": answers_main, "bash-hook": bash_hook_main}
+STAND_INS = {"mcp": mcp_main, "answers": answers_main, "bash-hook": bash_hook_main, "web-hook": web_hook_main}
 
 
 def main() -> None:

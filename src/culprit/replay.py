@@ -17,8 +17,8 @@ from pathlib import Path
 from culprit import logs
 from culprit.logs import (Episode, Tracked, is_follow_up, original_effort, prompt_images, recorded_answers,
                           records_before)
-from culprit.stubs import (MCP_PREFIX, PERMISSION_PROMPT_TOOL, SERVER as ANSWER_SERVER, network_recordings_from_episode,
-                           prepare_network_recordings, recordings_from_episode)
+from culprit.stubs import (MCP_PREFIX, PERMISSION_PROMPT_TOOL, SERVER as ANSWER_SERVER, WEB_TOOLS,
+                           network_recordings_from_episode, prepare_network_recordings, recordings_from_episode)
 
 
 # --- sandbox: Rebuild the files an episode started from, in a throwaway folder, and check the rebuild. ---
@@ -395,6 +395,8 @@ def replay_command(settings: ReplaySettings, original_cwd: Path | None = None,
     if settings.mcp_recordings:
         # the stand-in reaches nothing real, so its tools need no approval
         command += ["--allowedTools", *(f"{MCP_PREFIX}{server}" for server in settings.mcp_recordings)]
+    if network_file is None:
+        denied += list(WEB_TOOLS)  # without culprit's web hook in place, the web tools are not offered at all
     command += ["--disallowedTools", *denied]
     return command
 
@@ -427,7 +429,8 @@ def _applied_settings(memory_dir: Path | None, network_file: Path | None = None)
         applied["autoMemoryDirectory"] = str(memory_dir)
     if network_file is not None:
         # culprit's own hook, added to the user's hooks (which still run, as in the original session)
-        applied["hooks"] = {"PreToolUse": [_stub_hook("Bash", "bash-hook", network_file)]}
+        applied["hooks"] = {"PreToolUse": [_stub_hook("Bash", "bash-hook", network_file),
+                                           _stub_hook("WebFetch|WebSearch", "web-hook", network_file)]}
     return applied
 
 

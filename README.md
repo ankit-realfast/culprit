@@ -139,6 +139,8 @@ uv run culprit status [1]          # where episodes stand and the next command
   your log: culprit's own `PreToolUse` hook swaps a command that exactly matches one the episode ran for
   one that prints its recorded output and exits with its recorded status. Any other network command is
   refused by the sandbox. Your own hooks still run, as they did in the original session.
+- `WebFetch` and `WebSearch` never go live. culprit's hook denies every call; one identical to a call
+  the episode made is denied with a reason that carries its recorded result.
 - Episodes in your home folder, in a folder containing culprit, or under an unwritable parent are refused.
 - `runs/` holds your session content and is gitignored.
 
@@ -155,6 +157,9 @@ uv run culprit status [1]          # where episodes stand and the next command
   project point at the copy, whitespace aside) gets its recorded output; a repeated command gets each
   recorded answer in turn. Anything else is refused by the sandbox, so a replay that needs a live service
   it never called before fails. Commands are recognised by a fixed list of network tools.
+- **Web calls:** a `WebFetch` (same URL and prompt) or `WebSearch` (same query) the episode made gets its
+  recorded result, cut at 20,000 characters, but as the reason for a denial rather than as a normal
+  result. Any other web call is denied as not recorded.
 - **Images:** an image the log didn't keep blocks the replay.
 - **Starting point:** replays start at the beginning of the episode, with the session's earlier
   conversation in place (a fork of your log cut just before your prompt), not at the failing step.

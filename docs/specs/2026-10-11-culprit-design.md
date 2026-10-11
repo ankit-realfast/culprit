@@ -219,6 +219,15 @@ claude -p \                      # the episode or variant prompt goes on stdin
   Verified live 2026-10-11 on 2.1.296 (Haiku): a `--settings` `PreToolUse` hook's `updatedInput`
   replaced a Bash command, its output and exit status reached the model, and the transcript kept the
   original command; a user hook that blocks the command still wins.
+- **WebFetch and WebSearch are never live.** They run outside the shell sandbox (its allowed domains do
+  not limit WebFetch), so culprit adds a second `PreToolUse` hook, matcher `WebFetch|WebSearch`
+  (`python -m culprit.stubs web-hook <recordings>`), that denies every call. A call identical to one the
+  episode made (WebFetch: same `url` and `prompt`; WebSearch: same `query`) is denied with the reason
+  "offline replay; the recorded result of this exact call was: …" carrying the recorded result (cut at
+  20,000 characters); any other is denied with "offline replay: not recorded". If the hook itself fails
+  it still denies. This is an approximation: the agent sees a denial holding the content, not a normal
+  tool result, and may treat it differently. A command built without culprit's hooks drops both tools
+  through `--disallowedTools`. Each call is logged with the shell calls in `network-log.jsonl`.
 - **Questions are answered from the log:** culprit's answer host is the permission-prompt tool; a
   question close to one the human answered (difflib ratio ≥ 0.6) gets that answer, and every other
   question or permission prompt is refused.
@@ -397,6 +406,8 @@ in the report, and `status --json` gives each outcome's totals plus `usd_per_run
 - An MCP call or a question the original session never made cannot be answered in a replay. Nor can a
   network shell command that is not identical to one the episode ran: the sandbox refuses it, and a
   command whose network tool is not on culprit's list is simply refused by the sandbox, unrecorded.
+  A recorded WebFetch or WebSearch result reaches the replay only as the reason for a denial, an
+  approximation of the original tool result; any other web call is denied.
 - For a project in git, files nothing else recorded come from the last commit before the episode;
   elsewhere they are as they are today.
 - v1 replays from the episode's start (with its session's earlier conversation in place), not from the
