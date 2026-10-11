@@ -82,3 +82,25 @@ def test_a_run_stopped_at_a_limit_still_fails_a_failing_check_without_a_model(tm
     replay = replace(replay_in(tmp_path, [CheckResult("pytest -q", 1, "1 failed")], is_error=True), limit="time")
     assert judge_replay(CRITERION, replay, ask=ask).by == "check"
     assert ask.calls == []
+
+
+def test_a_model_judgement_keeps_the_model_that_judged(tmp_path):
+    from culprit.model import MODEL_RAN_KEY
+    ask = FakeAsk({"passed": False, "reason": "no header", MODEL_RAN_KEY: "claude-sonnet-5-5"})
+    judgement = judge_replay(CRITERION, replay_in(tmp_path), ask=ask)
+    assert judgement == Judgement(False, "no header", "model", model="claude-sonnet-5-5")
+
+
+def test_a_drafted_criterion_keeps_the_model_that_drafted_it(tmp_path):
+    from culprit.logs import Episode
+    from culprit.model import MODEL_RAN_KEY, draft_criterion, load_criterion, save_criterion
+    from records import human
+    from culprit.logs import episodes_from_session
+    path = tmp_path / "s.jsonl"
+    path.write_text(json.dumps(human("fix", "p1", session_id="s1")) + "\n")
+    (episode,) = episodes_from_session(path)
+    ask = FakeAsk({"success_means": "works", "checks": [], "must_not": [], MODEL_RAN_KEY: "claude-sonnet-5-5"})
+    criterion = draft_criterion(episode, [], ask=ask)
+    assert criterion.model == "claude-sonnet-5-5"
+    save_criterion(tmp_path / "runs", "s1:p1", criterion)
+    assert load_criterion(tmp_path / "runs", "s1:p1").model == "claude-sonnet-5-5"

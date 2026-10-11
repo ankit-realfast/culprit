@@ -168,3 +168,22 @@ def test_a_variant_adds_up_the_tokens_of_every_run(write_session, tmp_path):
     outcome = run_variant("baseline", SETTINGS, n=2, episode=episode, runs_dir=tmp_path / "runs", criterion=CRITERION,
                           budget=EpisodeBudget(10.0), replay=replay, judge=judge_sequence(True, False))
     assert outcome.tokens == {"input_tokens": 20, "output_tokens": 40}
+
+
+def test_a_variant_counts_the_models_its_runs_ran_as_and_reads_them_back_on_reuse(write_session, tmp_path):
+    episode = episode_at(write_session, tmp_path)
+    ran = iter(["claude-fable-5-1", "claude-fable-5-1", None])
+
+    def replay(settings, pristine, run_dir, workdir, checks, **kwargs):
+        run_dir.mkdir(parents=True, exist_ok=True)
+        result = ReplayResult(run_dir, 0, False, "done", 0.1, 1, (), model=next(ran))
+        (run_dir / "result.json").write_text(json.dumps({"cost_usd": 0.1, "model": result.model}))
+        return result
+
+    outcome = run_variant("model", SETTINGS, n=3, episode=episode, runs_dir=tmp_path / "runs", criterion=CRITERION,
+                          budget=EpisodeBudget(10.0), replay=replay, judge=judge_sequence(True, True, False))
+    assert outcome.models == {"claude-fable-5-1": 2}
+    (episode_dir(tmp_path / "runs", episode.episode_id) / "replays" / "model" / "outcome.json").unlink()
+    again = run_variant("model", SETTINGS, n=3, episode=episode, runs_dir=tmp_path / "runs", criterion=CRITERION,
+                        budget=EpisodeBudget(10.0), replay=replay, judge=judge_sequence())
+    assert again.models == {"claude-fable-5-1": 2}

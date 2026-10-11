@@ -57,3 +57,13 @@ def test_a_call_that_times_out_raises_the_named_error(tmp_path):
 
     with pytest.raises(ClaudeCallFailed, match="timed out"):
         ask_claude("q", SCHEMA, run=run, cwd=tmp_path)
+
+
+def test_the_model_a_call_ran_as_comes_back_beside_the_answer(tmp_path):
+    def run(command, **kwargs):
+        return completed(json.dumps({"is_error": False, "subtype": "success", "structured_output": {"ok": True},
+                                     "modelUsage": {"claude-haiku-5-5": {"outputTokens": 3},
+                                                    "claude-sonnet-5-5": {"outputTokens": 120}}}))
+
+    from culprit.model import MODEL_RAN_KEY
+    assert ask_claude("q", SCHEMA, run=run, cwd=tmp_path) == {"ok": True, MODEL_RAN_KEY: "claude-sonnet-5-5"}

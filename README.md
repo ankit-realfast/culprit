@@ -106,6 +106,9 @@ uv run culprit status [1]          # where episodes stand and the next command
 - **What each variant cost:** `diagnose`, the report and `status --json` give each variant's cost per run in
   dollars and tokens (from each replay's final `usage` and `total_cost_usd`; void attempts included), e.g.
   `harness: baseline 0/10 → 8/10, p = 0.0004 · $0.41/run, 52k tokens/run`.
+- **Which model ran:** each replay records the model id it actually ran as (from its stream), and
+  `diagnose`, the report and `status --json` show it per variant, e.g. "model test: Fable at max effort, ran as
+  claude-fable-5-1". Judgements and drafted criteria keep the model that wrote them.
 - **Void runs:** only infrastructure failures (an API error or overload, a lost connection, the CLI crashing
   or failing to start) are void: they don't count and are retried.
 - **Runs that hit a limit count:** a replay stopped by its spend cap or its time limit is scored on what it

@@ -16,7 +16,7 @@ from typing import Callable, Sequence
 
 from culprit.logs import (Episode, EpisodeNotFound, find_episode, follow_up_prompts, is_follow_up, is_human_prompt,
                           records_before, text_of, tool_uses)
-from culprit.model import (CALL_CAP_USD, Ask, ClaudeCallFailed, Criterion, Judgement, ask_claude, check_leak,
+from culprit.model import (CALL_CAP_USD, MODEL_RAN_KEY, Ask, ClaudeCallFailed, Criterion, Judgement, ask_claude, check_leak,
                            criterion_step, judge_replay, load_criterion)
 from culprit.replay import (MAX_EFFORT, MEMORY_DIR, REPLAY_BUDGET_FLOOR_USD, RESULT_FILE, ReplaySettings, SetupScriptFailed, baseline_settings,
                             claude_md_target, replay_workdir, run_replay, settings_from_json, settings_to_json,
@@ -82,6 +82,7 @@ class VariantOutcome:
     void: int = 0
     limits: dict = field(default_factory=dict)  # counted runs stopped at a limit, by limit ("budget", "time")
     tokens: dict = field(default_factory=dict)  # every attempt's token counts added up, by kind (like cost_usd)
+    models: dict = field(default_factory=dict)  # counted runs by the model id each actually ran as
 
 
 @dataclass(frozen=True)
@@ -119,6 +120,7 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
     passes = counted = void = 0
     limits: dict[str, int] = {}
     tokens: dict[str, int] = {}
+    models: dict[str, int] = {}
     cost = 0.0
     attempt = 0
     tell = progress or (lambda event: None)
@@ -131,6 +133,7 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
             # paid for before a stop: reuse it rather than pay again
             stored = read_json(run_dir / RESULT_FILE)
             run_cost, limit, usage = float(stored.get("cost_usd") or 0), stored.get("limit"), stored.get("usage") or {}
+            ran = stored.get("model")
             judgement = Judgement(**read_json(run_dir / JUDGEMENT_FILE))
         else:
             budget.ensure_room(settings.max_budget_usd + CALL_CAP_USD)
@@ -139,7 +142,7 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
                             criterion.checks, original_cwd=Path(episode.cwd),
                             original_memory=episode.session_file.parent / MEMORY_DIR)
             budget.spend(result.cost_usd)  # charged before judging, so a judge failure cannot lose it
-            run_cost, limit, usage = result.cost_usd, result.limit, result.usage
+            run_cost, limit, usage, ran = result.cost_usd, result.limit, result.usage, result.model
             judgement = judge(criterion, result)
             if judgement.by == "model":
                 budget.spend(CALL_CAP_USD)
@@ -156,8 +159,10 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
         counted += 1
         if limit:
             limits[limit] = limits.get(limit, 0) + 1
+        if ran:
+            models[ran] = models.get(ran, 0) + 1
         passes += int(judgement.passed)
-    outcome = VariantOutcome(variant, passes, counted, round(cost, 4), void, limits, tokens)
+    outcome = VariantOutcome(variant, passes, counted, round(cost, 4), void, limits, tokens, models)
     write_json(variant_dir / OUTCOME_FILE, asdict(outcome))
     return outcome
 
@@ -280,6 +285,37 @@ def costs_line(verdict: Verdict) -> str | None:
              f"{_kilo(tokens_per_run(o, ('cache_creation_input_tokens', 'cache_read_input_tokens')))} cached)"
              for name, o in verdict.outcomes.items() if "tokens" in o and attempts(o)]
     return f"cost per run: {'; '.join(parts)}" if parts else None
+
+
+def ran_as_text(models: dict) -> str:
+    """`claude-opus-5`, or `claude-opus-5 (9), claude-sonnet-5-5 (1)` when the runs did not all run as one model."""
+    if len(models) == 1:
+        return next(iter(models))
+    return ", ".join(f"{name} ({count})" for name, count in sorted(models.items(), key=lambda item: -item[1]))
+
+
+def variant_label(name: str) -> str:
+    """How a model-step variant is named where it is shown, e.g. `model test: Fable at max effort`."""
+    return {Cause.MODEL.value: "model test: Fable at max effort",
+            ORIGINAL_MAX_EFFORT: "original model at max effort"}.get(name, name)
+
+
+def models_line(verdict: Verdict) -> str | None:
+    """Which model the variants actually ran as (aliases resolved), e.g. `models: baseline ran as claude-opus-5;
+    model test: Fable at max effort, ran as claude-fable-5-1`: the baseline, every model step, and any other variant
+    that ran as something else than the baseline. None when no run recorded its model."""
+    baseline = (verdict.outcomes.get(BASELINE) or {}).get("models") or {}
+    parts = [f"baseline ran as {ran_as_text(baseline)}"] if baseline else []
+    for name, outcome in verdict.outcomes.items():
+        models = outcome.get("models") or {}
+        if name == BASELINE or not models:
+            continue
+        label = variant_label(name)
+        if label != name:
+            parts.append(f"{label}, ran as {ran_as_text(models)}")
+        elif models != baseline:
+            parts.append(f"{name} ran as {ran_as_text(models)}")
+    return f"models: {'; '.join(parts)}" if parts else None
 
 
 def limit_tally(limits: dict | None) -> str:
@@ -706,7 +742,10 @@ def _drafted(base: ReplaySettings, field: str, prompt_for, episode: Episode, fol
         text = str(answer["text"]).strip()
         verdict = check_leak(text, episode.prompt_text, follow_ups, ask=ask)
         if not verdict.leaks:
-            extra = {key: answer.get(key) for key in schema["properties"] if key != "text"} or None
+            extra = {key: answer.get(key) for key in schema["properties"] if key != "text"}
+            if answer.get(MODEL_RAN_KEY):
+                extra["model"] = answer[MODEL_RAN_KEY]  # the model that drafted it
+            extra = extra or None
             return VariantBuild(replace(base, **{field: text}), None, extra)
         evidence = verdict.evidence
     return VariantBuild(None, f"the leak check rejected {MAX_DRAFT_ATTEMPTS} drafts (last: {evidence})")

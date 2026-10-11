@@ -152,3 +152,18 @@ def test_each_verdict_shows_what_each_variant_cost_per_run(tmp_path):
     text = render_report(collect(tmp_path), [])
     assert "p = 0.0004 · $0.41/run, 3k tokens/run" in text
     assert "cost per run: baseline $0.30, 3k tokens (1k in, 2k out, 0 cached); harness $0.41" in text
+
+
+def test_each_verdict_says_which_model_each_variant_ran_as(tmp_path):
+    outcomes = {"baseline": {"variant": "baseline", "passes": 0, "runs": 10, "cost_usd": 1.0, "void": 0,
+                             "models": {"claude-opus-5": 10}},
+                "harness": {"variant": "harness", "passes": 0, "runs": 10, "cost_usd": 1.0, "void": 0,
+                            "models": {"claude-opus-5": 10}},
+                "model": {"variant": "model", "passes": 9, "runs": 10, "cost_usd": 1.0, "void": 0,
+                          "models": {"claude-fable-5-1": 10}},
+                "original-max-effort": {"variant": "original-max-effort", "passes": 2, "runs": 10, "cost_usd": 1.0,
+                                        "void": 0, "models": {"claude-opus-5": 9, "claude-sonnet-5-5": 1}}}
+    save_verdict(tmp_path / "a__1", Verdict("a:1", "wrong-result", "model", "e", outcomes, {}))
+    text = render_report(collect(tmp_path), [])
+    assert ("models: baseline ran as claude-opus-5; model test: Fable at max effort, ran as claude-fable-5-1; "
+            "original model at max effort, ran as claude-opus-5 (9), claude-sonnet-5-5 (1)") in text

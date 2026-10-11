@@ -293,6 +293,7 @@ class ReplayResult:
     void_reason: str | None = None  # set when infrastructure failed the run: it does not count
     limit: str | None = None  # LIMIT_BUDGET or LIMIT_TIME when the run stopped at culprit's cap: it still counts
     usage: dict = field(default_factory=dict)  # token counts, by USAGE_KEYS
+    model: str | None = None  # the model id the run actually ran as (an alias resolved), from its stream
 
 
 class SetupScriptFailed(RuntimeError):
@@ -603,19 +604,21 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
             replay = ReplayResult(run_dir, exit_code, True,
                                   f"stopped at the {settings.timeout_s:.0f}s time limit before a final answer",
                                   settings.max_budget_usd, 0, check_results, limit=LIMIT_TIME,
-                                  usage=_streamed_usage(stdout))
+                                  usage=_streamed_usage(stdout), model=ran_as(stdout))
         elif result_line is None:
             reason = f"no result line (exit {exit_code})"
             # the CLI crashed or never started: infrastructure, so void; charged at the cap as its cost is unknown
             replay = ReplayResult(run_dir, exit_code, True, f"{reason}: {stderr[-300:]}", settings.max_budget_usd, 0,
-                                  check_results, void_reason=reason, usage=_streamed_usage(stdout))
+                                  check_results, void_reason=reason, usage=_streamed_usage(stdout),
+                                  model=ran_as(stdout))
         else:
             limit = LIMIT_BUDGET if result_line.get("subtype") == BUDGET_LIMIT_SUBTYPE else None
             replay = ReplayResult(run_dir, exit_code, bool(result_line.get("is_error")),
                                   str(result_line.get("result") or ""), float(result_line.get("total_cost_usd") or 0),
                                   int(result_line.get("num_turns") or 0), check_results,
                                   void_reason=_void_reason(result_line), limit=limit,
-                                  usage=_counts(result_line.get("usage")) or _streamed_usage(stdout))
+                                  usage=_counts(result_line.get("usage")) or _streamed_usage(stdout),
+                                  model=ran_as(stdout))
         (run_dir / RESULT_FILE).write_text(json.dumps(asdict(replay), default=str, indent=2))
         if watched:
             after = tree_fingerprint(watched)
@@ -675,6 +678,26 @@ def _streamed_usage(stdout: str) -> dict:
         for key, value in counts.items():
             total[key] = total.get(key, 0) + value
     return total
+
+
+def ran_as(stdout: str) -> str | None:
+    """The model id a stream-json run ran as: the init event names it (an alias already resolved); without one, the
+    first assistant message that names a real model (Claude Code writes `<synthetic>` for messages it made up)."""
+    fallback = None
+    for line in stdout.splitlines():
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        if record.get("type") == "system" and record.get("subtype") == "init" and record.get("model"):
+            return str(record["model"])
+        message = record.get("message") if record.get("type") == "assistant" else None
+        model = message.get("model") if isinstance(message, dict) else None
+        if fallback is None and isinstance(model, str) and model and not model.startswith("<"):
+            fallback = model
+    return fallback
 
 
 def _text(output: str | bytes | None) -> str:

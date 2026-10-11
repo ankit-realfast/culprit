@@ -243,6 +243,13 @@ extra variant is skipped when the answer is already known: an episode on Fable a
 (Fable at max effort passed …)"), or one that already ran at max effort ("needs Fable", from its baseline). The
 cost preview counts the extra variant whenever it could run.
 
+**Which model ran.** A replay asked for an alias runs as whatever that alias means on the day, so each replay's
+`result.json` records the model id it actually ran as: the `model` of its stream-json `init` event, else the first
+assistant message naming a real model. Each variant's outcome counts its counted runs by that id (`models`), and
+`diagnose`, the report and `status --json` show it, e.g. "model test: Fable at max effort, ran as
+claude-fable-5-1". Model calls through `ask_claude` keep the model their JSON result's `modelUsage` names (the
+one that wrote most) on the stored judgement, criterion and oracle draft.
+
 **What a drafter may see.** Anything the agent could have known before the episode started; nothing from
 during or after it (the leak check against the prompt and follow-ups is unchanged).
 

@@ -685,3 +685,26 @@ def test_the_recorded_effort_is_replayed_and_sent_as_a_flag(write_session):
     command = replay_command(settings(effort="max"))
     assert command[command.index("--effort") + 1] == "max"
     assert "--effort" not in replay_command(settings())
+
+
+def test_a_run_records_the_model_that_actually_ran_from_the_init_event(tmp_path):
+    stream = "\n".join([json.dumps({"type": "system", "subtype": "init", "model": "claude-fable-5-1"}),
+                        json.dumps({"type": "assistant", "message": {"model": "claude-fable-5-1", "content": []}}),
+                        RESULT])
+    result = run_replay(settings(model="fable"), pristine_tree(tmp_path), tmp_path / "run0",
+                        tmp_path / ".culprit-replay-m", (), run=FakeRun(claude_stdout=stream),
+                        projects_dir=tmp_path / "p")
+    assert result.model == "claude-fable-5-1"
+    assert json.loads((tmp_path / "run0" / "result.json").read_text())["model"] == "claude-fable-5-1"
+
+
+def test_without_an_init_model_the_assistant_messages_name_the_model(tmp_path):
+    partial = "\n".join([json.dumps({"type": "assistant", "message": {"model": "<synthetic>", "content": []}}),
+                         json.dumps({"type": "assistant", "message": {"model": "claude-opus-5-5", "content": []}})])
+    run = FakeRun(claude_raises=subprocess.TimeoutExpired(cmd="claude", timeout=1, output=partial))
+    result = run_replay(settings(), pristine_tree(tmp_path), tmp_path / "run0", tmp_path / ".culprit-replay-n", (),
+                        run=run, projects_dir=tmp_path / "p")
+    assert result.model == "claude-opus-5-5"
+    (tmp_path / "x").mkdir()
+    assert run_replay(settings(), pristine_tree(tmp_path / "x"), tmp_path / "run1", tmp_path / ".culprit-replay-o",
+                      (), run=FakeRun(claude_stdout=RESULT), projects_dir=tmp_path / "p").model is None

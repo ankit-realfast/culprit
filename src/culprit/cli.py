@@ -17,7 +17,7 @@ from culprit import logs, replay
 from culprit.diagnose import (BASELINE, DRAFTED_CAUSES, ENV_FIX_FILE, BudgetExhausted, CostPlan, EpisodeBudget,
                               ReplayEvent, VariantOutcome, batch_cost, diagnose, diagnose_all, diagnose_cost,
                               costs_line, diagnose_cost_for, env_fix_script, limit_tally, limits_line, load_outcome,
-                              load_verdict, numbers_line, plan_cost, tokens_per_run, usd_per_run,
+                              load_verdict, models_line, numbers_line, plan_cost, tokens_per_run, usd_per_run,
                               pristine_dir, retire_if_criterion_changed, run_variant, stored_spend)
 from culprit.logs import (Episode, EpisodeNotFound, FailureSignals, excerpt, find_episode, follow_up_prompts,
                           load_snapshot, project_hooks, rank_candidates, replay_blockers, session_files, session_root,
@@ -693,6 +693,8 @@ def diagnose_command(args: argparse.Namespace) -> int:
         print(limited)
     if costs := costs_line(verdict):
         print(costs)
+    if models := models_line(verdict):
+        print(models)
     if verdict.pair:
         print(f"together: {' + '.join(verdict.pair)}")
     for cause, reason in verdict.untested.items():

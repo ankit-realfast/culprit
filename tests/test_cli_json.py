@@ -65,3 +65,14 @@ def test_status_json_gives_each_variants_cost_and_tokens_per_run(tmp_path, capsy
     [baseline] = only_json(capsys)["outcomes"]
     assert baseline["tokens"] == {"input_tokens": 1000, "output_tokens": 49_000}
     assert baseline["usd_per_run"] == 0.5 and baseline["tokens_per_run"] == 5000
+
+
+def test_status_json_says_which_model_each_variant_ran_as(tmp_path, capsys):
+    import dataclasses
+    folder = episode_dir(tmp_path / "runs", "s1:p1") / "replays" / "model"
+    folder.mkdir(parents=True)
+    (folder / "outcome.json").write_text(json.dumps(dataclasses.asdict(VariantOutcome(
+        "model", 3, 5, 5.0, models={"claude-fable-5-1": 5}))))
+    assert cli.main(["status", "s1:p1", "--json"]) == 0
+    [model] = only_json(capsys)["outcomes"]
+    assert model["models"] == {"claude-fable-5-1": 5}

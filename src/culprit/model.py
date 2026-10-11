@@ -25,6 +25,8 @@ CALL_CAP_USD = 0.50  # the most one call may spend, and what culprit charges for
 CALLS_DIR = Path.home() / ".culprit" / "calls"
 
 Ask = Callable[[str, dict], dict]
+# beside a call's structured answer, the model id the call actually ran as (from the CLI's modelUsage), when known
+MODEL_RAN_KEY = "_model"
 
 
 def as_messages(texts: list[str]) -> str:
@@ -65,7 +67,19 @@ def ask_claude(prompt: str, schema: dict, model: str = DRAFTING_MODEL, max_budge
     if payload.get("is_error") or "structured_output" not in payload:
         reason = payload.get("result") or payload.get("subtype") or "no structured output"
         raise ClaudeCallFailed(f"claude returned no structured output: {reason}")
-    return payload["structured_output"]
+    answer = payload["structured_output"]
+    if isinstance(answer, dict) and (ran := model_used(payload)):
+        answer = {**answer, MODEL_RAN_KEY: ran}
+    return answer
+
+
+def model_used(payload: dict) -> str | None:
+    """The model a call's JSON result says did the work: of the models in its modelUsage, the one that wrote most."""
+    usage = payload.get("modelUsage")
+    if not isinstance(usage, dict) or not usage:
+        return None
+    return max(usage, key=lambda name: (usage[name] or {}).get("outputTokens") or 0
+               if isinstance(usage[name], dict) else 0)
 
 
 # --- criterion ---
@@ -90,6 +104,7 @@ class Criterion:
     checks: tuple[str, ...]
     must_not: tuple[str, ...]
     approved: bool = False
+    model: str | None = None  # the model that drafted it, when the call reported one
 
 
 def drafting_prompt(episode: Episode, follow_ups: list[str]) -> str:
@@ -116,7 +131,8 @@ Describe the outcome, never the implementation: do not name the fix, the file to
 
 def draft_criterion(episode: Episode, follow_ups: list[str], ask: Ask = ask_claude) -> Criterion:
     answer = ask(drafting_prompt(episode, follow_ups), CRITERION_SCHEMA)
-    return Criterion(answer["success_means"], tuple(answer["checks"]), tuple(answer["must_not"]), approved=False)
+    return Criterion(answer["success_means"], tuple(answer["checks"]), tuple(answer["must_not"]), approved=False,
+                     model=answer.get(MODEL_RAN_KEY))
 
 
 def save_criterion(runs_dir: Path, episode_id: str, criterion: Criterion) -> Path:
@@ -127,7 +143,8 @@ def load_criterion(runs_dir: Path, episode_id: str) -> Criterion | None:
     data = read_json(episode_dir(runs_dir, episode_id) / CRITERION_FILE)
     if data is None:
         return None
-    return Criterion(data["success_means"], tuple(data["checks"]), tuple(data["must_not"]), bool(data["approved"]))
+    return Criterion(data["success_means"], tuple(data["checks"]), tuple(data["must_not"]), bool(data["approved"]),
+                     data.get("model"))
 
 
 def criterion_step(criterion: Criterion | None, episode_id: str, symptom: str | None) -> str:
@@ -211,6 +228,7 @@ class Judgement:
     passed: bool
     reason: str
     by: str  # "check", "replay", "model", or "void" (not counted)
+    model: str | None = None  # by "model": the model that judged, when the call reported one
 
 
 def actions_from_transcript(transcript: str) -> str:
@@ -286,4 +304,4 @@ def judge_replay(criterion: Criterion, replay: ReplayResult, ask: Ask = ask_clau
     transcript_path = replay.run_dir / TRANSCRIPT_FILE
     actions = actions_from_transcript(transcript_path.read_text(errors="replace")) if transcript_path.exists() else ""
     answer = ask(judging_prompt(criterion, replay, diff, actions), JUDGEMENT_SCHEMA)
-    return Judgement(bool(answer["passed"]), str(answer["reason"]), "model")
+    return Judgement(bool(answer["passed"]), str(answer["reason"]), "model", answer.get(MODEL_RAN_KEY))
