@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from culprit.logs import episodes_from_session
-from culprit.replay import (ReplaySettings, SetupScriptFailed, baseline_settings, project_folder_name, replay_command,
+from culprit.replay import (ReplaySettings, settings_from_json, SetupScriptFailed, baseline_settings, project_folder_name, replay_command,
                             replay_permission_mode, replay_prompt, replay_workdir, run_replay)
 from fakes import FakeRun
 from records import assistant, human, snapshot
@@ -40,11 +40,11 @@ def test_baseline_settings_copy_the_episode(write_session):
                                                       assistant(model="claude-opus-4-8")]))
     s = baseline_settings(episode, max_budget_usd=1.5)
     assert (s.prompt, s.model, s.permission_mode, s.max_budget_usd) == ("fix it", "claude-opus-4-8", "acceptEdits", 1.5)
-    assert (s.append_system_prompt, s.tools, s.disallowed_tools, s.context_preamble, s.setup_script) == (None, None, (), None, None)
+    assert (s.claude_md_addition, s.tools, s.disallowed_tools, s.context_preamble, s.setup_script) == (None, None, (), None, None)
 
 
 def test_the_command_is_locked_down_and_carries_every_setting():
-    command = replay_command(settings(append_system_prompt="verify first", tools="default",
+    command = replay_command(settings(claude_md_addition="verify first", tools="default",
                                       disallowed_tools=("WebFetch",), context_preamble="FILES"))
     joined = " ".join(command)
     assert command[:2] == ["claude", "-p"]
@@ -52,8 +52,9 @@ def test_the_command_is_locked_down_and_carries_every_setting():
     for required in ["--output-format stream-json", "--verbose", "--strict-mcp-config",
                      '--mcp-config {"mcpServers":{}}', "--permission-prompts none", "--permission-mode auto",
                      "--no-session-persistence", "--max-budget-usd 2.00", "--model claude-opus-5",
-                     "--tools default", "--append-system-prompt verify first"]:
+                     "--tools default"]:
         assert required in joined
+    assert "--append-system-prompt" not in joined and "verify first" not in joined  # it goes into CLAUDE.md
     denied = command[command.index("--disallowedTools") + 1:]
     assert denied[:3] == ["Bash(git push *)", "Bash(gh *)", "WebFetch"]
 
@@ -533,3 +534,66 @@ def test_a_follow_up_whose_session_log_lost_the_prompt_is_refused_before_claude_
                    tmp_path / "run0", workdir, (), run=run, projects_dir=tmp_path / "claude-projects")
     assert not any(c[0] == "claude" for c, _ in run.calls)
     assert not workdir.exists()
+
+
+class InstructionsWatch(FakeRun):
+    """Records the clone's instruction file while Claude runs and when the diff is taken."""
+
+    def __init__(self, name, **kwargs):
+        super().__init__(claude_stdout=RESULT, **kwargs)
+        self.name, self.during, self.at_diff = name, None, "unread"
+
+    def __call__(self, command, **kwargs):
+        if command[0] == "claude":
+            target = kwargs["cwd"] / self.name
+            self.during = target.read_text() if target.exists() else None
+        if command[0] == "diff":
+            target = Path(command[-1]) / self.name
+            self.at_diff = target.read_text() if target.exists() else None
+        return super().__call__(command, **kwargs)
+
+
+def test_drafted_instructions_are_appended_to_the_clones_claude_md_and_kept_out_of_the_diff(tmp_path):
+    pristine = pristine_tree(tmp_path)
+    (pristine / "CLAUDE.md").write_text("Existing rule.\n")
+    original = tmp_path / "proj"
+    original.mkdir()
+    (original / "CLAUDE.md").write_text("Existing rule.\n")
+    workdir = tmp_path / ".culprit-replay-md"
+    run = InstructionsWatch("CLAUDE.md")
+    run_replay(settings(claude_md_addition=f"Check {original}/a.py style before editing."), pristine,
+               tmp_path / "run0", workdir, (), run=run, projects_dir=tmp_path / "p", original_cwd=original)
+    assert run.during.startswith("Existing rule.\n")
+    assert "\n## " in run.during and run.during.rstrip().endswith(f"Check {workdir}/a.py style before editing.")
+    assert run.at_diff == "Existing rule.\n"
+    assert (pristine / "CLAUDE.md").read_text() == "Existing rule.\n"
+    assert (original / "CLAUDE.md").read_text() == "Existing rule.\n"
+    claude = next(command for command, _ in run.calls if command[0] == "claude")
+    assert "--append-system-prompt" not in claude
+
+
+def test_a_missing_claude_md_is_created_for_the_run_and_gone_by_the_diff(tmp_path):
+    run = InstructionsWatch("CLAUDE.md")
+    run_replay(settings(claude_md_addition="Verify first."), pristine_tree(tmp_path), tmp_path / "run0",
+               tmp_path / ".culprit-replay-new", (), run=run, projects_dir=tmp_path / "p")
+    assert run.during.rstrip().endswith("Verify first.")
+    assert run.at_diff is None
+
+
+def test_a_project_keeping_only_dot_claude_claude_md_gets_the_lines_there(tmp_path):
+    from culprit.replay import claude_md_target
+    pristine = pristine_tree(tmp_path)
+    (pristine / ".claude").mkdir()
+    (pristine / ".claude" / "CLAUDE.md").write_text("Dot rule.\n")
+    assert claude_md_target(pristine) == ".claude/CLAUDE.md"
+    run = InstructionsWatch(".claude/CLAUDE.md")
+    run_replay(settings(claude_md_addition="Verify first."), pristine, tmp_path / "run0",
+               tmp_path / ".culprit-replay-dot", (), run=run, projects_dir=tmp_path / "p")
+    assert run.during.startswith("Dot rule.\n") and run.during.rstrip().endswith("Verify first.")
+    assert run.at_diff == "Dot rule.\n"
+    assert claude_md_target(tmp_path / "nothing-here") == "CLAUDE.md"
+
+
+def test_variants_stored_with_the_old_field_name_still_load():
+    data = {"prompt": "p", "model": None, "permission_mode": "auto", "append_system_prompt": "Verify first."}
+    assert settings_from_json(data).claude_md_addition == "Verify first."

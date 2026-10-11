@@ -147,7 +147,7 @@ def plant(fault: PlantedFault, base: ReplaySettings, criterion: Criterion) -> tu
     if fault is PlantedFault.TRUNCATED_PROMPT:
         return replace(base, prompt=" ".join(base.prompt.split()[:TRUNCATED_WORDS])), criterion
     if fault is PlantedFault.MISLEADING_INSTRUCTION:
-        return replace(base, append_system_prompt=MISLEADING_INSTRUCTION_TEXT), criterion
+        return replace(base, claude_md_addition=MISLEADING_INSTRUCTION_TEXT), criterion
     if fault is PlantedFault.EDIT_TOOLS_REMOVED:
         return replace(base, tools=READ_ONLY_TOOLS), criterion
     if fault is PlantedFault.WEAK_MODEL:

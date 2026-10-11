@@ -31,7 +31,10 @@ guesses the cause.
    could have known before the episode began. For a follow-up, the prompt drafter also sees the session's
    earlier prompts and replies (not tool output). The instructions drafter sees the CLAUDE.md files (and
    rules and imports) Claude Code loads at launch, read from the starting copy for the project, plus its
-   top-level folder layout, and writes rules that fill their gaps.
+   top-level folder layout, and writes rules that fill their gaps. They are tested the way you would apply
+   them: appended to the project's `CLAUDE.md` in the throwaway copy (never your project). The drafter also
+   suggests where they belong (project `CLAUDE.md`, `CLAUDE.local.md`, a path-scoped rule, your user
+   `CLAUDE.md` or managed policy); the report shows that as an untested suggestion beside the verdict.
 
    If no single change works, the changes are tried together and in pairs: **multi-cause**, or
    **unexplained** if nothing works. Each verdict shows its numbers, e.g.

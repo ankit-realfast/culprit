@@ -19,7 +19,8 @@ from culprit.logs import (Episode, EpisodeNotFound, find_episode, follow_up_prom
 from culprit.model import (CALL_CAP_USD, Ask, ClaudeCallFailed, Criterion, Judgement, ask_claude, check_leak,
                            criterion_step, judge_replay, load_criterion)
 from culprit.replay import (MEMORY_DIR, RESULT_FILE, ReplaySettings, SetupScriptFailed, baseline_settings,
-                            replay_workdir, run_replay, settings_from_json, settings_to_json, target_inside)
+                            claude_md_target, replay_workdir, run_replay, settings_from_json, settings_to_json,
+                            target_inside)
 from culprit.store import (ORACLE_ORDER, SELFTEST_DIR, Cause, Symptom, confirm_step, display_id, episode_dir,
                            queued_ids, read_json, read_symptom, require_queue, short_id, write_json)
 
@@ -256,11 +257,18 @@ HARNESS_BUDGET_MULTIPLIER = 2
 DRAFTED_CAUSES = (Cause.TASK, Cause.AGENT_SETUP)  # oracles whose text a model drafts
 FILE_TOOLS = ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit")
 REWRITE_SCHEMA = {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}
+# where the agent-setup drafter suggests the instructions belong; only the project CLAUDE.md is tested
+PLACEMENTS = ("project CLAUDE.md", "CLAUDE.local.md", ".claude/rules/<topic>.md with paths", "~/.claude/CLAUDE.md",
+              "managed policy")
+INSTRUCTIONS_SCHEMA = {"type": "object", "properties": {"text": {"type": "string"},
+                                                        "placement": {"type": "string", "enum": list(PLACEMENTS)},
+                                                        "reason": {"type": "string"}},
+                       "required": ["text", "placement", "reason"]}
 
 VARIANT_FIELDS: dict[Cause, tuple[str, ...]] = {
     Cause.TASK: ("prompt",),
     Cause.ENVIRONMENT: ("setup_script",),
-    Cause.AGENT_SETUP: ("append_system_prompt",),
+    Cause.AGENT_SETUP: ("claude_md_addition",),
     Cause.HARNESS: ("tools", "disallowed_tools", "context_preamble", "max_budget_usd"),
     Cause.MODEL: ("model",),
 }
@@ -277,6 +285,7 @@ SYMPTOM_DESCRIPTIONS = {
 class VariantBuild:
     settings: ReplaySettings | None
     untested_reason: str | None
+    draft: dict | None = None  # agent-setup: the suggested placement, its reason, and the file the test wrote
 
 
 def _retry_note(rejected_evidence: str | None) -> str:
@@ -354,7 +363,13 @@ For context only, success on the current task meant: {criterion.success_means}
 The instructions must be general working rules — how to scope, verify and report — true for any task in
 this repository. They are appended to the instructions above, so fill their gaps rather than repeat what
 they already say. They must not mention this task's specifics, files, values or fix. At most 12 lines.{_retry_note(rejected_evidence)}
-Return the instructions as text."""
+
+They will be tested by appending them to the project's CLAUDE.md. Also suggest where a team should keep
+them for good, as placement: "project CLAUDE.md" (shared, every task here), "CLAUDE.local.md" (one
+person's habits in this project), ".claude/rules/<topic>.md with paths" (only for some files; name the
+file and its paths in the reason), "~/.claude/CLAUDE.md" (this person, every project) or "managed policy"
+(the whole organisation). Give a one-line reason.
+Return the instructions as text, with placement and reason."""
 
 
 # What the agent knew before the episode began: the instructions Claude Code loads at launch, in its documented
@@ -582,9 +597,13 @@ def build_variant(cause: Cause, base: ReplaySettings, *, episode: Episode, follo
                         episode, follow_ups, ask)
     if cause is Cause.AGENT_SETUP:
         repository = repository_context(episode, pristine)
-        return _drafted(base, "append_system_prompt",
-                        lambda evidence: agent_instructions_prompt(criterion, symptom, evidence, repository),
-                        episode, follow_ups, ask)
+        built = _drafted(base, "claude_md_addition",
+                         lambda evidence: agent_instructions_prompt(criterion, symptom, evidence, repository),
+                         episode, follow_ups, ask, INSTRUCTIONS_SCHEMA)
+        if built.settings is None:
+            return built
+        written_to = str(Path(episode.cwd) / claude_md_target(pristine)) if episode.cwd else None
+        return replace(built, draft={**(built.draft or {}), "written_to": written_to})
     if cause is Cause.ENVIRONMENT:
         return VariantBuild(replace(base, setup_script=env_script), None)
     if cause is Cause.HARNESS:
@@ -602,13 +621,15 @@ def combine(base: ReplaySettings, variants: dict[Cause, ReplaySettings]) -> Repl
 
 
 def _drafted(base: ReplaySettings, field: str, prompt_for, episode: Episode, follow_ups: list[str],
-             ask: Ask) -> VariantBuild:
+             ask: Ask, schema: dict = REWRITE_SCHEMA) -> VariantBuild:
     evidence = None
     for _ in range(MAX_DRAFT_ATTEMPTS):
-        text = str(ask(prompt_for(evidence), REWRITE_SCHEMA)["text"]).strip()
+        answer = ask(prompt_for(evidence), schema)
+        text = str(answer["text"]).strip()
         verdict = check_leak(text, episode.prompt_text, follow_ups, ask=ask)
         if not verdict.leaks:
-            return VariantBuild(replace(base, **{field: text}), None)
+            extra = {key: answer.get(key) for key in schema["properties"] if key != "text"} or None
+            return VariantBuild(replace(base, **{field: text}), None, extra)
         evidence = verdict.evidence
     return VariantBuild(None, f"the leak check rejected {MAX_DRAFT_ATTEMPTS} drafts (last: {evidence})")
 
@@ -618,6 +639,7 @@ def _drafted(base: ReplaySettings, field: str, prompt_for, episode: Episode, fol
 # resumes where it stopped instead of paying again.
 
 VARIANTS_DIR = "variants"
+DRAFT_KEY = "draft"  # in a variant file: what the drafter said beyond the tested text
 NOT_RUN_REASON = "not run: an earlier cause already explained the failure"
 CRITERION_USED_FILE = "criterion_used.json"
 
@@ -731,12 +753,26 @@ def _oracle(folder: Path, cause: Cause, base: ReplaySettings, untested: dict[str
     data = read_json(path)
     if data is None:
         made = make()
-        data = {"untested": made.untested_reason} if made.settings is None else settings_to_json(made.settings)
+        if made.settings is None:
+            data = {"untested": made.untested_reason}
+        else:
+            data = settings_to_json(made.settings)
+            if made.draft:
+                data[DRAFT_KEY] = made.draft
         write_json(path, data)
     if "untested" in data:
         untested[cause.value] = data["untested"]
         return None
-    return settings_from_json(data)
+    return settings_from_json({key: value for key, value in data.items() if key != DRAFT_KEY})
+
+
+def load_instructions_draft(folder: Path) -> tuple[str, dict] | None:
+    """The agent-setup variant's tested lines and its draft note (placement, reason, written_to), if built."""
+    data = read_json(variant_file(folder, Cause.AGENT_SETUP))
+    if not data or "untested" in data:
+        return None
+    text = data.get("claude_md_addition") or data.get("append_system_prompt")
+    return (text, data.get(DRAFT_KEY) or {}) if text else None
 
 
 def _rate(outcome: VariantOutcome) -> str:

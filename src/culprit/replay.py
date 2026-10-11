@@ -246,7 +246,7 @@ class ReplaySettings:
     prompt: str
     model: str | None
     permission_mode: str
-    append_system_prompt: str | None = None
+    claude_md_addition: str | None = None  # standing instructions appended to the clone's project CLAUDE.md
     tools: str | None = None  # None keeps Claude Code's default tool set
     disallowed_tools: tuple[str, ...] = ()  # restrictions beyond SAFETY_DENIED_TOOLS
     context_preamble: str | None = None
@@ -326,9 +326,6 @@ def replay_command(settings: ReplaySettings, original_cwd: Path | None = None,
                    workdir: Path | None = None, memory_dir: Path | None = None,
                    recordings_file: Path | None = None, answers_file: Path | None = None,
                    resume_id: str | None = None) -> list[str]:
-    appended = settings.append_system_prompt
-    if appended and original_cwd and workdir:
-        appended = _point_at_clone(appended, original_cwd, workdir)
     command = [
         # CULPRIT_CLAUDE_BIN replays on another Claude Code build: a verdict that flips between builds points
         # at Claude Code itself rather than at your setup
@@ -342,8 +339,8 @@ def replay_command(settings: ReplaySettings, original_cwd: Path | None = None,
         "--settings", json.dumps(_applied_settings(memory_dir)),
     ]
     if resume_id:
-        # the snapshot must be off: with it Claude Code reuses the session's recorded system prompt and
-        # ignores --append-system-prompt, which would silently disable the agent-setup oracle
+        # the snapshot stays off so the fork reads the project's instructions as they are now, the agent-setup
+        # oracle's addition included (a live probe found CLAUDE.md is re-read either way; this keeps it so)
         command += ["--resume", resume_id, "--fork-session", "--system-prompt-snapshot", "off"]
     if settings.prompt_images:
         command += ["--input-format", "stream-json"]  # the only way to send images headless (verified live)
@@ -351,8 +348,6 @@ def replay_command(settings: ReplaySettings, original_cwd: Path | None = None,
         command += ["--model", settings.model]
     if settings.tools is not None:
         command += ["--tools", settings.tools]
-    if appended:
-        command += ["--append-system-prompt", appended]
     denied = [*SAFETY_DENIED_TOOLS, *settings.disallowed_tools]
     if original_cwd:
         # "//" makes a permission path absolute: file tools may not touch the original project
@@ -458,6 +453,47 @@ def run_in_own_process_group(command: list[str], *, input: str | None = None, ca
     return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
+# The agent-setup oracle's instructions reach Claude the way the real fix would: appended to the project's
+# CLAUDE.md in the clone (a user message), not through --append-system-prompt (a stronger system-prompt
+# channel that could pass with text that would fail once pasted into CLAUDE.md). The addition comes out
+# again before the diff, so the judge sees only what the agent changed.
+CLAUDE_MD_HEADING = "## More working rules"
+
+
+def claude_md_target(root: Path) -> str:
+    """The project instruction file the addition goes into: CLAUDE.md, or .claude/CLAUDE.md when only that
+    exists; a new CLAUDE.md when neither does."""
+    if not (root / "CLAUDE.md").is_file() and (root / ".claude" / "CLAUDE.md").is_file():
+        return ".claude/CLAUDE.md"
+    return "CLAUDE.md"
+
+
+def _add_to_claude_md(workdir: Path, text: str) -> tuple[Path, str | None]:
+    """Appends text under CLAUDE_MD_HEADING; returns the file and what it held before (None: it was new)."""
+    target = workdir / claude_md_target(workdir)
+    before = target.read_text() if target.is_file() else None
+    lead = "" if not before else ("\n" if before.endswith("\n") else "\n\n")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(f"{before or ''}{lead}{CLAUDE_MD_HEADING}\n\n{text.strip()}\n")
+    return target, before
+
+
+def _take_back_from_claude_md(target: Path, before: str | None, added: str) -> None:
+    """Removes the addition again, keeping anything the agent itself wrote to the file."""
+    if not target.is_file():
+        return
+    now = target.read_text()
+    if now == added:
+        if before is None:
+            target.unlink()
+        else:
+            target.write_text(before)
+        return
+    block = added[len(before or ""):]
+    if block in now:
+        target.write_text(now.replace(block, "", 1))
+
+
 def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir: Path, checks: tuple[str, ...],
                run=run_in_own_process_group, projects_dir: Path | None = None,
                original_cwd: Path | None = None, original_memory: Path | None = None) -> ReplayResult:
@@ -494,6 +530,13 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
                         timeout=CHECK_TIMEOUT_S, env=env)
             if setup.returncode != 0:
                 raise SetupScriptFailed(f"{settings.setup_script} exited {setup.returncode}: {setup.stderr[-500:]}")
+        addition = None
+        if settings.claude_md_addition:
+            text = settings.claude_md_addition
+            if original_cwd:
+                text = _point_at_clone(text, original_cwd, workdir)  # paths in the original point at the copy
+            target, held = _add_to_claude_md(workdir, text)
+            addition = (target, held, target.read_text())
         if history is not None:
             resume_id = str(uuid.uuid4())
             forked_log = project_folder / f"{resume_id}.jsonl"
@@ -514,6 +557,8 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
         (run_dir / "stderr.txt").write_text(stderr)
         result_line = _result_line(stdout)
         check_results = tuple(_run_check(command, workdir, run, env) for command in checks)
+        if addition is not None:
+            _take_back_from_claude_md(*addition)
         (run_dir / DIFF_FILE).write_text(_bounded_diff(pristine, workdir, run))
         if result_line is None:
             reason = "timed out" if exit_code == -1 else f"no result line (exit {exit_code})"
@@ -609,6 +654,8 @@ def settings_to_json(settings: ReplaySettings) -> dict:
 
 def settings_from_json(data: dict) -> ReplaySettings:
     fields = dict(data)
+    if "append_system_prompt" in fields:  # stored before the addition moved into CLAUDE.md
+        fields.setdefault("claude_md_addition", fields.pop("append_system_prompt"))
     fields["setup_script"] = Path(fields["setup_script"]) if fields.get("setup_script") else None
     fields["disallowed_tools"] = tuple(fields.get("disallowed_tools") or ())
     fields["prompt_images"] = tuple(fields.get("prompt_images") or ())

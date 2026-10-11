@@ -19,7 +19,7 @@ def test_each_fault_breaks_exactly_one_layer():
     assert plant(PlantedFault.TRUNCATED_PROMPT, BASE, CRITERION) == (
         replace(BASE, prompt="fix the failing login test in"), CRITERION)
     assert plant(PlantedFault.MISLEADING_INSTRUCTION, BASE, CRITERION) == (
-        replace(BASE, append_system_prompt=MISLEADING_INSTRUCTION_TEXT), CRITERION)
+        replace(BASE, claude_md_addition=MISLEADING_INSTRUCTION_TEXT), CRITERION)
     assert plant(PlantedFault.EDIT_TOOLS_REMOVED, BASE, CRITERION) == (replace(BASE, tools="Read,Grep,Glob"), CRITERION)
     assert plant(PlantedFault.WEAK_MODEL, BASE, CRITERION) == (replace(BASE, model="claude-haiku-5-5"), CRITERION)
     assert plant(PlantedFault.IMPOSSIBLE_CRITERION, BASE, CRITERION) == (BASE, IMPOSSIBLE)

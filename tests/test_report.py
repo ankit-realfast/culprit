@@ -114,3 +114,21 @@ def test_each_verdict_shows_the_numbers_behind_it(tmp_path):
                 "harness": {"variant": "harness", "passes": 8, "runs": 10, "cost_usd": 1.0, "void": 0}}
     save_verdict(tmp_path / "a__1", Verdict("a:1", "wrong-result", "harness", "e", outcomes, {}))
     assert "harness: baseline 0/10 → 8/10, p = 0.0004" in render_report(collect(tmp_path), [])
+
+
+def test_an_agent_setup_verdict_shows_the_tested_lines_and_the_untested_placement(tmp_path):
+    import json
+    verdict(tmp_path, "c__1", "ignored-instructions", "agent-setup")
+    (tmp_path / "c__1" / "variants").mkdir()
+    (tmp_path / "c__1" / "variants" / "agent-setup.json").write_text(json.dumps({
+        "prompt": "p", "model": None, "permission_mode": "auto", "claude_md_addition": "Run the tests.\nSay what failed.",
+        "draft": {"placement": "CLAUDE.local.md", "reason": "personal habit", "written_to": "/work/proj/CLAUDE.md"}}))
+    text = render_report(collect(tmp_path), []).split("## Verdicts")[1]
+    assert "adding these lines to /work/proj/CLAUDE.md made it pass" in text
+    assert "Run the tests." in text and "Say what failed." in text
+    assert "suggested placement (not tested): CLAUDE.local.md — personal habit" in text
+
+
+def test_other_verdicts_show_no_placement(tmp_path):
+    sample(tmp_path)
+    assert "suggested placement" not in render_report(collect(tmp_path), [])

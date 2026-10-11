@@ -54,12 +54,19 @@ def test_two_leaks_make_the_cause_untested(write_session, tmp_path):
     assert "leak" in built.untested_reason
 
 
-def test_the_agent_setup_oracle_replaces_only_the_appended_instructions(write_session, tmp_path):
-    ask = FakeAsk({"text": "Verify every change against its stated outcome before reporting done."},
+def test_the_agent_setup_oracle_replaces_only_the_claude_md_addition(write_session, tmp_path):
+    from culprit.diagnose import PLACEMENTS
+    ask = FakeAsk({"text": "Verify every change against its stated outcome before reporting done.",
+                   "placement": ".claude/rules/<topic>.md with paths", "reason": "only matters for src/"},
                   {"leaks": False, "evidence": "none"})
     built = build(Cause.AGENT_SETUP, episode_with(write_session, tmp_path), tmp_path, ask=ask)
-    assert built.settings == replace(BASE, append_system_prompt="Verify every change against its stated outcome before reporting done.")
-    assert "CLAUDE.md" in ask.calls[0][0]
+    assert built.settings == replace(BASE, claude_md_addition="Verify every change against its stated outcome before reporting done.")
+    assert built.draft == {"placement": ".claude/rules/<topic>.md with paths", "reason": "only matters for src/",
+                           "written_to": str(tmp_path / "CLAUDE.md")}
+    prompt, schema = ask.calls[0]
+    assert "CLAUDE.md" in prompt
+    assert schema["properties"]["placement"]["enum"] == list(PLACEMENTS)
+    assert set(schema["required"]) == {"text", "placement", "reason"}
 
 
 def test_the_environment_oracle_needs_a_human_script(write_session, tmp_path):
@@ -114,7 +121,8 @@ def test_combine_takes_each_causes_fields_from_its_variant():
                               Cause.HARNESS: replace(BASE, tools="default", context_preamble="FILES", max_budget_usd=4.0)})
     assert (combined.prompt, combined.model, combined.tools, combined.context_preamble, combined.max_budget_usd) == \
         ("clear", ORACLE_MODEL, "default", "FILES", 4.0)
-    assert combined.append_system_prompt is None
+    assert combined.claude_md_addition is None
+    assert combine(BASE, {Cause.AGENT_SETUP: replace(BASE, claude_md_addition="rules")}).claude_md_addition == "rules"
 
 
 def pristine_repo(tmp_path):

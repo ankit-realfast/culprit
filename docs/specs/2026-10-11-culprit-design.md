@@ -107,7 +107,9 @@ says so.
   the absolute path becomes `-`), is resumed from that folder by `claude -p --resume <new id> --fork-session
   --no-session-persistence`: the model sees the earlier turns and nothing after the cut, and neither the
   original log nor the copy is modified. Without `--system-prompt-snapshot off` the resumed run reuses the
-  session's recorded system prompt and ignores `--append-system-prompt`.
+  session's recorded system prompt and ignores `--append-system-prompt`. A CLAUDE.md edited after the
+  session started is picked up both by a fresh `-p` run and by a `--resume … --fork-session` run, with or
+  without the snapshot flag (live probe, 2.1.296); culprit keeps `--system-prompt-snapshot off` anyway.
 - `--json-schema` with `--output-format json` returns schema-checked output in `structured_output`
   (docs); the judge, drafter and leak check use it.
 
@@ -178,8 +180,8 @@ claude -p \                      # the episode or variant prompt goes on stdin
   session's first prompt, culprit copies every record before the episode's prompt (by file order), gives
   the copy a fresh session id, points every path into the original project (each `cwd` and any path the
   conversation mentions) at the clone, writes it under the clone's folder in `~/.claude/projects/` and
-  resumes it as a fork with the system-prompt snapshot off, so the appended-instructions oracle still
-  applies. Every variant gets the same history; the task oracle restates only the episode's own prompt.
+  resumes it as a fork with the system-prompt snapshot off, so the fork reads the clone's CLAUDE.md as
+  it is now, the agent-setup oracle's addition included. Every variant gets the same history; the task oracle restates only the episode's own prompt.
   A session's first prompt replays with no history, as before. The original log is only read.
 - **No real MCP server ever connects.** For each server an episode used, culprit runs a stand-in that
   answers recorded calls with their recorded results and fails any call the original never made.
@@ -218,7 +220,7 @@ hook the project's own settings define, because those hooks run in every replay.
 |---|---|---|
 | Task | The prompt, rewritten from the original prompt and the approved criterion to state scope and success criterion (the follow-ups reach it only through the criterion, which limits leaks; the leak check still compares the draft with them); for a follow-up, the drafter also sees the session's earlier conversation | The leak check rejects it twice |
 | Environment | A fix script the human supplies (`culprit env-fix`) runs in the clone before the replay | No script supplied (the common case in v1) |
-| Agent setup | An appended system prompt (`--append-system-prompt`) drafted from the criterion, the instructions the agent already loads and the starting folder layout: standing instructions that fill gaps in those, no task-specific facts, at most 12 lines | The leak check rejects it twice |
+| Agent setup | Standing instructions drafted from the criterion, the instructions the agent already loads and the starting folder layout (gaps filled, no task-specific facts, at most 12 lines), appended to the clone's project `CLAUDE.md` under a `## More working rules` heading before Claude starts (`.claude/CLAUDE.md` when only that exists; a new `CLAUDE.md` when neither does) — the way the real fix would arrive, as a user message, not through the stronger `--append-system-prompt` channel. The addition is removed again before the diff, so the judge sees only the agent's changes; combined and pair variants write it too | The leak check rejects it twice |
 | Harness | The default tool set with every non-safety restriction lifted, the files the episode read or edited preloaded into the prompt as context, and double the spend cap | Never |
 | Model | `--model claude-fable-5-1` | The episode already ran on Fable |
 
@@ -245,7 +247,11 @@ during or after it (the leak check against the prompt and follow-ups is unchange
   characters, keeping the files nearest the working folder when trimming. It also sees the starting copy's
   top two folder levels (skipping `.git`, `node_modules`, virtualenvs, caches and build output), at most
   150 lines. The draft is appended to those instructions, so it is told to fill their gaps rather than repeat
-  them.
+  them. Alongside the text it returns a suggested placement — project `CLAUDE.md`, `CLAUDE.local.md`,
+  `.claude/rules/<topic>.md` with `paths:`, `~/.claude/CLAUDE.md` or managed policy — and a one-line
+  reason. The variant file stores that suggestion and the file the test wrote; the report shows under an
+  Agent setup verdict "adding these lines to <project>/CLAUDE.md made it pass", the lines, and the
+  placement labelled as a suggestion that was not tested (only the project `CLAUDE.md` placement is).
 
 ### What "passes clearly" means
 
@@ -274,7 +280,7 @@ Every verdict states the numbers behind it — the baseline's pass count, the wi
    what makes "Not reproducible" detectable.
 4. **Planted-fault accuracy.** selftest takes a control episode (one whose baseline passes at least 4 in 5
    of the N runs, 8 of 10), breaks one layer on purpose, and checks culprit names it: a truncated prompt (expect Task), a
-   misleading appended instruction (expect Agent setup), the edit tools removed (expect Harness), a weak
+   misleading instruction added to the project CLAUDE.md (expect Agent setup), the edit tools removed (expect Harness), a weak
    model (expect Model), and an impossible success criterion (expect Unexplained, the outcome a broken
    check produces — catching that case is what judge calibration is for). The share named correctly is
    printed beside every verdict.
@@ -286,6 +292,8 @@ Every verdict states the numbers behind it — the baseline's pass count, the wi
 - An episode in which Claude asked the human a question replays only when the log recorded the
   human's answer (the answer host gives it back); one with no recorded answer is not replayable.
 - Episodes already run on Fable cannot test the Model cause; reported as untestable.
+- The Agent setup addition is an uncommitted change to the clone's `CLAUDE.md`, so an agent that runs
+  `git status` or `git diff` can see it, where a real fix would be committed.
 - An MCP call or a question the original session never made cannot be answered in a replay.
 - For a project in git, files nothing else recorded come from the last commit before the episode;
   elsewhere they are as they are today.
