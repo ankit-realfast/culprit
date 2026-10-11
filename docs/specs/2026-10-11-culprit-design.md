@@ -95,6 +95,9 @@ says so.
   `.claude/settings.json`, leaves it out of the init tool list. Images reach the model as content blocks
   of a `--input-format stream-json` user message. `sandbox.enabled` with `allowUnsandboxedCommands: false`
   refused a shell write outside the working directory. `autoMemoryDirectory` in `--settings` is read.
+  A sandboxed `curl https://example.com` was refused in `acceptEdits` ("user denied") and, in `auto`, as
+  "not in this command's allowed_domains" (so a command declaring its domains could be approved); with
+  `sandbox.network.strictAllowlist: true` it was refused outright ("host is not on the allow list").
 - `--max-budget-usd` caps spend; JSON output reports `total_cost_usd`.
 - Measured with two live Haiku calls (about $0.008 in total): `--output-format stream-json` requires
   `--verbose` with `-p`; the last line is `{"type": "result", "subtype": "success", "is_error": false,
@@ -184,7 +187,7 @@ claude -p \                      # the episode or variant prompt goes on stdin
   --permission-prompts none --permission-mode <mode> \
     # with recorded answers: --permission-prompts host --permission-prompt-tool <answer host>
   --no-session-persistence --max-budget-usd <cap> \
-  --settings '<Bash sandbox, autoMemoryDirectory>' \
+  --settings '<Bash sandbox (strict empty network allow list), autoMemoryDirectory>' \
   --model <model> \
     # a follow-up episode: --resume <fork id> --fork-session --system-prompt-snapshot off
   --disallowedTools "Bash(git push *)" "Bash(gh *)" <file tools on the original folder>
@@ -203,7 +206,7 @@ claude -p \                      # the episode or variant prompt goes on stdin
   question close to one the human answered (difflib ratio ≥ 0.6) gets that answer, and every other
   question or permission prompt is refused.
 - **Shell commands run in the OS Bash sandbox** (writes only in the copy and the temp folder, no
-  unsandboxed fallback); file tools are denied on the original folder; a before/after fingerprint of the
+  unsandboxed fallback, a strict and empty network allow list so no shell command reaches any host); file tools are denied on the original folder; a before/after fingerprint of the
   original stops culprit if anything changed. Images are resent with the prompt.
 - **The working directory is an APFS clone** (`cp -cR`) of a pristine restored copy, one fresh clone
   per replay, with every git remote removed; `git push` and `gh` are also denied.

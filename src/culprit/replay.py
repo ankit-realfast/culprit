@@ -244,8 +244,12 @@ DIFF_EXCLUDES = (".git", "node_modules", ".venv", "venv", "__pycache__", ".pytes
 DIFF_TIMEOUT_S = 120
 MAX_DIFF_BYTES = 2_000_000
 # the OS-enforced Bash sandbox: shell commands may write only in the replay's copy and the temp folder,
-# and may not fall back to running unsandboxed (verified live 2026-10-11: a write to ~ was refused)
-SANDBOX_SETTINGS = {"enabled": True, "allowUnsandboxedCommands": False, "failIfUnavailable": True}
+# and may not fall back to running unsandboxed (verified live 2026-10-11: a write to ~ was refused). The network
+# allow list is strict and empty: every host is refused outright. Without it a sandboxed `curl` was refused in
+# acceptEdits but in auto only "not in this command's allowed_domains", so a command declaring its domains could
+# be approved onto the network (both verified live on 2.1.296; strict: "host is not on the allow list")
+SANDBOX_SETTINGS = {"enabled": True, "allowUnsandboxedCommands": False, "failIfUnavailable": True,
+                    "network": {"strictAllowlist": True}}
 GIT_STATE_FILES = ("HEAD", "index")
 # what each replay leaves in its run folder
 TRANSCRIPT_FILE = "transcript.jsonl"

@@ -131,7 +131,8 @@ uv run culprit status [1]          # where episodes stand and the next command
   earlier conversation is a copy of your session log under `~/.claude/projects/`, also deleted afterwards;
   your own log is only read. File tools are
   denied on your project, and culprit stops if your project changes during a replay.
-- Shell commands run in Claude Code's OS sandbox and can write only to the copy and the temp folder.
+- Shell commands run in Claude Code's OS sandbox and can write only to the copy and the temp folder. Its
+  network allow list is strict and empty, so a shell command reaches no host, in any permission mode.
 - Git remotes are stripped, and `git push` and `gh` are denied. Worktrees and submodules are refused.
 - MCP servers never connect. A stand-in answers with the results recorded in your log.
 - Episodes in your home folder, in a folder containing culprit, or under an unwritable parent are refused.

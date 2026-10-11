@@ -317,7 +317,18 @@ def test_the_stored_diff_skips_dependency_folders_and_is_bounded(tmp_path):
 def test_every_replay_runs_inside_the_bash_sandbox():
     command = replay_command(settings())
     applied = json.loads(command[command.index("--settings") + 1])
-    assert applied["sandbox"] == {"enabled": True, "allowUnsandboxedCommands": False, "failIfUnavailable": True}
+    assert applied["sandbox"] == {"enabled": True, "allowUnsandboxedCommands": False, "failIfUnavailable": True,
+                                  "network": {"strictAllowlist": True}}
+
+
+def test_sandboxed_shell_commands_reach_no_host_whatever_the_permission_mode():
+    # strictAllowlist refuses every host not on the (empty) allow list outright, so even in auto a command that
+    # declares the domains it needs cannot be approved onto the network
+    for mode in ("auto", "acceptEdits"):
+        command = replay_command(settings(permission_mode=mode))
+        applied = json.loads(command[command.index("--settings") + 1])
+        assert applied["sandbox"]["network"] == {"strictAllowlist": True}
+        assert "allowedDomains" not in applied["sandbox"]["network"]
 
 
 def test_the_replay_reads_a_copy_of_the_original_projects_memory(tmp_path):
