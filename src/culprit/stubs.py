@@ -2,14 +2,18 @@
 
 Run as: python -m culprit.stubs mcp <recordings.json> <server name>
     or: python -m culprit.stubs answers <answers.json>
+    or: python -m culprit.stubs bash-hook <network-recordings.json>   (a PreToolUse hook)
 
 This module imports nothing heavier than logs, so a stand-in process starts fast."""
 
 from __future__ import annotations
 
 import json
+import re
+import shlex
 import sys
 from difflib import SequenceMatcher
+from pathlib import Path
 
 from culprit.logs import ASK_USER_TOOL, Episode, content_blocks
 
@@ -158,9 +162,150 @@ def answers_main(args: list[str]) -> None:
     serve_stdio(lambda message: serve_message(message, tools, call))
 
 
+# --- bash-hook: recorded answers for shell commands that reach the network ---
+# The replay's shell sandbox reaches no host (a strict, empty allow list). A shell command the episode ran
+# against the network (curl, kubectl, psql, …) is answered instead from the log: culprit's PreToolUse hook
+# rewrites a command that exactly matches a recorded one (after the original project's paths point at the
+# clone, whitespace normalised) into one that prints the recorded output and exits with the recorded
+# status. Anything else is left alone, so the sandbox refuses a live network call honestly. Every network
+# call the hook sees is logged beside the recordings, served or not, so a verdict built on refused calls
+# shows. `gh` and `git push` are not on the list: the replay keeps denying them outright.
+# updatedInput rewriting a Bash command from a --settings hook was verified live on 2.1.296 (Haiku): the
+# replacement's output and exit status came back and the transcript kept the original command.
+
+NETWORK_TOOLS = ("curl", "wget", "gcloud", "gsutil", "bq", "psql", "mysql", "aws", "az", "kubectl", "ssh", "scp",
+                 "sftp", "rsync", "http", "https", "redis-cli", "mongosh", "mongo", "sqlcmd", "firebase", "vercel",
+                 "supabase", "heroku", "stripe", "nc", "telnet", "ftp", "doctl", "flyctl", "netlify", "wrangler",
+                 "helm", "terraform")
+COMMAND_WRAPPERS = ("sudo", "env", "time", "nohup", "command", "exec", "xargs", "nice")
+SHELLS = ("bash", "sh", "zsh")
+SEGMENT_BREAK = re.compile(r"&&|\|\||[;&|\n`(){}]|\$\(")
+ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+REMOTE_PATH = re.compile(r"^[^/\s:]+:")  # host:path or user@host:path, as rsync takes a remote over ssh
+EXIT_CODE_LINE = re.compile(r"^Exit code (\d+)\n?")
+NETWORK_RECORDINGS = "network-recordings.json"
+NETWORK_LOG = "network-log.jsonl"
+BASH_TOOL = "Bash"
+
+
+def uses_network(command: str) -> bool:
+    """Whether any simple command in the line runs a network tool (behind wrappers, assignments, paths)."""
+    unquoted = command.replace("'", " ").replace('"', " ")
+    return any(_runs_network_tool(segment.split()) for segment in SEGMENT_BREAK.split(unquoted))
+
+
+def _runs_network_tool(words: list[str]) -> bool:
+    while words:
+        word = words[0]
+        if ASSIGNMENT.match(word) or word in COMMAND_WRAPPERS or (word.startswith("-") and len(words) > 1):
+            words = words[1:]
+        elif word == "timeout" and len(words) > 1:
+            words = words[2:]
+        elif word in SHELLS and words[1:2] == ["-c"]:
+            words = words[2:]
+        else:
+            break
+    if not words:
+        return False
+    tool = words[0].rsplit("/", 1)[-1]
+    if tool == "rsync":
+        return any(arg in ("-e", "--rsh") or arg.startswith("--rsh=") or REMOTE_PATH.match(arg)
+                   for arg in words[1:])
+    return tool in NETWORK_TOOLS
+
+
+def network_recordings_from_episode(episode: Episode) -> dict[str, list[dict]]:
+    """Every network shell command the episode ran, in order, with the output and exit status it got."""
+    calls: dict[str, str] = {}
+    shell: list[dict] = []
+    for record in episode.records:
+        for block in content_blocks(record):
+            if block.get("type") == "tool_use" and block.get("name") == BASH_TOOL:
+                command = str((block.get("input") or {}).get("command", ""))
+                if uses_network(command):
+                    calls[block.get("id")] = command
+            elif block.get("type") == "tool_result" and block.get("tool_use_id") in calls:
+                text = _result_text(block.get("content"))
+                exit_code = 0
+                if block.get("is_error"):
+                    # Claude Code puts "Exit code N" before a failed command's output; it adds it again on replay
+                    stated = EXIT_CODE_LINE.match(text)
+                    exit_code = int(stated.group(1)) if stated else 1
+                    text = text[stated.end():] if stated else text
+                shell.append({"command": calls.pop(block["tool_use_id"]), "output": text, "exit_code": exit_code})
+    return {"shell": shell} if shell else {}
+
+
+def normalise(command: str) -> str:
+    return " ".join(command.split())
+
+
+def prepare_network_recordings(recordings: dict, folder: Path, rewrite) -> Path:
+    """Write the hook's recordings into the run folder: each command pointed at the clone by `rewrite` and
+    normalised, each output in its own file the replacement command prints. A previous log is cleared."""
+    folder.mkdir(parents=True, exist_ok=True)
+    outputs = folder / "network-outputs"
+    outputs.mkdir(exist_ok=True)
+    shell = []
+    for index, recording in enumerate(recordings.get("shell") or []):
+        output_file = (outputs / f"{index}.txt").resolve()
+        output_file.write_text(recording["output"])
+        shell.append({"command": normalise(rewrite(recording["command"])), "output_file": str(output_file),
+                      "exit_code": int(recording["exit_code"])})
+    path = (folder / NETWORK_RECORDINGS).resolve()
+    path.write_text(json.dumps({"shell": shell}))
+    (folder / NETWORK_LOG).unlink(missing_ok=True)
+    return path
+
+
+def bash_hook(event: dict, recordings_file: Path) -> dict | None:
+    """The PreToolUse reply for one Bash call: the recorded answer for an exactly recorded network command,
+    else None (no output: Claude Code carries on, and the sandbox refuses any live network)."""
+    if event.get("tool_name") != BASH_TOOL:
+        return None
+    tool_input = event.get("tool_input") or {}
+    command = normalise(str(tool_input.get("command", "")))
+    if not uses_network(command):
+        return None
+    recordings = json.loads(Path(recordings_file).read_text()).get("shell") or []
+    matches = [recording for recording in recordings if recording["command"] == command]
+    log = Path(recordings_file).parent / NETWORK_LOG
+    served_before = sum(1 for entry in _read_log(log) if entry["tool"] == BASH_TOOL and entry["served"]
+                        and entry["call"] == command)
+    _log(log, BASH_TOOL, command, served=bool(matches))
+    if not matches:
+        return None
+    recording = matches[min(served_before, len(matches) - 1)]
+    replacement = f"cat {shlex.quote(recording['output_file'])}; exit {recording['exit_code']}"
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
+                                   "permissionDecisionReason": "culprit replay: the recorded result of this exact command",
+                                   "updatedInput": {**tool_input, "command": replacement}}}
+
+
+def _read_log(log: Path) -> list[dict]:
+    if not log.exists():
+        return []
+    return [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
+
+
+def _log(log: Path, tool: str, call: str, served: bool) -> None:
+    with log.open("a") as out:
+        out.write(json.dumps({"tool": tool, "call": call, "served": served}) + "\n")
+
+
+def bash_hook_main(args: list[str]) -> None:
+    """`bash-hook <network-recordings.json>`: read one PreToolUse event on stdin, print the reply if any."""
+    try:
+        reply = bash_hook(json.loads(sys.stdin.read()), Path(args[0]))
+    except Exception:  # never break the replay's shell: without a reply the sandbox still refuses the network
+        reply = None
+    if reply is not None:
+        sys.stdout.write(json.dumps(reply))
+
+
 # --- entry point ---
 
-STAND_INS = {"mcp": mcp_main, "answers": answers_main}
+STAND_INS = {"mcp": mcp_main, "answers": answers_main, "bash-hook": bash_hook_main}
 
 
 def main() -> None:

@@ -187,7 +187,7 @@ claude -p \                      # the episode or variant prompt goes on stdin
   --permission-prompts none --permission-mode <mode> \
     # with recorded answers: --permission-prompts host --permission-prompt-tool <answer host>
   --no-session-persistence --max-budget-usd <cap> \
-  --settings '<Bash sandbox (strict empty network allow list), autoMemoryDirectory>' \
+  --settings '<Bash sandbox (strict empty network allow list), autoMemoryDirectory, culprit hooks>' \
   --model <model> \
     # a follow-up episode: --resume <fork id> --fork-session --system-prompt-snapshot off
   --disallowedTools "Bash(git push *)" "Bash(gh *)" <file tools on the original folder>
@@ -202,6 +202,23 @@ claude -p \                      # the episode or variant prompt goes on stdin
   A session's first prompt replays with no history, as before. The original log is only read.
 - **No real MCP server ever connects.** For each server an episode used, culprit runs a stand-in that
   answers recorded calls with their recorded results and fails any call the original never made.
+- **Network shell commands are answered from the log.** The sandbox reaches no host. culprit adds its
+  own `PreToolUse` hook for `Bash` through `--settings` (`python -m culprit.stubs bash-hook
+  <recordings>`), beside the user's own hooks, which still run as in the original. From the episode's
+  records culprit lists every `Bash` call whose command runs a network tool (curl, wget, gcloud, gsutil,
+  bq, psql, mysql, aws, az, kubectl, ssh, scp, sftp, rsync to a remote or over `-e ssh`, httpie's
+  `http`/`https`, redis-cli, mongosh, mongo, sqlcmd, firebase, vercel, supabase, heroku, stripe, nc,
+  telnet, ftp, doctl, flyctl, netlify, wrangler, helm, terraform — at any command position, behind
+  `sudo`/`env`/`timeout`/assignments/`bash -c`), with its recorded output and exit status ("Exit code N"
+  taken off the front of a failed result; a failure with none exits 1). An incoming command that,
+  normalised for whitespace, exactly matches a recorded one (its original-project paths pointed at the
+  clone) is allowed with `updatedInput` replacing it by `cat <recorded output>; exit <status>`; a
+  command recorded several times gets each answer in turn, then the last again. Anything else gets no
+  reply, so the sandbox refuses a live call. `gh` and `git push` are not on the list; they stay denied.
+  Every network call the hook sees is logged in the run folder (`network-log.jsonl`), served or not.
+  Verified live 2026-10-11 on 2.1.296 (Haiku): a `--settings` `PreToolUse` hook's `updatedInput`
+  replaced a Bash command, its output and exit status reached the model, and the transcript kept the
+  original command; a user hook that blocks the command still wins.
 - **Questions are answered from the log:** culprit's answer host is the permission-prompt tool; a
   question close to one the human answered (difflib ratio ≥ 0.6) gets that answer, and every other
   question or permission prompt is refused.
@@ -377,7 +394,9 @@ in the report, and `status --json` gives each outcome's totals plus `usd_per_run
   untestable. An episode on an older Fable (say claude-fable-5 once claude-fable-5-1 exists) is tested.
 - The Agent setup addition is an uncommitted change to the clone's `CLAUDE.md`, so an agent that runs
   `git status` or `git diff` can see it, where a real fix would be committed.
-- An MCP call or a question the original session never made cannot be answered in a replay.
+- An MCP call or a question the original session never made cannot be answered in a replay. Nor can a
+  network shell command that is not identical to one the episode ran: the sandbox refuses it, and a
+  command whose network tool is not on culprit's list is simply refused by the sandbox, unrecorded.
 - For a project in git, files nothing else recorded come from the last commit before the episode;
   elsewhere they are as they are today.
 - v1 replays from the episode's start (with its session's earlier conversation in place), not from the

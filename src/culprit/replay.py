@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -16,7 +17,8 @@ from pathlib import Path
 from culprit import logs
 from culprit.logs import (Episode, Tracked, is_follow_up, original_effort, prompt_images, recorded_answers,
                           records_before)
-from culprit.stubs import MCP_PREFIX, PERMISSION_PROMPT_TOOL, SERVER as ANSWER_SERVER, recordings_from_episode
+from culprit.stubs import (MCP_PREFIX, PERMISSION_PROMPT_TOOL, SERVER as ANSWER_SERVER, network_recordings_from_episode,
+                           prepare_network_recordings, recordings_from_episode)
 
 
 # --- sandbox: Rebuild the files an episode started from, in a throwaway folder, and check the rebuild. ---
@@ -274,6 +276,7 @@ class ReplaySettings:
     prompt_images: tuple[dict, ...] = ()  # image blocks the human attached, resent with the prompt
     mcp_recordings: dict = field(default_factory=dict)  # per MCP server, the calls the episode made and their results
     recorded_answers: dict = field(default_factory=dict)  # question -> what the human answered in the original
+    network_recordings: dict = field(default_factory=dict)  # "shell": the episode's network commands and their results
     history_file: Path | None = None  # a follow-up's session log: the replay resumes its records before...
     history_before: str | None = None  # ...the record with this uuid, the episode's prompt
 
@@ -332,7 +335,8 @@ def baseline_settings(episode: Episode, max_budget_usd: float | None = None) -> 
                           max_budget_usd=replay_budget_usd(episode) if max_budget_usd is None else max_budget_usd,
                           timeout_s=replay_timeout_s(episode), prompt_images=tuple(prompt_images(episode)),
                           mcp_recordings=recordings_from_episode(episode),
-                          recorded_answers=recorded_answers(episode), **_history(episode))
+                          recorded_answers=recorded_answers(episode),
+                          network_recordings=network_recordings_from_episode(episode), **_history(episode))
 
 
 def _history(episode: Episode) -> dict:
@@ -359,7 +363,7 @@ def replay_prompt(settings: ReplaySettings, original_cwd: Path | None = None, wo
 def replay_command(settings: ReplaySettings, original_cwd: Path | None = None,
                    workdir: Path | None = None, memory_dir: Path | None = None,
                    recordings_file: Path | None = None, answers_file: Path | None = None,
-                   resume_id: str | None = None) -> list[str]:
+                   resume_id: str | None = None, network_file: Path | None = None) -> list[str]:
     command = [
         # CULPRIT_CLAUDE_BIN replays on another Claude Code build: a verdict that flips between builds points
         # at Claude Code itself rather than at your setup
@@ -370,7 +374,7 @@ def replay_command(settings: ReplaySettings, original_cwd: Path | None = None,
         "--permission-mode", settings.permission_mode,
         "--no-session-persistence",
         "--max-budget-usd", f"{settings.max_budget_usd:.2f}",
-        "--settings", json.dumps(_applied_settings(memory_dir)),
+        "--settings", json.dumps(_applied_settings(memory_dir, network_file)),
     ]
     if resume_id:
         # the snapshot stays off so the fork reads the project's instructions as they are now, the agent-setup
@@ -417,11 +421,19 @@ def _permission_host(settings: ReplaySettings, answers_file: Path | None) -> lis
     return ["--permission-prompts", "none"]
 
 
-def _applied_settings(memory_dir: Path | None) -> dict:
+def _applied_settings(memory_dir: Path | None, network_file: Path | None = None) -> dict:
     applied: dict = {"sandbox": SANDBOX_SETTINGS}
     if memory_dir is not None:
         applied["autoMemoryDirectory"] = str(memory_dir)
+    if network_file is not None:
+        # culprit's own hook, added to the user's hooks (which still run, as in the original session)
+        applied["hooks"] = {"PreToolUse": [_stub_hook("Bash", "bash-hook", network_file)]}
     return applied
+
+
+def _stub_hook(matcher: str, stand_in: str, recordings: Path) -> dict:
+    command = f"{shlex.quote(sys.executable)} -m culprit.stubs {stand_in} {shlex.quote(str(recordings))}"
+    return {"matcher": matcher, "hooks": [{"type": "command", "command": command}]}
 
 
 def _point_at_clone(text: str, original_cwd: Path, workdir: Path) -> str:
@@ -553,6 +565,10 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
     if settings.mcp_recordings:
         recordings_file = (run_dir / "mcp-recordings.json").resolve()
         recordings_file.write_text(json.dumps(settings.mcp_recordings))
+    # always written, so culprit's hook is always in place; a network command it finds here gets its recorded answer
+    network_file = prepare_network_recordings(
+        settings.network_recordings, run_dir,
+        lambda text: _point_at_clone(text, original_cwd, workdir.resolve()) if original_cwd else text)
     # read before anything is made, so a session log that lost the prompt refuses the replay cleanly
     history = records_before(settings.history_file, settings.history_before) if settings.history_file else None
     clone_tree(pristine, workdir)
@@ -586,7 +602,7 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
             forked_log.write_text("".join(json.dumps(record) + "\n" for record in forked))
         try:
             completed = run(replay_command(settings, original_cwd, workdir, memory_dir, recordings_file, answers_file,
-                                           resume_id),
+                                           resume_id, network_file),
                             cwd=workdir,
                             capture_output=True,
                             text=True, timeout=settings.timeout_s, env=env,
@@ -764,5 +780,6 @@ def settings_from_json(data: dict) -> ReplaySettings:
     fields["prompt_images"] = tuple(fields.get("prompt_images") or ())
     fields["mcp_recordings"] = dict(fields.get("mcp_recordings") or {})
     fields["recorded_answers"] = dict(fields.get("recorded_answers") or {})
+    fields["network_recordings"] = dict(fields.get("network_recordings") or {})
     fields["history_file"] = Path(fields["history_file"]) if fields.get("history_file") else None
     return ReplaySettings(**fields)
