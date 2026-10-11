@@ -95,8 +95,8 @@ uv run culprit status [1]          # where episodes stand and the next command
 | `diagnose` with no id, in total | $75,000 (20 episodes at the floor; each keeps its own cap inside it) |
 
 - **The episode's own cost:** read from the session's running total (`cost-state` records, `totalCostUSD`) at
-  the end of the episode less the one before it. Claude Code writes those rarely (about 1.5% of episodes in
-  one real set of logs), so most episodes get the $10 floor. Its duration comes from its `turn_duration`
+  the end of the episode less the one before it. Claude Code writes those rarely (in one real set of logs
+  1.5% of episodes had one and 0.7% could be costed), so most episodes get the $10 floor. Its duration comes from its `turn_duration`
   records (or its first and last timestamps). The plan shows the per-replay cap.
 
 - **Typical diagnosis:** about 60 replays. The episode and selftest caps cover the worst case (every

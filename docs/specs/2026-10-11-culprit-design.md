@@ -206,7 +206,7 @@ claude -p \                      # the episode or variant prompt goes on stdin
   least 1,800 s. The cost is the session's running total (`cost-state` records' `totalCostUSD`) at the
   episode's last such record less the last one before it (nothing before a session's first episode); with no
   record inside the episode, or none before a follow-up, it is unknown and the floor applies — measured
-  2026-10-11, 79 of 5,256 real episodes (1.5%) had one. The duration is the failure signals' (the sum of its
+  2026-10-11, 79 of 5,256 real episodes (1.5%) had one and 35 (0.7%) could be costed. The duration is the failure signals' (the sum of its
   `turn_duration` records, else its first-to-last timestamp span; 90% have `turn_duration`). Each model call is
   capped at $0.50. Built-in caps stop further replays: per episode and per planted fault, the worst case at
   N = 10 for that episode's per-replay cap (rounded up to $50: $3,750 and $2,850 at the $10 floor), and

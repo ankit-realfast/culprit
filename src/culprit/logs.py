@@ -226,7 +226,7 @@ def episode_cost_usd(episode: Episode) -> float | None:
     """What the episode cost, from the session's running total (a cost-state record's totalCostUSD): the last
     total inside the episode less the last one before it — or less nothing for the session's first episode.
     None when no total was written inside the episode, or a follow-up has none before it (measured 2026-10-11:
-    about 1.5% of episodes have one, so most fall back to the floor)."""
+    about 1.5% of episodes have one and 0.7% can be costed, so most fall back to the floor)."""
     inside = [record["totalCostUSD"] for record in episode.records if _running_total(record)]
     if not inside or not episode.session_file.is_file():
         return None
