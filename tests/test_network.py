@@ -174,7 +174,7 @@ def test_every_replay_adds_culprits_bash_hook_beside_the_users_own(tmp_path):
     applied = json.loads(command[command.index("--settings") + 1])
     (bash,) = [entry for entry in applied["hooks"]["PreToolUse"] if entry["matcher"] == "Bash"]
     (hook,) = bash["hooks"]
-    assert hook["type"] == "command" and f"{sys.executable} -m culprit.stubs bash-hook " in hook["command"]
+    assert hook["type"] == "command" and f"{sys.executable} -P -m culprit.stubs bash-hook " in hook["command"]
     recordings = (tmp_path / "run0" / "network-recordings.json").resolve()
     assert str(recordings) in hook["command"] and json.loads(recordings.read_text())["shell"][0]["command"] == "aws s3 ls"
     assert "allowManagedHooksOnly" not in applied and "disableAllHooks" not in applied  # the user's hooks still run
@@ -320,3 +320,23 @@ def test_the_report_and_status_show_the_network_counts(tmp_path):
     status = EpisodeStatus("a:1", "baselined", "run it",
                            outcomes=(VariantOutcome("baseline", 1, 10, 3.0, network={"served": 4, "refused": 2}),))
     assert "baseline: 1 of 10 passed, network 4 served, 2 refused as unrecorded, $3.00" in status_lines(status)
+
+
+def test_a_web_hook_that_cannot_even_start_still_blocks_the_call(tmp_path):
+    # the hook runs in the clone: -P keeps a project file such as json.py from shadowing the standard library,
+    # and if the process fails anyway, exit 2 blocks the call instead of letting it run live
+    command = replay_command(ReplaySettings(prompt="fix", model=None, permission_mode="auto"),
+                             network_file=tmp_path / "network-recordings.json")
+    applied = json.loads(command[command.index("--settings") + 1])
+    hooks = {entry["matcher"]: entry["hooks"][0]["command"] for entry in applied["hooks"]["PreToolUse"]}
+    assert " -P -m culprit.stubs bash-hook " in hooks["Bash"] and "exit 2" not in hooks["Bash"]
+    assert " -P -m culprit.stubs web-hook " in hooks["WebFetch|WebSearch"]
+    assert hooks["WebFetch|WebSearch"].endswith(" || exit 2")
+    (tmp_path / "json.py").write_text("raise SystemExit(1)\n")
+    broken = subprocess.run(["sh", "-c", hooks["WebFetch|WebSearch"].replace(" -P ", " ")], cwd=tmp_path,
+                            input="{}", capture_output=True, text=True, timeout=30)
+    assert broken.returncode == 2
+    shielded = subprocess.run(["sh", "-c", hooks["WebFetch|WebSearch"]], cwd=tmp_path,
+                              input=json.dumps(web_event("WebFetch", url="https://x", prompt="p")),
+                              capture_output=True, text=True, timeout=30)
+    assert json.loads(shielded.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"

@@ -431,13 +431,16 @@ def _applied_settings(memory_dir: Path | None, network_file: Path | None = None)
         applied["autoMemoryDirectory"] = str(memory_dir)
     if network_file is not None:
         # culprit's own hook, added to the user's hooks (which still run, as in the original session)
+        # a web hook that fails to start blocks the call (exit 2) rather than let it run live; a failed Bash hook
+        # changes nothing, since the sandbox still refuses the network
         applied["hooks"] = {"PreToolUse": [_stub_hook("Bash", "bash-hook", network_file),
-                                           _stub_hook("WebFetch|WebSearch", "web-hook", network_file)]}
+                                           _stub_hook("WebFetch|WebSearch", "web-hook", network_file, " || exit 2")]}
     return applied
 
 
-def _stub_hook(matcher: str, stand_in: str, recordings: Path) -> dict:
-    command = f"{shlex.quote(sys.executable)} -m culprit.stubs {stand_in} {shlex.quote(str(recordings))}"
+def _stub_hook(matcher: str, stand_in: str, recordings: Path, on_failure: str = "") -> dict:
+    # hooks run in the clone: -P keeps its files (a project's json.py, say) off the front of the module path
+    command = f"{shlex.quote(sys.executable)} -P -m culprit.stubs {stand_in} {shlex.quote(str(recordings))}{on_failure}"
     return {"matcher": matcher, "hooks": [{"type": "command", "command": command}]}
 
 

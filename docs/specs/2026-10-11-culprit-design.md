@@ -229,7 +229,8 @@ claude -p \                      # the episode or variant prompt goes on stdin
   episode made (WebFetch: same `url` and `prompt`; WebSearch: same `query`) is denied with the reason
   "offline replay; the recorded result of this exact call was: …" carrying the recorded result (cut at
   20,000 characters); any other is denied with "offline replay: not recorded". If the hook itself fails
-  it still denies. This is an approximation: the agent sees a denial holding the content, not a normal
+  it still denies, and if its process cannot start the hook command exits 2, which blocks the call. Both
+  hooks run `python -P`, so files in the clone (a project's `json.py`) cannot shadow the standard library. This is an approximation: the agent sees a denial holding the content, not a normal
   tool result, and may treat it differently. A command built without culprit's hooks drops both tools
   through `--disallowedTools`. Each call is logged with the shell calls in `network-log.jsonl`.
 - **Questions are answered from the log:** culprit's answer host is the permission-prompt tool; a
