@@ -113,5 +113,10 @@ def test_the_model_oracle_adds_the_original_model_at_max_effort_unless_the_episo
                                  n=5, spent_usd=0.0, cap_usd=1e4, oracle_id="claude-fable-5-1")
     on_opus = diagnose_cost_for(tmp_path, CRITERION, 1.0, model="claude-opus-5", effort="high", env_fix=False,
                                 n=5, spent_usd=0.0, cap_usd=1e4)
-    # opus: baseline + 4 oracles + combined + 6 pairs + the effort step; fable at high: the same minus the step
-    assert on_opus.replays == 13 * 10 and on_fable.replays == 12 * 10
+    # opus: baseline + 4 oracles + combined + 6 pairs + the effort step + the latest opus; fable at high: no steps
+    assert on_opus.replays == 14 * 10 and on_fable.replays == 12 * 10
+    both = diagnose_cost(1.0, [Cause.MODEL], n=5, spent_usd=0.0, cap_usd=1e4, effort_step=True, family_step=True)
+    assert both.replays == 40
+    unknown = diagnose_cost_for(tmp_path, CRITERION, 1.0, model="claude-mythos-1", effort="high", env_fix=False,
+                                n=5, spent_usd=0.0, cap_usd=1e4)
+    assert unknown.replays == 13 * 10

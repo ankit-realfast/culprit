@@ -76,7 +76,7 @@ def test_the_first_cause_that_beats_the_baseline_wins_and_later_ones_are_not_run
 
 def test_untested_causes_are_skipped_and_recorded(write_session, tmp_path):
     run = scripted_run({"baseline": 0, "task": 0, "agent-setup": 0, "harness": 0, "model": 4,
-                        "original-max-effort": 0})
+                        "original-max-effort": 0, "latest-in-family": 0})
     verdict = run_diagnose(write_session, tmp_path, run, build=build_all_tested(untested=(Cause.ENVIRONMENT,)))
     assert verdict.cause == "model"
     assert verdict.untested["environment"] == "environment untested"
@@ -115,10 +115,11 @@ def test_one_tested_oracle_that_fails_is_unexplained(write_session, tmp_path):
 
 def test_a_rerun_reuses_saved_variants_and_outcomes(write_session, tmp_path):
     first = scripted_run({"baseline": 0, "task": 0, "environment": 0, "agent-setup": 0, "harness": 0, "model": 5,
-                          "original-max-effort": 0})
+                          "original-max-effort": 0, "latest-in-family": 0})
     run_diagnose(write_session, tmp_path, first)
     folder = episode_dir(tmp_path / "runs", "s1:p1")
-    for name in ["baseline", "task", "environment", "agent-setup", "harness", "model", "original-max-effort"]:
+    for name in ["baseline", "task", "environment", "agent-setup", "harness", "model", "original-max-effort",
+                 "latest-in-family"]:
         (folder / "replays" / name).mkdir(parents=True, exist_ok=True)
         (folder / "replays" / name / "outcome.json").write_text(
             json.dumps({"variant": name, "passes": 5 if name == "model" else 0, "runs": 5, "cost_usd": 1.0}))
@@ -205,7 +206,7 @@ def test_progress_reaches_every_variant_run(write_session, tmp_path):
 def test_when_fable_at_max_effort_wins_the_original_model_at_max_effort_runs_next(write_session, tmp_path):
     from culprit.diagnose import build_variant
     run = scripted_run({"baseline": 0, "task": 0, "agent-setup": 0, "harness": 0, "model": 5,
-                        "original-max-effort": 4})
+                        "original-max-effort": 4, "latest-in-family": 0})
 
     def build(cause, base, **kwargs):
         if cause is Cause.MODEL:
@@ -214,19 +215,20 @@ def test_when_fable_at_max_effort_wins_the_original_model_at_max_effort_runs_nex
 
     verdict = run_diagnose(write_session, tmp_path, run, build=build)
     assert verdict.cause == "model"
-    name, settings = run.calls[-1]
+    name, settings = run.calls[-2]
     assert name == "original-max-effort"
     assert (settings.model, settings.effort) == ("claude-opus-5", "max")
-    assert "raise effort (original model at max effort also passed 4/5)" in verdict.evidence
+    assert "raise effort (original model at max effort passed 4/5)" in verdict.evidence
     assert verdict.outcomes["original-max-effort"]["passes"] == 4
 
 
 def test_when_only_fable_passes_the_verdict_says_it_needs_fable(write_session, tmp_path):
     run = scripted_run({"baseline": 0, "task": 0, "agent-setup": 0, "harness": 0, "model": 5,
-                        "original-max-effort": 1})
+                        "original-max-effort": 1, "latest-in-family": 0})
     verdict = run_diagnose(write_session, tmp_path, run, build=build_all_tested(untested=(Cause.ENVIRONMENT,)))
     assert verdict.cause == "model"
-    assert "needs Fable (original model at max effort did not pass: 1/5)" in verdict.evidence
+    assert ("needs Fable (original model at max effort did not pass: 1/5; the latest opus, claude-opus-5-5, did not "
+            "pass: 0/5)") in verdict.evidence
 
 
 def test_an_episode_on_fable_at_lower_effort_tests_fable_at_max_effort_only(write_session, tmp_path):
@@ -250,7 +252,7 @@ def test_an_episode_on_fable_at_lower_effort_tests_fable_at_max_effort_only(writ
 
 def test_an_episode_already_at_max_effort_needs_no_effort_step_to_say_it_needs_fable(write_session, tmp_path):
     (episode,) = episodes_from_session(write_session([human("fix", "p1", session_id="s1", cwd=str(tmp_path))]))
-    run = scripted_run({"baseline": 0, "task": 0, "agent-setup": 0, "harness": 0, "model": 5})
+    run = scripted_run({"baseline": 0, "task": 0, "agent-setup": 0, "harness": 0, "model": 5, "latest-in-family": 0})
     verdict = diagnose(episode, CRITERION, Symptom.WRONG_RESULT, replace(BASE, effort="max"),
                        runs_dir=tmp_path / "runs", follow_ups=[], env_script=None, n=5, budget=EpisodeBudget(100.0),
                        run=run, build=build_all_tested(untested=(Cause.ENVIRONMENT,)))
@@ -297,3 +299,56 @@ def test_a_paid_resolution_is_charged_to_the_episode(write_session, tmp_path, mo
              build=model_only_build)
     assert budget.spent_usd == 0.05
     assert stored_spend(episode_dir(tmp_path / "runs", "s1:p1")) == 0.05
+
+
+def model_wins(write_session, tmp_path, base, passes):
+    (episode,) = episodes_from_session(write_session([human("fix", "p1", session_id="s1", cwd=str(tmp_path))]))
+    run = scripted_run({"baseline": 0, "model": 5} | passes)
+    verdict = diagnose(episode, CRITERION, Symptom.WRONG_RESULT, base, runs_dir=tmp_path / "runs", follow_ups=[],
+                       env_script=None, n=5, budget=EpisodeBudget(100.0), run=run, build=model_only_build)
+    return verdict, run.calls
+
+
+def test_when_fable_wins_the_latest_of_the_episodes_own_family_runs_at_its_original_effort(write_session, tmp_path):
+    verdict, calls = model_wins(write_session, tmp_path, replace(BASE, effort="high"),
+                                {"original-max-effort": 1, "latest-in-family": 4})
+    assert [name for name, _ in calls] == ["baseline", "model", "original-max-effort", "latest-in-family"]
+    assert (calls[-1][1].model, calls[-1][1].effort) == ("opus", "high")
+    assert verdict.cause == "model"
+    assert verdict.evidence.endswith("— upgrade to the latest opus (claude-opus-5-5 passed 4/5)")
+
+
+def test_when_both_cheaper_fixes_pass_raising_effort_is_listed_first(write_session, tmp_path):
+    verdict, _ = model_wins(write_session, tmp_path, replace(BASE, effort="high"),
+                            {"original-max-effort": 4, "latest-in-family": 5})
+    assert verdict.evidence.endswith("— raise effort (original model at max effort passed 4/5), or upgrade to the "
+                                     "latest opus (claude-opus-5-5 passed 5/5)")
+
+
+def test_the_upgrade_names_the_model_it_actually_ran_as(write_session, tmp_path):
+    (episode,) = episodes_from_session(write_session([human("fix", "p1", session_id="s1", cwd=str(tmp_path))]))
+
+    def run(name, settings, **kwargs):
+        passes = {"baseline": 0, "model": 5, "original-max-effort": 0, "latest-in-family": 5}[name]
+        return VariantOutcome(name, passes, 5, 1.0, models={"claude-opus-6": 5} if name == "latest-in-family" else {})
+
+    verdict = diagnose(episode, CRITERION, Symptom.WRONG_RESULT, BASE, runs_dir=tmp_path / "runs", follow_ups=[],
+                       env_script=None, n=5, budget=EpisodeBudget(100.0), run=run, build=model_only_build)
+    assert "upgrade to the latest opus (claude-opus-6 passed 5/5)" in verdict.evidence
+
+
+def test_an_episode_already_at_max_effort_still_tries_its_familys_latest(write_session, tmp_path):
+    verdict, calls = model_wins(write_session, tmp_path, replace(BASE, effort="max"), {"latest-in-family": 0})
+    assert [name for name, _ in calls] == ["baseline", "model", "latest-in-family"]
+    assert calls[-1][1].effort == "max"
+    assert ("needs Fable (the original model already ran at max effort: the baseline passed 0/5; the latest opus, "
+            "claude-opus-5-5, did not pass: 0/5)") in verdict.evidence
+
+
+def test_the_family_step_is_skipped_when_it_would_test_nothing_new(write_session, tmp_path):
+    for model in ("claude-mythos-1", "claude-opus-5-5", "claude-fable-5", None):
+        # an unknown family; the family's latest already; the oracle's own family; no model logged
+        verdict, calls = model_wins(write_session, tmp_path / str(model), replace(BASE, model=model, effort="high"),
+                                    {"original-max-effort": 0})
+        assert "latest-in-family" not in [name for name, _ in calls], model
+        assert "needs Fable (original model at max effort did not pass: 0/5)" in verdict.evidence

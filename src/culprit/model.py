@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 from dataclasses import asdict, dataclass, replace
@@ -107,6 +108,23 @@ RESOLVE_CAP_USD = 0.05
 RESOLVE_TIMEOUT_S = 120
 FREE_PROBE = "/cost"
 PAID_PROBE = "Reply with the single word OK."
+
+
+KNOWN_FAMILIES = ("fable", "opus", "sonnet", "haiku")  # each is also the alias of its latest model
+
+
+def model_family(model: str | None) -> str | None:
+    """The family a model id or alias names: `claude-opus-4-8` → opus, `fable` → fable, the older
+    `claude-3-5-sonnet-20241022` → sonnet, `claude-mythos-1` → mythos (a family culprit does not know); None for
+    anything else (`<synthetic>`, no model)."""
+    if not model:
+        return None
+    if model in KNOWN_FAMILIES:
+        return model
+    if match := re.match(r"claude-([a-z]+)-\d", model):
+        return match.group(1)
+    known = [part for part in model.split("-") if part in KNOWN_FAMILIES]
+    return known[0] if model.startswith("claude-") and known else None
 
 
 @dataclass(frozen=True)

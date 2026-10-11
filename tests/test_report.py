@@ -167,3 +167,8 @@ def test_each_verdict_says_which_model_each_variant_ran_as(tmp_path):
     text = render_report(collect(tmp_path), [])
     assert ("models: baseline ran as claude-opus-5; model test: Fable at max effort, ran as claude-fable-5-1; "
             "original model at max effort, ran as claude-opus-5 (9), claude-sonnet-5-5 (1)") in text
+
+
+def test_the_model_fix_names_the_same_family_upgrade_too():
+    from culprit.report import FIX_ACTIONS
+    assert "the latest of the same family where it says upgrade" in FIX_ACTIONS["model"]

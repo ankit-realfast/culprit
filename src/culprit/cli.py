@@ -143,21 +143,22 @@ QUEUE_EPISODES = 20  # the batch total covers this many episodes at the floor's 
 
 def _worst_case_cap(replay_cap_usd: float, oracles) -> float:
     worst = diagnose_cost(replay_cap_usd, oracles, n=RUNS_PER_VARIANT, spent_usd=0.0, cap_usd=float("inf"),
-                          drafts=sum(c in DRAFTED_CAUSES for c in oracles), effort_step=True).max_usd
+                          drafts=sum(c in DRAFTED_CAUSES for c in oracles), effort_step=True,
+                          family_step=True).max_usd
     return float(-(-worst // CAP_ROUNDING_USD) * CAP_ROUNDING_USD)
 
 
 def episode_cap_usd(replay_cap_usd: float) -> float:
-    """One episode's baseline and every oracle at its per-replay cap ($3,750 at the $10 floor, N = 10)."""
+    """One episode's baseline and every oracle at its per-replay cap ($3,900 at the $10 floor, N = 10)."""
     return _worst_case_cap(replay_cap_usd, ORACLE_ORDER)
 
 
 def fault_cap_usd(replay_cap_usd: float) -> float:
-    """A planted fault never has an environment fix to run ($2,850 at the $10 floor, N = 10)."""
+    """A planted fault never has an environment fix to run ($3,000 at the $10 floor, N = 10)."""
     return _worst_case_cap(replay_cap_usd, [c for c in ORACLE_ORDER if c is not Cause.ENVIRONMENT])
 
 
-# every episode `diagnose` with no id takes on, sized at the floor ($75,000); each episode keeps its own cap inside it
+# every episode `diagnose` with no id takes on, sized at the floor ($78,000); each episode keeps its own cap inside it
 TOTAL_CAP_USD = QUEUE_EPISODES * episode_cap_usd(REPLAY_BUDGET_FLOOR_USD)
 
 def main(argv: list[str] | None = None) -> int:

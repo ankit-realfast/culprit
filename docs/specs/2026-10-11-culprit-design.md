@@ -214,8 +214,8 @@ claude -p \                      # the episode or variant prompt goes on stdin
   2026-10-11, 79 of 5,256 real episodes (1.5%) had one and 35 (0.7%) could be costed. The duration is the failure signals' (the sum of its
   `turn_duration` records, else its first-to-last timestamp span; 90% have `turn_duration`). Each model call is
   capped at $0.50. Built-in caps stop further replays: per episode and per planted fault, the worst case at
-  N = 10 for that episode's per-replay cap (rounded up to $50: $3,750 and $2,850 at the $10 floor), and
-  for a whole-queue `diagnose` 20 episodes at the floor's worst case ($75,000), inside which each episode
+  N = 10 for that episode's per-replay cap (rounded up to $50: $3,900 and $3,000 at the $10 floor), and
+  for a whole-queue `diagnose` 20 episodes at the floor's worst case ($78,000), inside which each episode
   keeps its own cap (see §5). The plan printed before spending shows the per-replay cap.
 
 ### Which episodes are replayable
@@ -237,16 +237,25 @@ hook the project's own settings define, because those hooks run in every replay.
 | Harness | The default tool set with every non-safety restriction lifted, the files the episode read or edited preloaded into the prompt as context, and double the spend cap | Never |
 | Model | `--model fable --effort max` (an episode already on what `fable` means today keeps its model and only raises the effort); see the effort step below | The episode already ran on what `fable` resolves to today (an older Fable is still tested), at max effort |
 
-**The model oracle's effort step.** Every replay runs at the effort level the episode logged (the `effort`
+**The model oracle's cheaper-fix steps.** Every replay runs at the effort level the episode logged (the `effort`
 field on its first assistant record; none logged leaves Claude Code's default), and the model oracle may change
 only `model` and `effort`. `max` is the highest `claude --effort` level (2.1.296: low, medium, high, xhigh,
-max). When Fable at max effort beats the baseline, one more variant runs, `original-max-effort`: the episode's
-own model at max effort, everything else as the baseline. The verdict stays Model — the taxonomy and cause order
-are fixed — and its evidence names the fix: "raise effort (original model at max effort also passed a/b)" when
-that variant beats the baseline too, else "needs Fable (original model at max effort did not pass: a/b)". The
-extra variant is skipped when the answer is already known: an episode on the oracle's model at lower effort ("raise effort
-(Fable at max effort passed …)"), or one that already ran at max effort ("needs Fable", from its baseline). The
-cost preview counts the extra variant whenever it could run.
+max). When Fable at max effort beats the baseline, up to two more variants run, everything else as the baseline:
+
+- `original-max-effort` — the episode's own model at max effort (would raising the effort do?). Skipped when the
+  episode ran on the oracle's model (the oracle already was its model at max effort: "raise effort (Fable at max
+  effort passed …)") or already ran at max effort (its baseline is that replay).
+- `latest-in-family` — the alias of the episode's own family (`opus`, `sonnet`, `haiku`, parsed from ids like
+  `claude-<family>-<version>`) at the episode's original effort (would upgrading within the family do?). Skipped
+  when the family is unknown, when the family alias resolves to the episode's own model (it is the latest
+  already), or when the family is the oracle's (then it is Fable minus the effort, which the steps above cover).
+
+The verdict stays Model — the taxonomy and cause order are fixed — and its evidence names every cheaper fix that
+beat the baseline, cheapest first (effort, then the same-family upgrade): "raise effort (original model at max
+effort passed 7/10)", "upgrade to the latest opus (claude-opus-5-5 passed 8/10)" (the id it ran as), both joined
+by ", or ", else "needs Fable (…)" with what did not pass, e.g. "needs Fable (original model at max effort did not
+pass: 1/10; the latest opus, claude-opus-5-5, did not pass: 2/10)". The cost preview and the episode and fault
+caps count each step whenever it could run.
 
 **What the oracle alias means today.** Whether an episode already ran on the strongest model is decided against
 the id the oracle alias resolves to, not a name prefix. culprit resolves it for free: `claude -p --model <alias>
@@ -367,8 +376,8 @@ in the report, and `status --json` gives each outcome's totals plus `usd_per_run
   bug): an intervention shows what made it pass, not who must change it. The human reads the evidence.
 - Cost: about 60 replays per episode (baseline ×10 plus five variants ×10), ~50 minutes at the median turn
   length. Built-in caps are a safety net sized from the worst case at N = 10 (every oracle, combined and
-  every pair, the effort step, all void retries) at the episode's per-replay cap: $3,750 per episode and $2,850 per planted
-  fault at the $10 floor, $75,000 per queue. v1 is capped at 10–20 episodes.
+  every pair, both model steps, all void retries) at the episode's per-replay cap: $3,900 per episode and $3,000 per
+  planted fault at the $10 floor, $78,000 per queue. v1 is capped at 10–20 episodes.
 - The logs are client work; everything runs locally and only the model calls Claude Code already makes
   leave the machine.
 

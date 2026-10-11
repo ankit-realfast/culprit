@@ -16,8 +16,9 @@ from typing import Callable, Sequence
 
 from culprit.logs import (Episode, EpisodeNotFound, find_episode, follow_up_prompts, is_follow_up, is_human_prompt,
                           records_before, text_of, tool_uses)
-from culprit.model import (CALL_CAP_USD, MODEL_RAN_KEY, Ask, ClaudeCallFailed, Criterion, Judgement, ask_claude, check_leak,
-                           cached_model, criterion_step, judge_replay, load_criterion, resolved_model)
+from culprit.model import (CALL_CAP_USD, KNOWN_FAMILIES, MODEL_RAN_KEY, Ask, ClaudeCallFailed, Criterion, Judgement, ask_claude, check_leak,
+                           cached_model, criterion_step, judge_replay, load_criterion, model_family,
+                           resolved_model)
 from culprit.replay import (MAX_EFFORT, MEMORY_DIR, REPLAY_BUDGET_FLOOR_USD, RESULT_FILE, ReplaySettings, SetupScriptFailed, baseline_settings,
                             claude_md_target, replay_workdir, run_replay, settings_from_json, settings_to_json,
                             target_inside)
@@ -297,7 +298,8 @@ def ran_as_text(models: dict) -> str:
 def variant_label(name: str) -> str:
     """How a model-step variant is named where it is shown, e.g. `model test: Fable at max effort`."""
     return {Cause.MODEL.value: "model test: Fable at max effort",
-            ORIGINAL_MAX_EFFORT: "original model at max effort"}.get(name, name)
+            ORIGINAL_MAX_EFFORT: "original model at max effort",
+            LATEST_IN_FAMILY: "latest of its family at the original effort"}.get(name, name)
 
 
 def models_line(verdict: Verdict) -> str | None:
@@ -370,9 +372,11 @@ VARIANT_FIELDS: dict[Cause, tuple[str, ...]] = {
     Cause.HARNESS: ("tools", "disallowed_tools", "context_preamble", "max_budget_usd"),
     Cause.MODEL: ("model", "effort"),
 }
-# After Fable at max effort beats the baseline, the original model at max effort is replayed too: if it also passes,
-# raising the effort is the cheaper fix. The verdict stays Model either way.
+# After Fable at max effort beats the baseline, two cheaper fixes are replayed too: the original model at max effort
+# (raise the effort) and the latest model of the episode's own family at its original effort (upgrade within the
+# family). The verdict stays Model either way; its evidence names the cheapest fix that passed.
 ORIGINAL_MAX_EFFORT = "original-max-effort"
+LATEST_IN_FAMILY = "latest-in-family"
 
 SYMPTOM_DESCRIPTIONS = {
     Symptom.STOPPED_SHORT: "the agent stopped before delivering what was asked",
@@ -712,6 +716,23 @@ def effort_step(model: str | None, effort: str | None, oracle_id: str | None = N
     return not on_oracle(model, oracle_id) and effort != MAX_EFFORT
 
 
+def family_alias(model: str | None, oracle_id: str | None = None) -> str | None:
+    """The alias of the episode's own family for the latest-in-family step, or None when it would test nothing new:
+    the family is unknown, or it is the oracle's family (Fable at max effort and the original model at max effort
+    already cover it). Whether the alias resolves to the episode's own model is checked when it runs."""
+    family = model_family(model)
+    if family not in KNOWN_FAMILIES or family == model_family(oracle_id or oracle_model()):
+        return None
+    return family
+
+
+def family_step(model: str | None, oracle_id: str | None) -> bool:
+    """Whether the cost preview counts the latest-in-family step: whenever family_alias allows it and the episode
+    did not run on the oracle model (whether the alias resolves to the episode's own model is not known yet)."""
+    family = family_alias(model, oracle_id)
+    return bool(family) and not on_oracle(model, oracle_id) and model != family
+
+
 def build_variant(cause: Cause, base: ReplaySettings, *, episode: Episode, follow_ups: list[str],
                   criterion: Criterion, symptom: Symptom, pristine: Path, env_script: Path | None,
                   ask: Ask = ask_claude, oracle_id: str | None = None) -> VariantBuild:
@@ -878,7 +899,7 @@ def diagnose(episode: Episode, criterion: Criterion, symptom: Symptom, base: Rep
                 untested.setdefault(later.value, NOT_RUN_REASON)
             evidence = f"{cause.value} passed {_rate(result)} against the baseline's {_rate(baseline)}"
             if cause is Cause.MODEL:
-                evidence += f" — {model_fix(base, baseline, measured, resolved(oracle_model()))}"
+                evidence += f" — {model_fix(base, baseline, measured, resolved(oracle_model()), resolved)}"
             return finish(cause, evidence)
 
     if len(built) < 2:
@@ -896,18 +917,32 @@ def diagnose(episode: Episode, criterion: Criterion, symptom: Symptom, base: Rep
                   tuple(c.value for c in built))
 
 
-def model_fix(base: ReplaySettings, baseline: VariantOutcome, measured, oracle_id: str | None) -> str:
-    """Which model fix the winning model oracle points at: raising the effort, or Fable itself. Runs the original
-    model at max effort when that is still an open question."""
+def model_fix(base: ReplaySettings, baseline: VariantOutcome, measured, oracle_id: str | None, resolved) -> str:
+    """Which model fix the winning model oracle points at, cheapest first: raising the effort, upgrading within the
+    episode's own family, or Fable itself. Runs the original model at max effort and the latest of its family at
+    its original effort when those are still open questions."""
     if on_oracle(base.model, oracle_id):
-        return (f"raise effort (Fable at max effort passed; the episode ran on Fable at "
+        return (f"raise effort (Fable at max effort passed; the episode ran on {base.model} at "
                 f"{base.effort or 'the default'} effort)")
+    passed, failed = [], []
     if base.effort == MAX_EFFORT:
-        return f"needs Fable (the original model already ran at max effort: the baseline passed {_rate(baseline)})"
-    effort_only = measured(ORIGINAL_MAX_EFFORT, replace(base, effort=MAX_EFFORT))
-    if beats(effort_only, baseline):
-        return f"raise effort (original model at max effort also passed {_rate(effort_only)})"
-    return f"needs Fable (original model at max effort did not pass: {_rate(effort_only)})"
+        failed.append(f"the original model already ran at max effort: the baseline passed {_rate(baseline)}")
+    else:
+        effort_only = measured(ORIGINAL_MAX_EFFORT, replace(base, effort=MAX_EFFORT))
+        (passed if beats(effort_only, baseline) else failed).append(
+            f"original model at max effort {'passed' if beats(effort_only, baseline) else 'did not pass:'} "
+            f"{_rate(effort_only)}")
+    family = family_alias(base.model, oracle_id)
+    if family and family != base.model and resolved(family) != base.model:
+        latest = measured(LATEST_IN_FAMILY, replace(base, model=family))
+        ran = max(latest.models, key=latest.models.get) if latest.models else resolved(family) or family
+        if beats(latest, baseline):
+            passed.append(f"upgrade to the latest {family} ({ran} passed {_rate(latest)})")
+        else:
+            failed.append(f"the latest {family}, {ran}, did not pass: {_rate(latest)}")
+    if passed:
+        return ", or ".join(text if text.startswith("upgrade") else f"raise effort ({text})" for text in passed)
+    return f"needs Fable ({'; '.join(failed)})"
 
 
 def _oracle(folder: Path, cause: Cause, base: ReplaySettings, untested: dict[str, str], make) -> ReplaySettings | None:
@@ -1091,9 +1126,10 @@ def plan_cost(replay_caps: Sequence[float], *, n: int, calls: int = 0, spent_usd
 
 
 def diagnose_cost(base_cap: float, oracles: Sequence[Cause], *, n: int, spent_usd: float, cap_usd: float,
-                  done: frozenset[str] = frozenset(), drafts: int = 0, effort_step: bool = False) -> CostPlan:
-    """Baseline, every oracle, and when two or more can run, all of them together and every pair; with
-    effort_step, the original model at max effort after the model oracle."""
+                  done: frozenset[str] = frozenset(), drafts: int = 0, effort_step: bool = False,
+                  family_step: bool = False) -> CostPlan:
+    """Baseline, every oracle, and when two or more can run, all of them together and every pair; after the model
+    oracle, with effort_step the original model at max effort and with family_step the latest of its family."""
     def cap_for(causes) -> float:
         return base_cap * (HARNESS_BUDGET_MULTIPLIER if Cause.HARNESS in causes else 1)
 
@@ -1103,6 +1139,8 @@ def diagnose_cost(base_cap: float, oracles: Sequence[Cause], *, n: int, spent_us
         caps.update({pair_variant(a.value, b.value): cap_for({a, b}) for a, b in combinations(oracles, 2)})
     if effort_step and Cause.MODEL in oracles:
         caps[ORIGINAL_MAX_EFFORT] = base_cap
+    if family_step and Cause.MODEL in oracles:
+        caps[LATEST_IN_FAMILY] = base_cap
     return plan_cost([cap for name, cap in caps.items() if name not in done], n=n,
                      calls=drafts * MAX_DRAFT_ATTEMPTS * CALLS_PER_DRAFT_ATTEMPT, spent_usd=spent_usd, cap_usd=cap_usd,
                      replay_cap_usd=base_cap)
@@ -1123,11 +1161,12 @@ def diagnose_cost_for(folder: Path, criterion: Criterion, base_cap: float, *, mo
                 continue
             drafts += cause in DRAFTED_CAUSES
         oracles.append(cause)
-    names = [BASELINE, COMBINED, ORIGINAL_MAX_EFFORT, *(c.value for c in oracles),
+    names = [BASELINE, COMBINED, ORIGINAL_MAX_EFFORT, LATEST_IN_FAMILY, *(c.value for c in oracles),
              *(pair_variant(a.value, b.value) for a, b in combinations(oracles, 2))]
     done = frozenset() if stale else frozenset(name for name in names if load_outcome(folder, name) is not None)
     return diagnose_cost(base_cap, oracles, n=n, spent_usd=spent_usd, cap_usd=cap_usd, done=done, drafts=drafts,
-                         effort_step=effort_step(model, effort, oracle_id))
+                         effort_step=effort_step(model, effort, oracle_id),
+                         family_step=family_step(model, oracle_id))
 
 
 def batch_cost(runs_dir: Path, projects_dir: Path, *, n: int, per_episode_usd: Callable[[float], float],

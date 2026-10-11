@@ -26,8 +26,8 @@ FIX_ACTIONS = {
     "environment": "the repo or infrastructure the agent runs in",
     "agent-setup": "standing instructions: CLAUDE.md, rules, skills, subagent definitions",
     "harness": "Claude Code's setup: tools, MCP servers, hooks, settings, context handling",
-    "model": "the model or its effort: --effort max where the verdict says raise effort, else --model or route "
-             "these tasks to Fable",
+    "model": "the model or its effort: --effort max where the verdict says raise effort, the latest of the same "
+             "family where it says upgrade, else --model or route these tasks to Fable",
 }
 KNOWN_LIMITS = (
     "Restores are exact for files Claude Code edited; in git projects other files come from the last commit "
