@@ -1,5 +1,6 @@
 import json
 from dataclasses import replace
+from pathlib import Path
 
 from culprit.diagnose import MAX_CONTEXT_CHARS, ORACLE_MODEL, VariantBuild, build_variant, combine, harness_context
 from culprit.logs import Episode, episodes_from_session
@@ -284,3 +285,42 @@ def test_agents_md_is_read_only_where_no_claude_md_exists(tmp_path):
                                                                                "project agents rule"]
     (tmp_path / "CLAUDE.md").write_text("a claude rule")
     assert [text for _, text in instructions_for(tmp_path, cwd, pristine)] == ["a claude rule"]
+
+
+def task_prompt(write_session, *records, which=-1):
+    episode = list(episodes_from_session(write_session(list(records))))[which]
+    ask = FakeAsk({"text": "Fix login."}, {"leaks": False, "evidence": "none"})
+    build_variant(Cause.TASK, BASE, episode=episode, follow_ups=[], criterion=CRITERION,
+                  symptom=Symptom.WRONG_RESULT, pristine=Path("/nonexistent"), env_script=None, ask=ask)
+    return ask.calls[0][0]
+
+
+def test_the_task_drafter_sees_the_earlier_conversation_of_a_follow_up(write_session):
+    tool_output = {"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": "TOOL_OUTPUT_TEXT"}]}}
+    prompt = task_prompt(write_session, human("set up the login form", "p1"), assistant(text="Form added."),
+                         tool_use("Read", file_path="EARLIER_TOOL_INPUT.py"), tool_output,
+                         human("now make it reject empty passwords", "p2"), assistant(text="DURING_EPISODE"),
+                         human("AFTER_EPISODE", "p3"), which=1)
+    assert "set up the login form" in prompt and "Form added." in prompt
+    assert prompt.index("set up the login form") < prompt.index("Form added.") < prompt.index("now make it")
+    assert "TOOL_OUTPUT_TEXT" not in prompt and "EARLIER_TOOL_INPUT" not in prompt
+    assert "DURING_EPISODE" not in prompt and "AFTER_EPISODE" not in prompt
+    assert "already has" in prompt
+
+
+def test_the_earlier_conversation_is_trimmed_from_the_start(write_session):
+    from culprit.diagnose import MAX_HISTORY_CHARS
+    turns = []
+    for i in range(30):
+        turns += [human(f"request {i:02} " + "Z" * (MAX_HISTORY_CHARS // 20), f"e{i}"), assistant(text=f"reply {i:02}")]
+    prompt = task_prompt(write_session, *turns, human("now finish it", "last"))
+    assert "reply 29" in prompt and "request 29" in prompt
+    assert "request 00" not in prompt
+    assert prompt.count("Z") <= MAX_HISTORY_CHARS
+
+
+def test_a_first_prompt_has_no_conversation_section(write_session):
+    prompt = task_prompt(write_session, human("fix login", "p1"), assistant(text="done"), human("thanks", "p2"),
+                         which=0)
+    assert "<conversation>" not in prompt and "done" not in prompt

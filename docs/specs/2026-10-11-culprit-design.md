@@ -216,7 +216,7 @@ hook the project's own settings define, because those hooks run in every replay.
 
 | Variant | What changes from the baseline | Untested when |
 |---|---|---|
-| Task | The prompt, rewritten from the original prompt and the approved criterion to state scope and success criterion (the follow-ups reach it only through the criterion, which limits leaks; the leak check still compares the draft with them) | The leak check rejects it twice |
+| Task | The prompt, rewritten from the original prompt and the approved criterion to state scope and success criterion (the follow-ups reach it only through the criterion, which limits leaks; the leak check still compares the draft with them); for a follow-up, the drafter also sees the session's earlier conversation | The leak check rejects it twice |
 | Environment | A fix script the human supplies (`culprit env-fix`) runs in the clone before the replay | No script supplied (the common case in v1) |
 | Agent setup | An appended system prompt (`--append-system-prompt`) drafted from the criterion, the instructions the agent already loads and the starting folder layout: standing instructions that fill gaps in those, no task-specific facts, at most 12 lines | The leak check rejects it twice |
 | Harness | The default tool set with every non-safety restriction lifted, the files the episode read or edited preloaded into the prompt as context, and double the spend cap | Never |
@@ -225,6 +225,11 @@ hook the project's own settings define, because those hooks run in every replay.
 **What a drafter may see.** Anything the agent could have known before the episode started; nothing from
 during or after it (the leak check against the prompt and follow-ups is unchanged).
 
+- *Task*, for a follow-up episode, also sees the session's earlier conversation: the human prompts and the
+  agent's text replies before the episode's prompt (no tool calls or outputs), oldest first, at most 20,000
+  characters kept from the end. The replay keeps that conversation, so the drafter is told it is context
+  the agent already has and the rewrite still restates only the request. A session's first prompt gets
+  no history.
 - *Agent setup* sees every instruction Claude Code loads when the replay launches, mirroring its documented
   launch-time load order (code.claude.com/docs/en/memory): managed policy (`/Library/Application
   Support/ClaudeCode/CLAUDE.md`, `/etc/claude-code/CLAUDE.md`, and a `claudeMd` string in

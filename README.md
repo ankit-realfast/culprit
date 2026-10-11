@@ -28,7 +28,8 @@ guesses the cause.
    | Fable instead of the original model | **model**: change or route the model |
 
    The restated prompt and the standing instructions are drafted by a model that sees only what the agent
-   could have known before the episode began. The instructions drafter sees the CLAUDE.md files (and
+   could have known before the episode began. For a follow-up, the prompt drafter also sees the session's
+   earlier prompts and replies (not tool output). The instructions drafter sees the CLAUDE.md files (and
    rules and imports) Claude Code loads at launch, read from the starting copy for the project, plus its
    top-level folder layout, and writes rules that fill their gaps.
 

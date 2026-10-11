@@ -14,7 +14,8 @@ from math import comb
 from pathlib import Path
 from typing import Callable, Sequence
 
-from culprit.logs import Episode, EpisodeNotFound, find_episode, follow_up_prompts, tool_uses
+from culprit.logs import (Episode, EpisodeNotFound, find_episode, follow_up_prompts, is_follow_up, is_human_prompt,
+                          records_before, text_of, tool_uses)
 from culprit.model import (CALL_CAP_USD, Ask, ClaudeCallFailed, Criterion, Judgement, ask_claude, check_leak,
                            criterion_step, judge_replay, load_criterion)
 from culprit.replay import (MEMORY_DIR, RESULT_FILE, ReplaySettings, SetupScriptFailed, baseline_settings,
@@ -285,11 +286,51 @@ def _retry_note(rejected_evidence: str | None) -> str:
     return f"\nA previous draft was rejected because it leaked this detail: {rejected_evidence}. Leave it out."
 
 
-def task_rewrite_prompt(episode: Episode, criterion: Criterion, rejected_evidence: str | None) -> str:
+MAX_HISTORY_CHARS = 20_000  # the earlier conversation the task drafter sees, kept from the end
+
+
+def earlier_conversation(episode: Episode) -> str:
+    """For a follow-up episode, the session's human prompts and the agent's text replies before it, oldest
+    first, at most MAX_HISTORY_CHARS kept from the end; tool calls and their outputs are left out. Empty for
+    a session's first prompt."""
+    if not episode.prompt_uuid or not is_follow_up(episode):
+        return ""
+    turns: list[list[str]] = []  # [speaker, text]; one agent turn joins its consecutive text replies
+    for record in records_before(episode.session_file, episode.prompt_uuid):
+        if is_human_prompt(record):
+            turns.append(["Person", text_of(record).strip()])
+        elif record.get("type") == "assistant" and (text := text_of(record).strip()):
+            if turns and turns[-1][0] == "Agent":
+                turns[-1][1] += "\n" + text
+            else:
+                turns.append(["Agent", text])
+    kept: list[str] = []
+    used = 0
+    for speaker, text in reversed(turns):
+        line = f"{speaker}: {text}\n"
+        if used + len(line) > MAX_HISTORY_CHARS:
+            if not kept:
+                kept.append(f"{speaker}: …{text[-(MAX_HISTORY_CHARS - len(speaker) - 4):]}\n")
+            kept.append("[earlier conversation trimmed]\n")
+            break
+        kept.append(line)
+        used += len(line)
+    return "".join(reversed(kept))
+
+
+def task_rewrite_prompt(episode: Episode, criterion: Criterion, rejected_evidence: str | None,
+                        history: str = "") -> str:
     must_not = "; ".join(criterion.must_not) or "nothing listed"
+    earlier = "" if not history else f"""
+This request came later in a conversation. The agent already has this earlier conversation as context
+(oldest first, most recent last) and keeps it when it receives your rewrite:
+<conversation>
+{history}</conversation>
+Use it only to understand what the request means. Do not repeat it: restate only the request.
+"""
     return f"""Rewrite one request a person gave a coding agent so that it states its scope and success criterion
 clearly, keeping the person's intent and voice.
-
+{earlier}
 The original request:
 <request>{episode.prompt_text}</request>
 
@@ -536,7 +577,8 @@ def build_variant(cause: Cause, base: ReplaySettings, *, episode: Episode, follo
     if reason := cannot_build(cause, model=base.model, env_fix=env_script is not None):
         return VariantBuild(None, reason)
     if cause is Cause.TASK:
-        return _drafted(base, "prompt", lambda evidence: task_rewrite_prompt(episode, criterion, evidence),
+        history = earlier_conversation(episode)
+        return _drafted(base, "prompt", lambda evidence: task_rewrite_prompt(episode, criterion, evidence, history),
                         episode, follow_ups, ask)
     if cause is Cause.AGENT_SETUP:
         repository = repository_context(episode, pristine)
