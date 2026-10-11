@@ -42,7 +42,7 @@ Claude Code did until the next human prompt, identified as `<sessionId>:<promptI
 | 4 | Environment | Only the outside world is fixed (flaky test, network, broken repo state), and it passes | Repo or infrastructure |
 | 5 | Agent setup | Same model and tools, better instructions or role, and it passes | CLAUDE.md, rules, skills, subagent definitions |
 | 6 | Harness | Same model and instructions, given what it lacked (context, a working tool, permission, an unharmed compaction), and it passes | Tools, MCP, hooks, settings |
-| 7 | Model | Only a stronger model or more effort (`claude-fable-5-1` at `--effort max`) makes it pass | `--effort`, `--model` or routing |
+| 7 | Model | Only a stronger model or more effort (`fable`, the latest Fable, at `--effort max`) makes it pass | `--effort`, `--model` or routing |
 | 8 | Multi-cause | No single variant passes, but a pair does; the pair is reported | Both layers |
 | 9 | Unexplained | Nothing passes | Human review |
 
@@ -151,6 +151,11 @@ Storage is plain files: one folder per episode holding its variants, transcripts
 `runs/` (or `$CULPRIT_RUNS`); the session logs are read from `~/.claude/projects` (or
 `$CULPRIT_PROJECTS`). Planted-fault runs live under `runs/selftest/`, apart from real episodes.
 
+Models are named by Claude Code alias (2.1.296: `fable`, `opus`, `sonnet`, `haiku`, each the latest model of
+its tier), so culprit follows new releases without a code change: the model oracle uses `fable`, every
+drafting, leak-check and judge call `sonnet`, and selftest's weak-model fault `haiku`. `CULPRIT_ORACLE_MODEL`,
+`CULPRIT_DRAFTING_MODEL` and `CULPRIT_WEAK_MODEL` pin another alias or id; each is read when it is used.
+
 ### The command line
 
 Eight commands: `triage`, `confirm`, `env-fix`, `diagnose`, `report`, `status`, `review` and `selftest`.
@@ -230,7 +235,7 @@ hook the project's own settings define, because those hooks run in every replay.
 | Environment | A fix script the human supplies (`culprit env-fix`) runs in the clone before the replay | No script supplied (the common case in v1) |
 | Agent setup | Standing instructions drafted from the criterion, the instructions the agent already loads and the starting folder layout (gaps filled, no task-specific facts, at most 12 lines), appended to the clone's project `CLAUDE.md` under a `## More working rules` heading before Claude starts (`.claude/CLAUDE.md` when only that exists; a new `CLAUDE.md` when neither does) — the way the real fix would arrive, as a user message, not through the stronger `--append-system-prompt` channel. The addition is removed again before the diff, so the judge sees only the agent's changes; combined and pair variants write it too | The leak check rejects it twice |
 | Harness | The default tool set with every non-safety restriction lifted, the files the episode read or edited preloaded into the prompt as context, and double the spend cap | Never |
-| Model | `--model claude-fable-5-1 --effort max` (an episode already on Fable keeps its Fable model and only raises the effort); see the effort step below | The episode already ran on Fable at max effort |
+| Model | `--model fable --effort max` (an episode already on Fable keeps its Fable model and only raises the effort); see the effort step below | The episode already ran on Fable at max effort |
 
 **The model oracle's effort step.** Every replay runs at the effort level the episode logged (the `effort`
 field on its first assistant record; none logged leaves Claude Code's default), and the model oracle may change

@@ -18,3 +18,9 @@ def test_a_command_without_store_settings_never_reaches_the_repo_or_real_logs(wr
     real = Path.home() / ".claude"
     assert cli.default_projects() != real / "projects"
     assert replay.DEFAULT_FILE_HISTORY != real / "file-history"
+
+
+def test_no_model_override_from_the_developers_shell_reaches_a_test():
+    import os
+    for name in ("CULPRIT_ORACLE_MODEL", "CULPRIT_DRAFTING_MODEL", "CULPRIT_WEAK_MODEL"):
+        assert name not in os.environ

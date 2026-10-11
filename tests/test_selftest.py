@@ -21,7 +21,7 @@ def test_each_fault_breaks_exactly_one_layer():
     assert plant(PlantedFault.MISLEADING_INSTRUCTION, BASE, CRITERION) == (
         replace(BASE, claude_md_addition=MISLEADING_INSTRUCTION_TEXT), CRITERION)
     assert plant(PlantedFault.EDIT_TOOLS_REMOVED, BASE, CRITERION) == (replace(BASE, tools="Read,Grep,Glob"), CRITERION)
-    assert plant(PlantedFault.WEAK_MODEL, BASE, CRITERION) == (replace(BASE, model="claude-haiku-5-5"), CRITERION)
+    assert plant(PlantedFault.WEAK_MODEL, BASE, CRITERION) == (replace(BASE, model="haiku"), CRITERION)
     assert plant(PlantedFault.IMPOSSIBLE_CRITERION, BASE, CRITERION) == (BASE, IMPOSSIBLE)
 
 
@@ -66,7 +66,7 @@ def test_selftest_reports_each_fault_and_the_accuracy(write_session, tmp_path):
     assert [r.correct for r in results] == [True, True, True, False, True]
     assert SelftestResult("weak-model", "model", "task").correct is False
     assert all(cap == 30.0 for *_, cap in calls)
-    assert calls[3][1].model == "claude-haiku-5-5"
+    assert calls[3][1].model == "haiku"
     assert selftest_dir(runs, "s1:p1", PlantedFault.WEAK_MODEL) == runs / "selftest" / "s1__p1" / "weak-model"
     assert selftest_accuracy(runs) == (4, 5)
 
@@ -85,3 +85,8 @@ def test_selftest_progress_names_the_planted_fault(write_session, tmp_path):
     run_selftest(episode, CRITERION, BASE, runs_dir=tmp_path / "runs", follow_ups=[], n=5, budget_per_fault=30.0,
                  faults=(PlantedFault.WEAK_MODEL,), diagnose_fn=fake_diagnose, progress=events.append)
     assert [e.scope for e in events] == ["weak-model"]
+
+
+def test_the_weak_model_can_be_overridden_like_the_others(monkeypatch):
+    monkeypatch.setenv("CULPRIT_WEAK_MODEL", "claude-haiku-4-5")
+    assert plant(PlantedFault.WEAK_MODEL, BASE, CRITERION)[0].model == "claude-haiku-4-5"

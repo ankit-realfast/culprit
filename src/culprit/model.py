@@ -4,6 +4,7 @@ check and the judge."""
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -17,7 +18,10 @@ from culprit.store import NotReady, display_id, episode_dir, read_json, write_js
 # --- claude: The one place culprit asks a model a question: a locked-down headless Claude call with a JSON schema. ---
 # No tools, no MCP servers, no permission prompts, no session log, and a spend cap on every call.
 
-DRAFTING_MODEL = "claude-sonnet-5-5"
+# Models are named by alias, which Claude Code resolves to the latest model of that tier; an environment variable
+# pins another (read on every call, so it can change between runs)
+DRAFTING_MODEL = "sonnet"
+DRAFTING_MODEL_ENV = "CULPRIT_DRAFTING_MODEL"
 CALL_TIMEOUT_S = 600
 CALL_CAP_USD = 0.50  # the most one call may spend, and what culprit charges for it (the CLI reports no cost)
 # Calls run from their own empty folder, so they never read a project's CLAUDE.md and the empty
@@ -38,6 +42,11 @@ class ClaudeCallFailed(RuntimeError):
     pass
 
 
+def drafting_model() -> str:
+    """The model that drafts, leak-checks and judges: $CULPRIT_DRAFTING_MODEL, else the sonnet alias."""
+    return os.environ.get(DRAFTING_MODEL_ENV) or DRAFTING_MODEL
+
+
 def structured_call_command(prompt: str, schema: dict, model: str, max_budget_usd: float) -> list[str]:
     return [
         "claude", "-p", prompt,
@@ -52,11 +61,11 @@ def structured_call_command(prompt: str, schema: dict, model: str, max_budget_us
     ]
 
 
-def ask_claude(prompt: str, schema: dict, model: str = DRAFTING_MODEL, max_budget_usd: float = CALL_CAP_USD,
+def ask_claude(prompt: str, schema: dict, model: str | None = None, max_budget_usd: float = CALL_CAP_USD,
                run=subprocess.run, cwd: Path = CALLS_DIR) -> dict:
     cwd.mkdir(parents=True, exist_ok=True)
     try:
-        completed = run(structured_call_command(prompt, schema, model, max_budget_usd),
+        completed = run(structured_call_command(prompt, schema, model or drafting_model(), max_budget_usd),
                         capture_output=True, text=True, timeout=CALL_TIMEOUT_S, cwd=cwd)
     except subprocess.TimeoutExpired:
         raise ClaudeCallFailed(f"claude timed out after {CALL_TIMEOUT_S}s") from None

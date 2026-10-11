@@ -67,3 +67,16 @@ def test_the_model_a_call_ran_as_comes_back_beside_the_answer(tmp_path):
 
     from culprit.model import MODEL_RAN_KEY
     assert ask_claude("q", SCHEMA, run=run, cwd=tmp_path) == {"ok": True, MODEL_RAN_KEY: "claude-sonnet-5-5"}
+
+
+def test_calls_ask_for_the_sonnet_alias_unless_culprit_drafting_model_says_otherwise(tmp_path, monkeypatch):
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        return completed(json.dumps({"is_error": False, "subtype": "success", "structured_output": {"ok": True}}))
+
+    ask_claude("q", SCHEMA, run=run, cwd=tmp_path)
+    monkeypatch.setenv("CULPRIT_DRAFTING_MODEL", "claude-sonnet-5-5")
+    ask_claude("q", SCHEMA, run=run, cwd=tmp_path)
+    assert [c[c.index("--model") + 1] for c in commands] == ["sonnet", "claude-sonnet-5-5"]

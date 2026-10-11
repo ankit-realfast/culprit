@@ -78,6 +78,9 @@ uv run culprit status [1]          # where episodes stand and the next command
 - **Environment fix:** `env-fix <episode> <script>` supplies the script the environment oracle runs first.
 - **Settings:** set `CULPRIT_RUNS` to change the store (default `./runs`) and `CULPRIT_PROJECTS` to change
   the logs (default `~/.claude/projects`). `CULPRIT_CLAUDE_BIN` picks the Claude Code build for replays.
+- **Models:** named by Claude Code alias, which means the latest model of that tier: the model oracle tries
+  `fable`, drafting and judging use `sonnet`, and selftest's weak model is `haiku`. Pin another with
+  `CULPRIT_ORACLE_MODEL`, `CULPRIT_DRAFTING_MODEL` or `CULPRIT_WEAK_MODEL` (an alias or a full model id).
 - **Output:** results go to stdout. Progress (one line per replay, plus a heartbeat every 30 s) and
   `next:` hints go to stderr. `status --json` prints one JSON document.
 - **Exit codes:** 0 done · 1 refused or failed · 2 bad arguments · 3 a prior step is missing · 4 spend

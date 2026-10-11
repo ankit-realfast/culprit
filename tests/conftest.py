@@ -30,6 +30,8 @@ def no_real_claude(tmp_path, monkeypatch):
     script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{stand_in}{os.pathsep}{os.environ.get('PATH', '')}")
     monkeypatch.delenv("CULPRIT_CLAUDE_BIN", raising=False)
+    for name in ("CULPRIT_ORACLE_MODEL", "CULPRIT_DRAFTING_MODEL", "CULPRIT_WEAK_MODEL"):
+        monkeypatch.delenv(name, raising=False)  # every test sees culprit's own model choices
     yield
     assert not called.exists(), "a test ran the real claude binary instead of a fake"
 

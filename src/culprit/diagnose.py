@@ -347,7 +347,8 @@ def load_verdict(folder: Path) -> Verdict | None:
 # A variant that passes where the baseline failed proves its cause. Each oracle changes only the fields
 # VARIANT_FIELDS names for it, and a drafted text runs only after the leak check clears it.
 
-ORACLE_MODEL = "claude-fable-5-1"
+ORACLE_MODEL = "fable"  # the alias: Claude Code resolves it to the latest Fable
+ORACLE_MODEL_ENV = "CULPRIT_ORACLE_MODEL"
 FABLE_PREFIX = "claude-fable"
 MAX_CONTEXT_CHARS = 100_000
 MAX_DRAFT_ATTEMPTS = 2
@@ -678,6 +679,11 @@ def harness_context(episode: Episode, pristine: Path) -> str:
     return "These files from the working directory are relevant to the request below:\n\n" + "".join(blocks)
 
 
+def oracle_model() -> str:
+    """The model the model oracle tries: $CULPRIT_ORACLE_MODEL, else the fable alias (read on every call)."""
+    return os.environ.get(ORACLE_MODEL_ENV) or ORACLE_MODEL
+
+
 def on_fable(model: str | None) -> bool:
     return (model or "").startswith(FABLE_PREFIX)
 
@@ -724,7 +730,7 @@ def build_variant(cause: Cause, base: ReplaySettings, *, episode: Episode, follo
                                     max_budget_usd=base.max_budget_usd * HARNESS_BUDGET_MULTIPLIER), None)
     if cause is Cause.MODEL:
         # Fable at max effort; an episode already on Fable keeps its own Fable model
-        return VariantBuild(replace(base, model=base.model if on_fable(base.model) else ORACLE_MODEL,
+        return VariantBuild(replace(base, model=base.model if on_fable(base.model) else oracle_model(),
                                     effort=MAX_EFFORT), None)
     raise ValueError(f"{cause} has no oracle")
 

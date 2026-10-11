@@ -82,6 +82,13 @@ def test_the_model_oracle_swaps_in_fable_at_max_effort(write_session, tmp_path):
         replace(BASE, model=ORACLE_MODEL, effort="max")
 
 
+def test_the_oracle_model_is_the_fable_alias_unless_culprit_oracle_model_says_otherwise(write_session, tmp_path,
+                                                                                        monkeypatch):
+    assert ORACLE_MODEL == "fable"
+    monkeypatch.setenv("CULPRIT_ORACLE_MODEL", "claude-fable-6")
+    assert build(Cause.MODEL, episode_with(write_session, tmp_path), tmp_path).settings.model == "claude-fable-6"
+
+
 def test_the_model_oracle_is_untested_for_an_episode_already_on_fable_at_max_effort(write_session, tmp_path):
     built = build(Cause.MODEL, episode_with(write_session, tmp_path), tmp_path,
                   base=replace(BASE, model="claude-fable-5", effort="max"))

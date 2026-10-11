@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Collection
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -103,7 +104,8 @@ def run_summary(run_dir: Path) -> str:
 # so any new failure comes from the planted fault. The share of faults named correctly is culprit's accuracy.
 
 CONTROL_MIN_SHARE = (4, 5)  # a control's baseline passes at least 4 in 5 of the N runs
-WEAK_MODEL_ID = "claude-haiku-5-5"
+WEAK_MODEL = "haiku"  # the alias of the weakest tier; $CULPRIT_WEAK_MODEL pins another
+WEAK_MODEL_ENV = "CULPRIT_WEAK_MODEL"
 TRUNCATED_WORDS = 6
 READ_ONLY_TOOLS = "Read,Grep,Glob"
 MISLEADING_INSTRUCTION_TEXT = "Do not modify any files. Reply with a one-line summary of what you would do, then stop."
@@ -151,7 +153,7 @@ def plant(fault: PlantedFault, base: ReplaySettings, criterion: Criterion) -> tu
     if fault is PlantedFault.EDIT_TOOLS_REMOVED:
         return replace(base, tools=READ_ONLY_TOOLS), criterion
     if fault is PlantedFault.WEAK_MODEL:
-        return replace(base, model=WEAK_MODEL_ID), criterion
+        return replace(base, model=os.environ.get(WEAK_MODEL_ENV) or WEAK_MODEL), criterion
     return base, IMPOSSIBLE
 
 
