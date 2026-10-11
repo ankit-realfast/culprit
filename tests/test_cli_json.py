@@ -50,3 +50,18 @@ def test_status_json_carries_the_judge_agreement_and_selftest_accuracy(tmp_path,
     assert data["judge"] == {"labelled": 0, "agreed": 0, "kappa": None, "calibrated": False, "min_labels": 20,
                              "min_kappa": 0.6}
     assert data["selftest"] == {"correct": 0, "total": 0}
+
+
+def test_status_json_gives_each_variants_cost_and_tokens_per_run(tmp_path, capsys):
+    from culprit.diagnose import VariantOutcome
+    from culprit.store import episode_dir
+    import dataclasses
+    runs = tmp_path / "runs"
+    folder = episode_dir(runs, "s1:p1") / "replays" / "baseline"
+    folder.mkdir(parents=True)
+    (folder / "outcome.json").write_text(json.dumps(dataclasses.asdict(VariantOutcome(
+        "baseline", 1, 9, 5.0, void=1, tokens={"input_tokens": 1000, "output_tokens": 49_000}))))
+    assert cli.main(["status", "s1:p1", "--json"]) == 0
+    [baseline] = only_json(capsys)["outcomes"]
+    assert baseline["tokens"] == {"input_tokens": 1000, "output_tokens": 49_000}
+    assert baseline["usd_per_run"] == 0.5 and baseline["tokens_per_run"] == 5000

@@ -40,3 +40,34 @@ def test_with_two_changes_a_losing_pair_gives_way_to_combined():
                       {"baseline": outcome("baseline", 0, 10), "combined": outcome("combined", 9, 10),
                        "task+model": outcome("task+model", 1, 10)}, {}, ("task", "model"))
     assert numbers_line(verdict).startswith("multi-cause (combined): baseline 0/10 → 9/10")
+
+
+TOKENS = {"input_tokens": 2_000, "output_tokens": 8_000, "cache_creation_input_tokens": 10_000,
+          "cache_read_input_tokens": 500_000}
+
+
+def costed(name, passes, runs, cost_usd, void=0):
+    return {**outcome(name, passes, runs), "cost_usd": cost_usd, "void": void, "tokens": TOKENS}
+
+
+def test_the_numbers_line_carries_the_winners_cost_per_run():
+    verdict = Verdict("a:1", "wrong-result", "harness", "e",
+                      {"baseline": costed("baseline", 0, 10, 3.0), "harness": costed("harness", 8, 10, 4.1)}, {})
+    assert numbers_line(verdict) == "harness: baseline 0/10 → 8/10, p = 0.0004 · $0.41/run, 52k tokens/run"
+
+
+def test_cost_per_run_spreads_over_every_attempt_void_ones_included():
+    from culprit.diagnose import costs_line
+    verdict = Verdict("a:1", "wrong-result", "unexplained", "e",
+                      {"baseline": costed("baseline", 0, 8, 5.0, void=2), "task": costed("task", 1, 10, 2.0)}, {})
+    assert numbers_line(verdict) == "unexplained: baseline 0/8 · $0.50/run, 52k tokens/run"
+    assert costs_line(verdict) == ("cost per run: baseline $0.50, 52k tokens (200 in, 800 out, 51k cached); "
+                                   "task $0.20, 52k tokens (200 in, 800 out, 51k cached)")
+
+
+def test_outcomes_stored_before_tokens_were_kept_show_no_cost():
+    from culprit.diagnose import costs_line
+    verdict = Verdict("a:1", "wrong-result", "harness", "e",
+                      {"baseline": outcome("baseline", 0, 10), "harness": outcome("harness", 8, 10)}, {})
+    assert numbers_line(verdict) == "harness: baseline 0/10 → 8/10, p = 0.0004"
+    assert costs_line(verdict) is None

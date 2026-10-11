@@ -648,3 +648,29 @@ def test_a_project_keeping_only_dot_claude_claude_md_gets_the_lines_there(tmp_pa
 def test_variants_stored_with_the_old_field_name_still_load():
     data = {"prompt": "p", "model": None, "permission_mode": "auto", "append_system_prompt": "Verify first."}
     assert settings_from_json(data).claude_md_addition == "Verify first."
+
+
+def test_a_run_keeps_its_token_counts_from_the_result_line(tmp_path):
+    usage = {"input_tokens": 12, "output_tokens": 3400, "cache_creation_input_tokens": 9000,
+             "cache_read_input_tokens": 41000, "service_tier": "standard"}
+    line = json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "ok",
+                       "total_cost_usd": 0.4, "usage": usage})
+    result = run_replay(settings(), pristine_tree(tmp_path), tmp_path / "run0", tmp_path / ".culprit-replay-u", (),
+                        run=FakeRun(claude_stdout=line), projects_dir=tmp_path / "p")
+    assert result.usage == {"input_tokens": 12, "output_tokens": 3400, "cache_creation_input_tokens": 9000,
+                            "cache_read_input_tokens": 41000}
+    assert json.loads((tmp_path / "run0" / "result.json").read_text())["usage"] == result.usage
+
+
+def test_a_timed_out_run_counts_the_tokens_its_messages_reported(tmp_path):
+    def message(message_id, output):
+        return json.dumps({"type": "assistant", "message": {"id": message_id, "content": [], "usage": {
+            "input_tokens": 10, "output_tokens": output, "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 100}}})
+    # one message streams as several events carrying the same usage: it is counted once
+    partial = "\n".join([message("m1", 5), message("m1", 5), message("m2", 7)]) + "\n"
+    run = FakeRun(claude_raises=subprocess.TimeoutExpired(cmd="claude", timeout=1, output=partial))
+    result = run_replay(settings(), pristine_tree(tmp_path), tmp_path / "run0", tmp_path / ".culprit-replay-tu", (),
+                        run=run, projects_dir=tmp_path / "p")
+    assert result.usage == {"input_tokens": 20, "output_tokens": 12, "cache_creation_input_tokens": 0,
+                            "cache_read_input_tokens": 200}

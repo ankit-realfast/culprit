@@ -155,3 +155,16 @@ def test_runs_stopped_at_a_limit_count_and_the_outcome_tallies_each_limit(write_
     assert (outcome.passes, outcome.runs, outcome.void) == (1, 3, 0)
     assert outcome.limits == {"time": 1, "budget": 1}
     assert [e.limit for e in events if e.kind == "finish"] == ["time", "budget", None]
+
+
+def test_a_variant_adds_up_the_tokens_of_every_run(write_session, tmp_path):
+    from dataclasses import replace as replaced
+    episode = episode_at(write_session, tmp_path)
+    plain = fake_replay(cost=0.5)
+
+    def replay(*args, **kwargs):
+        return replaced(plain(*args, **kwargs), usage={"input_tokens": 10, "output_tokens": 20})
+
+    outcome = run_variant("baseline", SETTINGS, n=2, episode=episode, runs_dir=tmp_path / "runs", criterion=CRITERION,
+                          budget=EpisodeBudget(10.0), replay=replay, judge=judge_sequence(True, False))
+    assert outcome.tokens == {"input_tokens": 20, "output_tokens": 40}

@@ -236,6 +236,7 @@ VOID_SUBTYPES = ("error_during_execution",)
 BUDGET_LIMIT_SUBTYPE = "error_max_budget_usd"
 LIMIT_BUDGET = "budget"
 LIMIT_TIME = "time"
+USAGE_KEYS = ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
 DIFF_EXCLUDES = (".git", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", "dist", "build", ".next",
                  "target")
 DIFF_TIMEOUT_S = 120
@@ -288,6 +289,7 @@ class ReplayResult:
     checks: tuple[CheckResult, ...]
     void_reason: str | None = None  # set when infrastructure failed the run: it does not count
     limit: str | None = None  # LIMIT_BUDGET or LIMIT_TIME when the run stopped at culprit's cap: it still counts
+    usage: dict = field(default_factory=dict)  # token counts, by USAGE_KEYS
 
 
 class SetupScriptFailed(RuntimeError):
@@ -595,18 +597,20 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
             # so it is charged at the cap rather than as free
             replay = ReplayResult(run_dir, exit_code, True,
                                   f"stopped at the {settings.timeout_s:.0f}s time limit before a final answer",
-                                  settings.max_budget_usd, 0, check_results, limit=LIMIT_TIME)
+                                  settings.max_budget_usd, 0, check_results, limit=LIMIT_TIME,
+                                  usage=_streamed_usage(stdout))
         elif result_line is None:
             reason = f"no result line (exit {exit_code})"
             # the CLI crashed or never started: infrastructure, so void; charged at the cap as its cost is unknown
             replay = ReplayResult(run_dir, exit_code, True, f"{reason}: {stderr[-300:]}", settings.max_budget_usd, 0,
-                                  check_results, void_reason=reason)
+                                  check_results, void_reason=reason, usage=_streamed_usage(stdout))
         else:
             limit = LIMIT_BUDGET if result_line.get("subtype") == BUDGET_LIMIT_SUBTYPE else None
             replay = ReplayResult(run_dir, exit_code, bool(result_line.get("is_error")),
                                   str(result_line.get("result") or ""), float(result_line.get("total_cost_usd") or 0),
                                   int(result_line.get("num_turns") or 0), check_results,
-                                  void_reason=_void_reason(result_line), limit=limit)
+                                  void_reason=_void_reason(result_line), limit=limit,
+                                  usage=_counts(result_line.get("usage")) or _streamed_usage(stdout))
         (run_dir / RESULT_FILE).write_text(json.dumps(asdict(replay), default=str, indent=2))
         if watched:
             after = tree_fingerprint(watched)
@@ -640,6 +644,32 @@ def _bounded_diff(pristine: Path, workdir: Path, run) -> str:
     if len(data) <= MAX_DIFF_BYTES:
         return diff
     return data[:MAX_DIFF_BYTES].decode(errors="ignore") + f"\n[diff cut: {len(data) - MAX_DIFF_BYTES} more bytes]\n"
+
+
+def _counts(usage: object) -> dict:
+    """The token counts in a usage block, by USAGE_KEYS."""
+    if not isinstance(usage, dict):
+        return {}
+    return {key: int(usage[key]) for key in USAGE_KEYS if isinstance(usage.get(key), int)}
+
+
+def _streamed_usage(stdout: str) -> dict:
+    """With no result line, the tokens the assistant messages reported, each message once (stream-json repeats a
+    message's usage on every event it sends for it)."""
+    by_message: dict[str, dict] = {}
+    for number, line in enumerate(stdout.splitlines()):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        message = record.get("message") if isinstance(record, dict) and record.get("type") == "assistant" else None
+        if isinstance(message, dict) and (counts := _counts(message.get("usage"))):
+            by_message[str(message.get("id") or number)] = counts
+    total: dict[str, int] = {}
+    for counts in by_message.values():
+        for key, value in counts.items():
+            total[key] = total.get(key, 0) + value
+    return total
 
 
 def _text(output: str | bytes | None) -> str:

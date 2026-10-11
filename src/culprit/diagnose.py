@@ -81,6 +81,7 @@ class VariantOutcome:
     cost_usd: float
     void: int = 0
     limits: dict = field(default_factory=dict)  # counted runs stopped at a limit, by limit ("budget", "time")
+    tokens: dict = field(default_factory=dict)  # every attempt's token counts added up, by kind (like cost_usd)
 
 
 @dataclass(frozen=True)
@@ -117,6 +118,7 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
     variant_dir = folder / REPLAYS_DIR / variant
     passes = counted = void = 0
     limits: dict[str, int] = {}
+    tokens: dict[str, int] = {}
     cost = 0.0
     attempt = 0
     tell = progress or (lambda event: None)
@@ -128,7 +130,7 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
         if reused:
             # paid for before a stop: reuse it rather than pay again
             stored = read_json(run_dir / RESULT_FILE)
-            run_cost, limit = float(stored.get("cost_usd") or 0), stored.get("limit")
+            run_cost, limit, usage = float(stored.get("cost_usd") or 0), stored.get("limit"), stored.get("usage") or {}
             judgement = Judgement(**read_json(run_dir / JUDGEMENT_FILE))
         else:
             budget.ensure_room(settings.max_budget_usd + CALL_CAP_USD)
@@ -137,12 +139,14 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
                             criterion.checks, original_cwd=Path(episode.cwd),
                             original_memory=episode.session_file.parent / MEMORY_DIR)
             budget.spend(result.cost_usd)  # charged before judging, so a judge failure cannot lose it
-            run_cost, limit = result.cost_usd, result.limit
+            run_cost, limit, usage = result.cost_usd, result.limit, result.usage
             judgement = judge(criterion, result)
             if judgement.by == "model":
                 budget.spend(CALL_CAP_USD)
             write_json(run_dir / JUDGEMENT_FILE, asdict(judgement))
         cost += run_cost
+        for kind, count in usage.items():
+            tokens[kind] = tokens.get(kind, 0) + count
         verdict = "void" if judgement.by == "void" else "pass" if judgement.passed else "fail"
         tell(replace(event, kind="finish", result=verdict, cost_usd=run_cost, spent_usd=round(budget.spent_usd, 4),
                      reused=reused, limit=limit))
@@ -153,7 +157,7 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
         if limit:
             limits[limit] = limits.get(limit, 0) + 1
         passes += int(judgement.passed)
-    outcome = VariantOutcome(variant, passes, counted, round(cost, 4), void, limits)
+    outcome = VariantOutcome(variant, passes, counted, round(cost, 4), void, limits, tokens)
     write_json(variant_dir / OUTCOME_FILE, asdict(outcome))
     return outcome
 
@@ -234,9 +238,48 @@ def numbers_line(verdict: Verdict) -> str | None:
     label = verdict.cause if winner in (None, verdict.cause) else f"{verdict.cause} ({winner})"
     line = f"{label}: baseline {baseline['passes']}/{baseline['runs']}"
     if winner is None:
-        return line
+        return line + _per_run_suffix(baseline)
     won, p = verdict.outcomes[winner], p_of[winner]
-    return f"{line} → {won['passes']}/{won['runs']}, p {'< 0.0001' if p < 0.0001 else f'= {p:.4f}'}"
+    return (f"{line} → {won['passes']}/{won['runs']}, p {'< 0.0001' if p < 0.0001 else f'= {p:.4f}'}"
+            f"{_per_run_suffix(won)}")
+
+
+def attempts(outcome: dict) -> int:
+    """Every replay paid for: the counted runs and the void ones."""
+    return int(outcome.get("runs") or 0) + int(outcome.get("void") or 0)
+
+
+def usd_per_run(outcome: dict) -> float:
+    return round(float(outcome.get("cost_usd") or 0) / attempts(outcome), 4) if attempts(outcome) else 0.0
+
+
+def tokens_per_run(outcome: dict, kinds: Sequence[str] | None = None) -> int:
+    counts = outcome.get("tokens") or {}
+    total = sum(count for kind, count in counts.items() if kinds is None or kind in kinds)
+    return round(total / attempts(outcome)) if attempts(outcome) else 0
+
+
+def _kilo(count: int) -> str:
+    if count >= 1_000_000:
+        return f"{count / 1_000_000:.1f}M"
+    return f"{round(count / 1000)}k" if count >= 1000 else str(count)
+
+
+def _per_run_suffix(outcome: dict) -> str:
+    """` · $0.41/run, 52k tokens/run`; empty for an outcome stored before token counts were kept."""
+    if "tokens" not in outcome or not attempts(outcome):
+        return ""
+    return f" · ${usd_per_run(outcome):.2f}/run, {_kilo(tokens_per_run(outcome))} tokens/run"
+
+
+def costs_line(verdict: Verdict) -> str | None:
+    """Every variant's cost per run in dollars and tokens (all tokens, then input, output and cache writes plus
+    reads); None when no outcome kept token counts."""
+    parts = [f"{name} ${usd_per_run(o):.2f}, {_kilo(tokens_per_run(o))} tokens "
+             f"({_kilo(tokens_per_run(o, ('input_tokens',)))} in, {_kilo(tokens_per_run(o, ('output_tokens',)))} out, "
+             f"{_kilo(tokens_per_run(o, ('cache_creation_input_tokens', 'cache_read_input_tokens')))} cached)"
+             for name, o in verdict.outcomes.items() if "tokens" in o and attempts(o)]
+    return f"cost per run: {'; '.join(parts)}" if parts else None
 
 
 def limit_tally(limits: dict | None) -> str:

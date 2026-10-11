@@ -140,3 +140,15 @@ def test_each_verdict_says_how_many_runs_stopped_at_a_limit(tmp_path):
                 "harness": {"variant": "harness", "passes": 8, "runs": 10, "cost_usd": 1.0, "void": 0}}
     save_verdict(tmp_path / "a__1", Verdict("a:1", "wrong-result", "harness", "e", outcomes, {}))
     assert "stopped at a limit: baseline 7 of 10 (budget 6, time 1)" in render_report(collect(tmp_path), [])
+
+
+def test_each_verdict_shows_what_each_variant_cost_per_run(tmp_path):
+    tokens = {"input_tokens": 10_000, "output_tokens": 20_000}
+    outcomes = {"baseline": {"variant": "baseline", "passes": 0, "runs": 10, "cost_usd": 3.0, "void": 0,
+                             "tokens": tokens},
+                "harness": {"variant": "harness", "passes": 8, "runs": 10, "cost_usd": 4.1, "void": 0,
+                            "tokens": tokens}}
+    save_verdict(tmp_path / "a__1", Verdict("a:1", "wrong-result", "harness", "e", outcomes, {}))
+    text = render_report(collect(tmp_path), [])
+    assert "p = 0.0004 · $0.41/run, 3k tokens/run" in text
+    assert "cost per run: baseline $0.30, 3k tokens (1k in, 2k out, 0 cached); harness $0.41" in text

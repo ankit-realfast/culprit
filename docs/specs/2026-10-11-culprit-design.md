@@ -286,6 +286,15 @@ Every verdict states the numbers behind it — the baseline's pass count, the wi
 `combined` for Multi-cause) and the Fisher p, e.g. `harness: baseline 0/10 → 8/10, p = 0.0004` — in
 `diagnose` output and under each verdict in the report. Verdicts with no winner show the baseline only.
 
+**Cost per variant.** Each run keeps its token counts — input, output, cache writes and cache reads — from the
+stream-json result line's `usage` (a run with no result line, such as one stopped at the time limit, adds up
+the `usage` its assistant messages reported, each message once), beside its `total_cost_usd`. Each variant's
+outcome adds them up over every attempt, void ones included, as its cost does. The numbers line ends with the
+winning variant's (else the baseline's) cost per run, e.g. `harness: baseline 0/10 → 8/10, p = 0.0004 ·
+$0.41/run, 52k tokens/run` (all four kinds of token together), and a `cost per run:` line lists every variant
+with its tokens split into input, output and cached; both appear in `diagnose` output and under each verdict
+in the report, and `status --json` gives each outcome's totals plus `usd_per_run` and `tokens_per_run`.
+
 ---
 
 ## 4. Validity guards

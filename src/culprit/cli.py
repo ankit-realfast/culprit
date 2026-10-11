@@ -16,8 +16,8 @@ from typing import Callable, Sequence, TextIO
 from culprit import logs, replay
 from culprit.diagnose import (BASELINE, DRAFTED_CAUSES, ENV_FIX_FILE, BudgetExhausted, CostPlan, EpisodeBudget,
                               ReplayEvent, VariantOutcome, batch_cost, diagnose, diagnose_all, diagnose_cost,
-                              diagnose_cost_for, env_fix_script, limit_tally, limits_line, load_outcome, load_verdict,
-                              numbers_line, plan_cost,
+                              costs_line, diagnose_cost_for, env_fix_script, limit_tally, limits_line, load_outcome,
+                              load_verdict, numbers_line, plan_cost, tokens_per_run, usd_per_run,
                               pristine_dir, retire_if_criterion_changed, run_variant, stored_spend)
 from culprit.logs import (Episode, EpisodeNotFound, FailureSignals, excerpt, find_episode, follow_up_prompts,
                           load_snapshot, project_hooks, rank_candidates, replay_blockers, session_files, session_root,
@@ -529,7 +529,7 @@ def status_command(args: argparse.Namespace) -> int:
     if args.episode_id:
         status = episode_status(args.runs, args.episode_id)
         if args.json:
-            emit(asdict(status))
+            emit(status_json(status))
             return 0
         for line in status_lines(status):
             print(line)
@@ -537,7 +537,7 @@ def status_command(args: argparse.Namespace) -> int:
     statuses = queue_status(args.runs)
     if args.json:
         correct, total = selftest_accuracy(args.runs)
-        emit({"episodes": [asdict(status) for status in statuses], "judge": agreement_json(agreement(args.runs)),
+        emit({"episodes": [status_json(status) for status in statuses], "judge": agreement_json(agreement(args.runs)),
               "selftest": {"correct": correct, "total": total}})
         return 0
     if not statuses:
@@ -551,6 +551,14 @@ def status_command(args: argparse.Namespace) -> int:
     for line in trust_lines(args.runs):
         print(line)
     return 0
+
+
+def status_json(status: EpisodeStatus) -> dict:
+    """The status as JSON, each variant's outcome with its cost and tokens per run (void attempts included)."""
+    data = asdict(status)
+    for outcome in data["outcomes"]:
+        outcome["usd_per_run"], outcome["tokens_per_run"] = usd_per_run(outcome), tokens_per_run(outcome)
+    return data
 
 
 def status_lines(status: EpisodeStatus) -> list[str]:
@@ -683,6 +691,8 @@ def diagnose_command(args: argparse.Namespace) -> int:
         print(numbers)
     if limited := limits_line(verdict):
         print(limited)
+    if costs := costs_line(verdict):
+        print(costs)
     if verdict.pair:
         print(f"together: {' + '.join(verdict.pair)}")
     for cause, reason in verdict.untested.items():
