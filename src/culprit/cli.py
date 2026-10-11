@@ -17,7 +17,7 @@ from culprit import logs, replay
 from culprit.diagnose import (BASELINE, DRAFTED_CAUSES, ENV_FIX_FILE, BudgetExhausted, CostPlan, EpisodeBudget,
                               ReplayEvent, VariantOutcome, batch_cost, diagnose, diagnose_all, diagnose_cost,
                               costs_line, diagnose_cost_for, env_fix_script, known_oracle_id, limit_tally,
-                              limits_line, load_outcome, load_verdict, models_line, numbers_line, plan_cost, tokens_per_run, usd_per_run,
+                              limits_line, load_outcome, load_verdict, models_line, network_line, numbers_line, plan_cost, tokens_per_run, usd_per_run,
                               oracle_model, pristine_dir, record_call_spend, retire_if_criterion_changed, run_variant,
                               stored_spend, unknown_model_warning)
 from culprit.logs import (Episode, EpisodeNotFound, FailureSignals, excerpt, find_episode, follow_up_prompts,
@@ -577,6 +577,8 @@ def status_lines(status: EpisodeStatus) -> list[str]:
         void = f", {outcome.void} void" if outcome.void else ""
         if outcome.limits:
             void += f", {sum(outcome.limits.values())} stopped at a limit ({limit_tally(outcome.limits)})"
+        if outcome.network:
+            void += f", network {outcome.network.get('served', 0)} served, {outcome.network.get('refused', 0)} refused as unrecorded"
         lines.append(f"{outcome.variant}: {outcome.passes} of {outcome.runs} passed{void}, ${outcome.cost_usd:.2f}")
     lines.append(f"spent: ${status.spent_usd:.2f}")
     if status.verdict:
@@ -703,6 +705,8 @@ def diagnose_command(args: argparse.Namespace) -> int:
         print(numbers)
     if limited := limits_line(verdict):
         print(limited)
+    if network := network_line(verdict):
+        print(network)
     if costs := costs_line(verdict):
         print(costs)
     if models := models_line(verdict):

@@ -11,14 +11,15 @@ import signal
 import subprocess
 import sys
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 from culprit import logs
 from culprit.logs import (Episode, Tracked, is_follow_up, original_effort, prompt_images, recorded_answers,
                           records_before)
 from culprit.stubs import (MCP_PREFIX, PERMISSION_PROMPT_TOOL, SERVER as ANSWER_SERVER, WEB_TOOLS,
-                           network_recordings_from_episode, prepare_network_recordings, recordings_from_episode)
+                           network_counts, network_recordings_from_episode, prepare_network_recordings,
+                           recordings_from_episode)
 
 
 # --- sandbox: Rebuild the files an episode started from, in a throwaway folder, and check the rebuild. ---
@@ -301,6 +302,7 @@ class ReplayResult:
     limit: str | None = None  # LIMIT_BUDGET or LIMIT_TIME when the run stopped at culprit's cap: it still counts
     usage: dict = field(default_factory=dict)  # token counts, by USAGE_KEYS
     model: str | None = None  # the model id the run actually ran as (an alias resolved), from its stream
+    network: dict = field(default_factory=dict)  # network calls culprit's hooks served from the log / refused
 
 
 class SetupScriptFailed(RuntimeError):
@@ -642,6 +644,7 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
                                   void_reason=_void_reason(result_line), limit=limit,
                                   usage=_counts(result_line.get("usage")) or _streamed_usage(stdout),
                                   model=ran_as(stdout))
+        replay = replace(replay, network=network_counts(run_dir))
         (run_dir / RESULT_FILE).write_text(json.dumps(asdict(replay), default=str, indent=2))
         if watched:
             after = tree_fingerprint(watched)

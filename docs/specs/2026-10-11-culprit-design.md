@@ -215,7 +215,11 @@ claude -p \                      # the episode or variant prompt goes on stdin
   clone) is allowed with `updatedInput` replacing it by `cat <recorded output>; exit <status>`; a
   command recorded several times gets each answer in turn, then the last again. Anything else gets no
   reply, so the sandbox refuses a live call. `gh` and `git push` are not on the list; they stay denied.
-  Every network call the hook sees is logged in the run folder (`network-log.jsonl`), served or not.
+  Every network call the hook sees is logged in the run folder (`network-log.jsonl`), served or not;
+  each run's result counts them (`served`, `refused`), each variant adds up its counted runs, and
+  `status`, `diagnose` and the report show the counts per variant ("network calls: baseline 12 served
+  from the log, 3 refused as unrecorded") beside the runs stopped at a limit, so a verdict built on
+  refused calls is visible.
   Verified live 2026-10-11 on 2.1.296 (Haiku): a `--settings` `PreToolUse` hook's `updatedInput`
   replaced a Bash command, its output and exit status reached the model, and the transcript kept the
   original command; a user hook that blocks the command still wins.

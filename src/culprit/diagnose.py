@@ -84,6 +84,7 @@ class VariantOutcome:
     limits: dict = field(default_factory=dict)  # counted runs stopped at a limit, by limit ("budget", "time")
     tokens: dict = field(default_factory=dict)  # every attempt's token counts added up, by kind (like cost_usd)
     models: dict = field(default_factory=dict)  # counted runs by the model id each actually ran as
+    network: dict = field(default_factory=dict)  # counted runs' network calls: "served" from the log, "refused"
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,7 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
     limits: dict[str, int] = {}
     tokens: dict[str, int] = {}
     models: dict[str, int] = {}
+    network: dict[str, int] = {}
     cost = 0.0
     attempt = 0
     tell = progress or (lambda event: None)
@@ -134,7 +136,7 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
             # paid for before a stop: reuse it rather than pay again
             stored = read_json(run_dir / RESULT_FILE)
             run_cost, limit, usage = float(stored.get("cost_usd") or 0), stored.get("limit"), stored.get("usage") or {}
-            ran = stored.get("model")
+            ran, calls = stored.get("model"), stored.get("network") or {}
             judgement = Judgement(**read_json(run_dir / JUDGEMENT_FILE))
         else:
             budget.ensure_room(settings.max_budget_usd + CALL_CAP_USD)
@@ -143,7 +145,7 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
                             criterion.checks, original_cwd=Path(episode.cwd),
                             original_memory=episode.session_file.parent / MEMORY_DIR)
             budget.spend(result.cost_usd)  # charged before judging, so a judge failure cannot lose it
-            run_cost, limit, usage, ran = result.cost_usd, result.limit, result.usage, result.model
+            run_cost, limit, usage, ran, calls = result.cost_usd, result.limit, result.usage, result.model, result.network
             judgement = judge(criterion, result)
             if judgement.by == "model":
                 budget.spend(CALL_CAP_USD)
@@ -162,8 +164,10 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
             limits[limit] = limits.get(limit, 0) + 1
         if ran:
             models[ran] = models.get(ran, 0) + 1
+        for kind, count in calls.items():
+            network[kind] = network.get(kind, 0) + count
         passes += int(judgement.passed)
-    outcome = VariantOutcome(variant, passes, counted, round(cost, 4), void, limits, tokens, models)
+    outcome = VariantOutcome(variant, passes, counted, round(cost, 4), void, limits, tokens, models, network)
     write_json(variant_dir / OUTCOME_FILE, asdict(outcome))
     return outcome
 
@@ -331,6 +335,19 @@ def limits_line(verdict: Verdict) -> str | None:
     parts = [f"{name} {sum(o['limits'].values())} of {o['runs']} ({limit_tally(o['limits'])})"
              for name, o in verdict.outcomes.items() if o.get("limits")]
     return f"stopped at a limit: {', '.join(parts)}" if parts else None
+
+
+def network_tally(network: dict | None) -> str:
+    """`12 served from the log, 3 refused as unrecorded`: one variant's network calls."""
+    network = network or {}
+    return f"{network.get('served', 0)} served from the log, {network.get('refused', 0)} refused as unrecorded"
+
+
+def network_line(verdict: Verdict) -> str | None:
+    """Which variants made network calls and how many were served from the log or refused, so a verdict built on
+    refused calls shows, e.g. `network calls: baseline 12 served from the log, 3 refused as unrecorded`."""
+    parts = [f"{name} {network_tally(o['network'])}" for name, o in verdict.outcomes.items() if o.get("network")]
+    return f"network calls: {'; '.join(parts)}" if parts else None
 
 
 def save_verdict(folder: Path, verdict: Verdict) -> Path:

@@ -5,10 +5,12 @@ from pathlib import Path
 
 import pytest
 
+from culprit.diagnose import EpisodeBudget, Verdict, VariantOutcome, network_line, run_variant, save_verdict
 from culprit.logs import episodes_from_session
-from culprit.replay import ReplaySettings, baseline_settings, replay_command, run_replay, settings_from_json, settings_to_json
+from culprit.model import Criterion, Judgement
+from culprit.replay import ReplayResult, ReplaySettings, baseline_settings, replay_command, run_replay, settings_from_json, settings_to_json
 from culprit.stubs import (MAX_WEB_RESULT_CHARS, NETWORK_LOG, bash_hook, network_recordings_from_episode,
-                           prepare_network_recordings, uses_network, web_hook)
+                           network_counts, prepare_network_recordings, uses_network, web_hook)
 from fakes import FakeRun
 from records import human
 
@@ -255,3 +257,66 @@ def test_a_command_built_without_culprits_hooks_denies_the_web_tools_outright():
     command = replay_command(ReplaySettings(prompt="fix", model=None, permission_mode="auto"))
     denied = command[command.index("--disallowedTools") + 1:]
     assert "WebFetch" in denied and "WebSearch" in denied
+
+
+# --- how many network calls each run served from the log, and how many it refused ---
+
+def write_log(folder, *served):
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / NETWORK_LOG).write_text("".join(json.dumps({"tool": "Bash", "call": "c", "served": s}) + "\n"
+                                              for s in served))
+
+
+def test_the_counts_come_from_the_hooks_own_log(tmp_path):
+    write_log(tmp_path, True, True, False)
+    assert network_counts(tmp_path) == {"served": 2, "refused": 1}
+    assert network_counts(tmp_path / "nothing-here") == {}
+
+
+def test_a_replay_result_carries_its_runs_network_counts(tmp_path):
+    pristine = tmp_path / "pristine"
+    pristine.mkdir()
+    run = FakeRun(claude_stdout=RESULT, on_claude=lambda cwd: write_log(tmp_path / "run0", True, False, False))
+    result = run_replay(ReplaySettings(prompt="fix", model=None, permission_mode="auto"), pristine, tmp_path / "run0",
+                        tmp_path / ".culprit-replay-count", (), run=run, projects_dir=tmp_path / "p")
+    assert result.network == {"served": 1, "refused": 2}
+    assert json.loads((tmp_path / "run0" / "result.json").read_text())["network"] == {"served": 1, "refused": 2}
+
+
+def test_a_variant_adds_up_its_counted_runs_network_calls(write_session, tmp_path):
+    (episode,) = episodes_from_session(write_session([human("fix", "p1", cwd=str(tmp_path / "proj"))]))
+    counts = iter([{"served": 2, "refused": 1}, {}, {"served": 1, "refused": 0}])
+
+    def replay(settings, pristine, run_dir, workdir, checks, **kwargs):
+        run_dir.mkdir(parents=True, exist_ok=True)
+        return ReplayResult(run_dir, 0, False, "done", 0.1, 3, (), network=next(counts))
+
+    outcome = run_variant("baseline", ReplaySettings(prompt="fix", model=None, permission_mode="auto"), n=3,
+                          episode=episode, runs_dir=tmp_path / "runs", criterion=Criterion("works", (), (), approved=True),
+                          budget=EpisodeBudget(100.0), replay=replay,
+                          judge=lambda criterion, result: Judgement(True, "r", "model"))
+    assert outcome.network == {"served": 3, "refused": 1}
+
+
+OUTCOMES = {"baseline": {"variant": "baseline", "passes": 0, "runs": 10, "cost_usd": 1.0, "void": 0,
+                         "network": {"served": 12, "refused": 3}},
+            "harness": {"variant": "harness", "passes": 8, "runs": 10, "cost_usd": 1.0, "void": 0,
+                        "network": {"served": 9, "refused": 0}},
+            "task": {"variant": "task", "passes": 0, "runs": 10, "cost_usd": 1.0, "void": 0}}
+
+
+def test_the_network_line_names_each_variant_that_made_network_calls():
+    verdict = Verdict("a:1", "wrong-result", "harness", "e", OUTCOMES, {})
+    assert network_line(verdict) == ("network calls: baseline 12 served from the log, 3 refused as unrecorded; "
+                                     "harness 9 served from the log, 0 refused as unrecorded")
+    assert network_line(Verdict("a:1", "wrong-result", "harness", "e", {"task": OUTCOMES["task"]}, {})) is None
+
+
+def test_the_report_and_status_show_the_network_counts(tmp_path):
+    from culprit.cli import status_lines
+    from culprit.report import EpisodeStatus, collect, render_report
+    save_verdict(tmp_path / "a__1", Verdict("a:1", "wrong-result", "harness", "e", OUTCOMES, {}))
+    assert "network calls: baseline 12 served from the log, 3 refused as unrecorded" in render_report(collect(tmp_path), [])
+    status = EpisodeStatus("a:1", "baselined", "run it",
+                           outcomes=(VariantOutcome("baseline", 1, 10, 3.0, network={"served": 4, "refused": 2}),))
+    assert "baseline: 1 of 10 passed, network 4 served, 2 refused as unrecorded, $3.00" in status_lines(status)

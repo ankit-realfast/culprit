@@ -156,7 +156,9 @@ uv run culprit status [1]          # where episodes stand and the next command
 - **Network shell commands:** only a command identical to one the episode ran (after paths into your
   project point at the copy, whitespace aside) gets its recorded output; a repeated command gets each
   recorded answer in turn. Anything else is refused by the sandbox, so a replay that needs a live service
-  it never called before fails. Commands are recognised by a fixed list of network tools.
+  it never called before fails. Commands are recognised by a fixed list of network tools. `status`,
+  `diagnose` and the report count, per variant, the network calls served from your log and those refused
+  as unrecorded, so a verdict that rests on refused calls shows.
 - **Web calls:** a `WebFetch` (same URL and prompt) or `WebSearch` (same query) the episode made gets its
   recorded result, cut at 20,000 characters, but as the reason for a denial rather than as a normal
   result. Any other web call is denied as not recorded.

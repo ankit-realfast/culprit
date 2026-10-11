@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from culprit.diagnose import (BASELINE, VariantOutcome, Verdict, load_instructions_draft, load_outcome, load_outcomes,
-                              load_verdict, costs_line, limits_line, models_line, numbers_line, pristine_dir, stored_spend)
+                              load_verdict, costs_line, limits_line, models_line, network_line, numbers_line, pristine_dir, stored_spend)
 from culprit.model import Criterion, criterion_step, load_criterion
 from culprit.store import (SELFTEST_DIR, Cause, Symptom, confirm_step, display_id, episode_dir, known_episode_ids,
                            load_restore, queued_ids, read_symptom)
@@ -35,6 +35,8 @@ KNOWN_LIMITS = (
     "Replays read a copy of the project's memory as it is today, not as it was then.",
     "MCP tools answered from the log, so a call the original never made failed; questions were answered with "
     "your recorded answers only when the replay asked something close.",
+    "Replays were offline: a network shell command or web call got its recorded result only when identical to one "
+    "the episode made, and was refused otherwise (counted under each verdict as served and refused).",
     "Causes marked untested below were not measured for that episode; a cheaper fix may exist there.",
     "A harness verdict says what made it pass, not whether the fix is yours or Claude Code's.",
     "Replays start from the start of the episode, not from the step where it went wrong.",
@@ -57,6 +59,7 @@ class Row:
     limits: str | None = None  # how many counted runs per variant stopped at a limit
     costs: str | None = None  # each variant's cost per run, in dollars and tokens
     models: str | None = None  # which model each variant actually ran as
+    network: str | None = None  # network calls per variant: served from the log, refused as unrecorded
 
 
 @dataclass(frozen=True)
@@ -82,7 +85,7 @@ def collect(runs_dir: Path) -> list[Row]:
             rows.append(Row(verdict.episode_id, verdict.symptom, verdict.cause, verdict.evidence, verdict.pair,
                             verdict.untested, load_restore(folder), numbers_line(verdict),
                             load_instructions_draft(folder) if verdict.cause == Cause.AGENT_SETUP.value else None,
-                            limits_line(verdict), costs_line(verdict), models_line(verdict)))
+                            limits_line(verdict), costs_line(verdict), models_line(verdict), network_line(verdict)))
     return rows
 
 
@@ -157,6 +160,8 @@ def render_report(rows: list[Row], trust: list[str]) -> str:
             lines.append(f"  - {row.numbers}")
         if row.limits:
             lines.append(f"  - {row.limits}")
+        if row.network:
+            lines.append(f"  - {row.network}")
         if row.costs:
             lines.append(f"  - {row.costs}")
         if row.models:

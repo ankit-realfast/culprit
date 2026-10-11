@@ -291,6 +291,16 @@ def bash_hook(event: dict, recordings_file: Path) -> dict | None:
                                    "updatedInput": {**tool_input, "command": replacement}}}
 
 
+def network_counts(run_dir: Path) -> dict[str, int]:
+    """How many network calls a run's hooks served from the log and how many they refused as unrecorded;
+    empty when the run made none."""
+    entries = _read_log(Path(run_dir) / NETWORK_LOG)
+    if not entries:
+        return {}
+    served = sum(1 for entry in entries if entry.get("served"))
+    return {"served": served, "refused": len(entries) - served}
+
+
 def _read_log(log: Path) -> list[dict]:
     if not log.exists():
         return []
