@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
 import shutil
 from dataclasses import asdict, dataclass, field, replace
 from itertools import combinations
@@ -299,15 +301,194 @@ scope. Do not name the fix, the cause, the file to change, or any detail learned
 Return the rewritten request as text."""
 
 
-def agent_instructions_prompt(criterion: Criterion, symptom: Symptom, rejected_evidence: str | None) -> str:
+def agent_instructions_prompt(criterion: Criterion, symptom: Symptom, rejected_evidence: str | None,
+                              repository: str = "") -> str:
     return f"""Write standing instructions for a coding agent, the kind a team keeps in CLAUDE.md, that would have
 prevented this kind of failure: {SYMPTOM_DESCRIPTIONS[symptom]}.
 
 For context only, success on the current task meant: {criterion.success_means}
 
+{repository}
+
 The instructions must be general working rules — how to scope, verify and report — true for any task in
-this repository. They must not mention this task's specifics, files, values or fix. At most 12 lines.{_retry_note(rejected_evidence)}
+this repository. They are appended to the instructions above, so fill their gaps rather than repeat what
+they already say. They must not mention this task's specifics, files, values or fix. At most 12 lines.{_retry_note(rejected_evidence)}
 Return the instructions as text."""
+
+
+# What the agent knew before the episode began: the instructions Claude Code loads at launch, in its documented
+# load order (code.claude.com/docs/en/memory), and the starting layout. CLAUDE.md files in subfolders and
+# rules scoped by `paths:` load on demand during the episode, so they are left out.
+MAX_INSTRUCTIONS_CHARS = 20_000  # every instruction file the drafter sees, together
+MAX_INSTRUCTION_FILE_BYTES = 4 * 1024 * 1024  # Claude Code skips larger files
+MAX_IMPORT_DEPTH = 5  # how deep `@path` imports are followed, as Claude Code does
+MAX_LAYOUT_ENTRIES = 150
+LAYOUT_SKIP = frozenset({".git", ".hg", ".svn", "node_modules", ".venv", "venv", "__pycache__", ".mypy_cache",
+                         ".pytest_cache", ".ruff_cache", ".tox", ".next", ".DS_Store", ".idea", "dist", "build",
+                         "target"})
+INSTRUCTION_FILES = ("CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md")  # the working folder and each ancestor
+FALLBACK_FILE = "AGENTS.md"  # read only where no INSTRUCTION_FILES exist at any level
+RULES_DIR = ".claude/rules"
+PROJECT_SETTINGS_FILES = (".claude/settings.json", ".claude/settings.local.json")
+# The replay runs with the user's own config and the machine's policy, so it loads these too. Tests point
+# every one at tmp paths.
+USER_CLAUDE_DIR = Path.home() / ".claude"
+MANAGED_INSTRUCTIONS = (Path("/Library/Application Support/ClaudeCode/CLAUDE.md"), Path("/etc/claude-code/CLAUDE.md"))
+MANAGED_SETTINGS = (Path("/Library/Application Support/ClaudeCode/managed-settings.json"),
+                    Path("/etc/claude-code/managed-settings.json"))
+ANCESTOR_ROOT = Path("/")  # the farthest folder whose instruction files load
+IMPORT = re.compile(r"(?:^|(?<=\s))@((?:~|\.{1,2})?/?[^\s`]+)")
+FENCE = re.compile(r"^(```|~~~).*?^\1", re.MULTILINE | re.DOTALL)
+PATHS_FRONTMATTER = re.compile(r"\A---\s*\n(?:(?!---).*\n)*?paths\s*:", re.MULTILINE)
+
+
+def _read_text(path: Path) -> str | None:
+    try:
+        if not path.is_file() or path.stat().st_size > MAX_INSTRUCTION_FILE_BYTES:
+            return None
+        return path.read_text()
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _read_settings(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def glob_matches(path: Path, glob: str) -> bool:
+    """Whether a `claudeMdExcludes` glob matches the path: `*` and `?` stay within one folder, `**` crosses."""
+    pattern, i = "", 0
+    while i < len(glob):
+        if glob.startswith("**/", i):
+            pattern, i = pattern + "(?:.*/)?", i + 3
+        elif glob.startswith("**", i):
+            pattern, i = pattern + ".*", i + 2
+        else:
+            pattern += {"*": "[^/]*", "?": "[^/]"}.get(glob[i], re.escape(glob[i]))
+            i += 1
+    return re.fullmatch(pattern, str(path)) is not None
+
+
+def _norm(path: Path) -> Path:
+    return Path(os.path.normpath(path))
+
+
+def existing_instructions(episode: Episode, pristine: Path) -> list[tuple[str, str]]:
+    """(source, text) for every instruction Claude Code loads when a replay of this episode starts, in its load
+    order: managed policy, the user's CLAUDE.md and rules, then CLAUDE.md files from the root down to the
+    working folder, then the project's rules; each followed by the files it imports with `@path`.
+
+    Paths are the original ones; a file under the working folder is read from the restored starting copy,
+    anything else from disk. Files a `claudeMdExcludes` glob matches are skipped, except managed policy.
+    Together at most MAX_INSTRUCTIONS_CHARS: when the cap bites, files nearer the working folder are kept."""
+    cwd = _norm(Path(episode.cwd)) if episode.cwd else None
+    root = _norm(ANCESTOR_ROOT)
+    user_dir = _norm(USER_CLAUDE_DIR)
+
+    def location(path: Path) -> Path:
+        if cwd is not None and path.is_relative_to(cwd):
+            return pristine / path.relative_to(cwd)
+        return path
+
+    settings = [_read_settings(user_dir / "settings.json")]
+    if cwd is not None:
+        settings += [_read_settings(location(cwd / name)) for name in PROJECT_SETTINGS_FILES]
+    excludes = [glob for data in settings for glob in data.get("claudeMdExcludes") or [] if isinstance(glob, str)]
+    seen: set[Path] = set()
+
+    def loaded(path: Path, label: str, depth: int = 0, excludable: bool = True) -> list[tuple[str, str]]:
+        if path in seen or (excludable and any(glob_matches(path, glob) for glob in excludes)):
+            return []
+        if (text := _read_text(location(path))) is None:
+            return []
+        seen.add(path)
+        files = [(label, text)]
+        if depth < MAX_IMPORT_DEPTH:
+            for target in IMPORT.findall(FENCE.sub("", text)):
+                target = target.rstrip(".,;:)")
+                imported = _norm(Path(target).expanduser() if target.startswith("~") else path.parent / target)
+                files += loaded(imported, f"{imported} (imported by {label})", depth + 1, excludable)
+        return files
+
+    def rules(folder: Path, label: str) -> list[tuple[str, str]]:
+        found = sorted(location(folder).rglob("*.md")) if location(folder).is_dir() else []
+        files: list[tuple[str, str]] = []
+        for rule in found:
+            path = folder / rule.relative_to(location(folder))
+            text = _read_text(rule)
+            if text is not None and not PATHS_FRONTMATTER.match(text):  # path-scoped rules load on demand
+                files += loaded(path, f"{label}/{rule.relative_to(location(folder))}")
+        return files
+
+    folders = [] if cwd is None else [cwd, *(f for f in cwd.parents if f.is_relative_to(root))]
+    names = INSTRUCTION_FILES
+    if not any(location(folder / name).is_file() for folder in folders for name in INSTRUCTION_FILES):
+        names = (FALLBACK_FILE,)
+    groups: list[list[tuple[str, str]]] = []  # nearest the working folder first
+    for folder in folders:
+        level = [f for name in names for f in loaded(folder / name, name if folder == cwd else str(folder / name))]
+        if folder == cwd:
+            level += rules(cwd / RULES_DIR, RULES_DIR)
+        groups.append(level)
+    groups.append(loaded(user_dir / "CLAUDE.md", "user: ~/.claude/CLAUDE.md")
+                  + rules(user_dir / "rules", "user: ~/.claude/rules"))
+    managed = [f for path in MANAGED_INSTRUCTIONS
+               for f in loaded(_norm(path), f"managed policy: {path}", excludable=False)]
+    for path in MANAGED_SETTINGS:
+        text = _read_settings(path).get("claudeMd")
+        if isinstance(text, str) and text.strip():
+            managed.append((f"managed settings: {path} claudeMd", text))
+    groups.append(managed)
+    kept: list[list[tuple[str, str]]] = []
+    room = MAX_INSTRUCTIONS_CHARS
+    for group in groups:
+        shown = []
+        for source, text in group:
+            if room <= 0:
+                break
+            shown.append((source, text[:room]))
+            room -= len(text)
+        kept.append(shown)
+    return [f for group in reversed(kept) for f in group]
+
+
+def folder_layout(pristine: Path) -> list[str]:
+    """The starting copy's top two levels, folders marked with '/', at most MAX_LAYOUT_ENTRIES lines."""
+    def entries(folder: Path) -> list[os.DirEntry]:
+        try:
+            return sorted((e for e in os.scandir(folder) if e.name not in LAYOUT_SKIP), key=lambda e: e.name)
+        except OSError:
+            return []
+
+    lines: list[str] = []
+    for top in entries(pristine):
+        if not top.is_dir(follow_symlinks=False):
+            lines.append(top.name)
+            continue
+        lines.append(f"{top.name}/")
+        lines.extend(f"{top.name}/{e.name}{'/' if e.is_dir(follow_symlinks=False) else ''}"
+                     for e in entries(Path(top.path)))
+    if len(lines) > MAX_LAYOUT_ENTRIES:
+        hidden = len(lines) - MAX_LAYOUT_ENTRIES + 1
+        lines = lines[:MAX_LAYOUT_ENTRIES - 1] + [f"… {hidden} more not shown"]
+    return lines
+
+
+def repository_context(episode: Episode, pristine: Path) -> str:
+    """The standing-instructions drafter's view of the repository as the agent found it."""
+    instructions = existing_instructions(episode, pristine)
+    if instructions:
+        shown = "".join(f'<instructions source="{source}">\n{text.rstrip()}\n</instructions>\n'
+                        for source, text in instructions)
+        part = f"The agent already loads these instructions, in this order:\n{shown}"
+    else:
+        part = "The agent loads no CLAUDE.md instructions.\n"
+    layout = "\n".join(folder_layout(pristine)) or "(empty)"
+    return f"{part}\nThe repository's layout when the task began (top two levels):\n<layout>\n{layout}\n</layout>"
 
 
 def harness_context(episode: Episode, pristine: Path) -> str:
@@ -358,8 +539,9 @@ def build_variant(cause: Cause, base: ReplaySettings, *, episode: Episode, follo
         return _drafted(base, "prompt", lambda evidence: task_rewrite_prompt(episode, criterion, evidence),
                         episode, follow_ups, ask)
     if cause is Cause.AGENT_SETUP:
+        repository = repository_context(episode, pristine)
         return _drafted(base, "append_system_prompt",
-                        lambda evidence: agent_instructions_prompt(criterion, symptom, evidence),
+                        lambda evidence: agent_instructions_prompt(criterion, symptom, evidence, repository),
                         episode, follow_ups, ask)
     if cause is Cause.ENVIRONMENT:
         return VariantBuild(replace(base, setup_script=env_script), None)

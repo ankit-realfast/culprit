@@ -38,8 +38,10 @@ def no_real_claude(tmp_path, monkeypatch):
 def isolated_from_real_data(tmp_path, monkeypatch):
     """No test may read the real session logs or file history or write the repo's runs/: the store is
     tmp_path/runs (CULPRIT_RUNS), the logs tmp_path/projects (CULPRIT_PROJECTS, where write_session writes),
-    and Claude Code's file history tmp_path/file-history."""
+    Claude Code's file history tmp_path/file-history,
+    and the CLAUDE.md files outside a project only those under tmp_path."""
     import culprit.cli as cli
+    import culprit.diagnose as diagnose
     import culprit.logs as logs
     import culprit.replay as replay
 
@@ -50,6 +52,11 @@ def isolated_from_real_data(tmp_path, monkeypatch):
     monkeypatch.setenv("CULPRIT_PROJECTS", str(tmp_path / "projects"))
     monkeypatch.setattr(logs, "DEFAULT_PROJECTS", tmp_path / "no-real-projects")
     monkeypatch.setattr(replay, "DEFAULT_FILE_HISTORY", tmp_path / "file-history")
+    # the standing-instructions drafter reads CLAUDE.md files: never the real user's, policy's or ancestors'
+    monkeypatch.setattr(diagnose, "USER_CLAUDE_DIR", tmp_path / "no-real-home" / ".claude")
+    monkeypatch.setattr(diagnose, "MANAGED_INSTRUCTIONS", (tmp_path / "no-real-policy" / "CLAUDE.md",))
+    monkeypatch.setattr(diagnose, "MANAGED_SETTINGS", (tmp_path / "no-real-policy" / "managed-settings.json",))
+    monkeypatch.setattr(diagnose, "ANCESTOR_ROOT", tmp_path)
     # the CLI drafts a criterion on confirm; tests that care about the draft install their own FakeAsk
     monkeypatch.setattr(cli, "ask_claude", lambda prompt, schema: {"success_means": "works", "checks": [],
                                                                    "must_not": []})

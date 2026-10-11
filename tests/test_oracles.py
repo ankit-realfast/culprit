@@ -1,12 +1,13 @@
+import json
 from dataclasses import replace
 
 from culprit.diagnose import MAX_CONTEXT_CHARS, ORACLE_MODEL, VariantBuild, build_variant, combine, harness_context
-from culprit.logs import episodes_from_session
+from culprit.logs import Episode, episodes_from_session
 from culprit.model import Criterion
 from culprit.replay import ReplaySettings, settings_from_json, settings_to_json
 from culprit.store import Cause, Symptom
 from fakes import FakeAsk
-from records import human, tool_use
+from records import assistant, human, tool_use
 
 CRITERION = Criterion("empty passwords are rejected with a message", (), ("weaken validation",), approved=True)
 BASE = ReplaySettings(prompt="fix login", model="claude-opus-5", permission_mode="auto", max_budget_usd=2.0)
@@ -113,3 +114,173 @@ def test_combine_takes_each_causes_fields_from_its_variant():
     assert (combined.prompt, combined.model, combined.tools, combined.context_preamble, combined.max_budget_usd) == \
         ("clear", ORACLE_MODEL, "default", "FILES", 4.0)
     assert combined.append_system_prompt is None
+
+
+def pristine_repo(tmp_path):
+    """A restored starting copy with the project's own instructions, beside a live folder edited since."""
+    pristine = tmp_path / "pristine"
+    for path, text in {"CLAUDE.md": "Run uv run pytest before reporting done.\n",
+                       ".claude/CLAUDE.md": "Prefer small commits.\n",
+                       "src/app.py": "", "src/deep/inner.py": "", "docs/guide.md": "", "README.md": "",
+                       ".git/HEAD": "ref: refs/heads/main\n", "node_modules/left-pad/index.js": ""}.items():
+        (pristine / path).parent.mkdir(parents=True, exist_ok=True)
+        (pristine / path).write_text(text)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "CLAUDE.md").write_text("A rule added after the episode.\n")
+    return pristine, repo
+
+
+def agent_setup_prompt(write_session, tmp_path, pristine, repo, *records):
+    ask = FakeAsk({"text": "Verify before reporting."}, {"leaks": False, "evidence": "none"})
+    build_variant(Cause.AGENT_SETUP, BASE, episode=episode_with(write_session, repo, *records), follow_ups=[],
+                  criterion=CRITERION, symptom=Symptom.WRONG_RESULT, pristine=pristine, env_script=None, ask=ask)
+    return ask.calls[0][0]
+
+
+def test_the_agent_setup_drafter_sees_the_instructions_and_layout_the_agent_started_with(
+        write_session, tmp_path, monkeypatch):
+    import culprit.diagnose as diagnose
+    pristine, repo = pristine_repo(tmp_path)
+    (tmp_path / "CLAUDE.md").write_text("Ancestor: never touch vendor code.\n")
+    user_file = tmp_path / "home" / ".claude" / "CLAUDE.md"
+    user_file.parent.mkdir(parents=True)
+    user_file.write_text("User: answer in plain English.\n")
+    monkeypatch.setattr(diagnose, "USER_CLAUDE_DIR", user_file.parent)
+    prompt = agent_setup_prompt(write_session, tmp_path, pristine, repo,
+                                assistant(text="I found the bug in DURING_EPISODE_DETAIL"),
+                                tool_use("Read", file_path="src/app.py"))
+    for text in ("Run uv run pytest before reporting done.", "Prefer small commits.",
+                 "Ancestor: never touch vendor code.", "User: answer in plain English."):
+        assert text in prompt
+    assert prompt.index("User: answer") < prompt.index("Ancestor:") < prompt.index("Run uv run pytest")
+    for entry in ("src/", "src/app.py", "src/deep/", "docs/guide.md", "README.md"):
+        assert entry in prompt
+    assert "inner.py" not in prompt  # third level
+    assert ".git" not in prompt and "left-pad" not in prompt
+    assert "added after the episode" not in prompt  # the project's own files come from the starting copy
+    assert "DURING_EPISODE_DETAIL" not in prompt
+    assert "rather than repeat" in prompt
+    assert "12 lines" in prompt
+
+
+def test_the_agent_setup_drafter_context_stays_within_its_caps(write_session, tmp_path):
+    from culprit.diagnose import MAX_INSTRUCTIONS_CHARS, MAX_LAYOUT_ENTRIES
+    pristine, repo = pristine_repo(tmp_path)
+    (pristine / "CLAUDE.md").write_text("z" * (MAX_INSTRUCTIONS_CHARS + 500))
+    for i in range(MAX_LAYOUT_ENTRIES + 50):
+        (pristine / f"f{i:04}.txt").write_text("")
+    prompt = agent_setup_prompt(write_session, tmp_path, pristine, repo)
+    assert MAX_INSTRUCTIONS_CHARS - 100 < prompt.count("z") <= MAX_INSTRUCTIONS_CHARS
+    listed = [line for line in prompt.splitlines() if line.startswith("f0") and line.endswith(".txt")]
+    assert len(listed) < MAX_LAYOUT_ENTRIES
+    assert "more not shown" in prompt
+
+
+def test_the_agent_setup_drafter_says_when_no_instructions_exist(write_session, tmp_path):
+    pristine = tmp_path / "pristine"
+    (pristine / "main.py").parent.mkdir(parents=True)
+    (pristine / "main.py").write_text("")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    prompt = agent_setup_prompt(write_session, tmp_path, pristine, repo)
+    assert "no CLAUDE.md" in prompt and "main.py" in prompt
+
+
+def test_instructions_come_from_every_ancestor_up_to_the_root_with_their_imports(tmp_path, monkeypatch):
+    import culprit.diagnose as diagnose
+    from culprit.diagnose import existing_instructions
+    root = tmp_path / "root"
+    cwd = root / "a" / "b" / "c" / "repo"
+    pristine = tmp_path / "pristine"
+    files = {
+        tmp_path / "CLAUDE.md": "above the root",
+        root / "CLAUDE.md": "root rule @shared/rules.md",
+        root / "shared" / "rules.md": "shared rule @../CLAUDE.md",  # imports its importer back: a cycle
+        root / "a" / ".claude" / "CLAUDE.md": "a dotclaude rule",
+        root / "a" / "b" / "CLAUDE.local.md": "b local rule",
+        cwd / "CLAUDE.md": "live project file, edited after the episode",
+        pristine / "CLAUDE.md": "project rule @docs/style.md\n```\n@ignored.md\n```",
+        pristine / "docs" / "style.md": "style rule @../../outside.md",
+        cwd.parent / "outside.md": "outside rule",  # imported from inside the project, read from disk
+        pristine / "ignored.md": "must not load",
+        tmp_path / "policy" / "CLAUDE.md": "policy rule",
+    }
+    for path, text in files.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    monkeypatch.setattr(diagnose, "ANCESTOR_ROOT", root)
+    monkeypatch.setattr(diagnose, "MANAGED_INSTRUCTIONS", (tmp_path / "policy" / "CLAUDE.md",))
+    episode = Episode("s", "p", None, tmp_path / "none.jsonl", "fix", "", str(cwd), None, None, None, ())
+    texts = [text for _, text in existing_instructions(episode, pristine)]
+    assert texts == ["policy rule", "root rule @shared/rules.md", "shared rule @../CLAUDE.md", "a dotclaude rule",
+                     "b local rule", "project rule @docs/style.md\n```\n@ignored.md\n```",
+                     "style rule @../../outside.md", "outside rule"]
+
+
+def test_the_instruction_cap_keeps_the_files_nearest_the_working_directory(tmp_path):
+    from culprit.diagnose import MAX_INSTRUCTIONS_CHARS, existing_instructions
+    cwd = tmp_path / "repo"
+    pristine = tmp_path / "pristine"
+    pristine.mkdir()
+    (pristine / "CLAUDE.md").write_text("project rule")
+    (tmp_path / "CLAUDE.md").write_text("a" * (MAX_INSTRUCTIONS_CHARS * 2))
+    episode = Episode("s", "p", None, tmp_path / "none.jsonl", "fix", "", str(cwd), None, None, None, ())
+    shown = existing_instructions(episode, pristine)
+    assert shown[-1] == ("CLAUDE.md", "project rule")
+    assert sum(len(text) for _, text in shown) == MAX_INSTRUCTIONS_CHARS
+
+
+def write_files(files):
+    for path, text in files.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+
+def instructions_for(tmp_path, cwd, pristine):
+    from culprit.diagnose import existing_instructions
+    episode = Episode("s", "p", None, tmp_path / "none.jsonl", "fix", "", str(cwd), None, None, None, ())
+    return existing_instructions(episode, pristine)
+
+
+def test_launch_time_rules_and_policy_settings_load_but_on_demand_files_do_not(tmp_path, monkeypatch):
+    import culprit.diagnose as diagnose
+    from culprit.diagnose import MAX_INSTRUCTION_FILE_BYTES
+    home, cwd, pristine = tmp_path / "home" / ".claude", tmp_path / "repo", tmp_path / "pristine"
+    write_files({
+        home / "CLAUDE.md": "user rule",
+        home / "rules" / "general.md": "user general rule",
+        home / "rules" / "scoped.md": "---\npaths:\n  - src/**\n---\nuser scoped rule",
+        pristine / "CLAUDE.md": "project rule",
+        pristine / ".claude" / "rules" / "testing.md": "---\ndescription: x\n---\nproject testing rule\npaths: y",
+        pristine / ".claude" / "rules" / "deep" / "api.md": "---\npaths: [\"api/**\"]\n---\nproject api rule",
+        pristine / "sub" / "CLAUDE.md": "subfolder rule",  # loads on demand, during the episode
+        pristine / "AGENTS.md": "agents rule",  # a CLAUDE.md exists, so AGENTS.md is not read
+        tmp_path / "policy" / "managed-settings.json": json.dumps({"claudeMd": "policy setting rule"}),
+    })
+    (tmp_path / "CLAUDE.local.md").write_text("x" * (MAX_INSTRUCTION_FILE_BYTES + 1))  # too big: skipped
+    monkeypatch.setattr(diagnose, "USER_CLAUDE_DIR", home)
+    monkeypatch.setattr(diagnose, "MANAGED_SETTINGS", (tmp_path / "policy" / "managed-settings.json",))
+    texts = [text for _, text in instructions_for(tmp_path, cwd, pristine)]
+    assert texts == ["policy setting rule", "user rule", "user general rule", "project rule",
+                     "---\ndescription: x\n---\nproject testing rule\npaths: y"]
+
+
+def test_claude_md_excludes_globs_skip_matching_files(tmp_path, monkeypatch):
+    import culprit.diagnose as diagnose
+    cwd, pristine = tmp_path / "team" / "repo", tmp_path / "pristine"
+    write_files({tmp_path / "team" / "CLAUDE.md": "team rule", pristine / "CLAUDE.md": "project rule",
+                 pristine / ".claude" / "settings.local.json": json.dumps({"claudeMdExcludes": [f"{tmp_path}/team/*"]})})
+    assert [text for _, text in instructions_for(tmp_path, cwd, pristine)] == ["project rule"]
+    write_files({tmp_path / "home" / ".claude" / "settings.json": json.dumps({"claudeMdExcludes": ["**/repo/CLAUDE.md"]})})
+    monkeypatch.setattr(diagnose, "USER_CLAUDE_DIR", tmp_path / "home" / ".claude")
+    assert [text for _, text in instructions_for(tmp_path, cwd, pristine)] == []
+
+
+def test_agents_md_is_read_only_where_no_claude_md_exists(tmp_path):
+    cwd, pristine = tmp_path / "team" / "repo", tmp_path / "pristine"
+    write_files({tmp_path / "team" / "AGENTS.md": "team agents rule", pristine / "AGENTS.md": "project agents rule"})
+    assert [text for _, text in instructions_for(tmp_path, cwd, pristine)] == ["team agents rule",
+                                                                               "project agents rule"]
+    (tmp_path / "CLAUDE.md").write_text("a claude rule")
+    assert [text for _, text in instructions_for(tmp_path, cwd, pristine)] == ["a claude rule"]

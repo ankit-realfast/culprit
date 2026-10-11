@@ -218,9 +218,29 @@ hook the project's own settings define, because those hooks run in every replay.
 |---|---|---|
 | Task | The prompt, rewritten from the original prompt and the approved criterion to state scope and success criterion (the follow-ups reach it only through the criterion, which limits leaks; the leak check still compares the draft with them) | The leak check rejects it twice |
 | Environment | A fix script the human supplies (`culprit env-fix`) runs in the clone before the replay | No script supplied (the common case in v1) |
-| Agent setup | An appended system prompt (`--append-system-prompt`) drafted from the criterion: standing instructions, no task-specific facts | The leak check rejects it twice |
+| Agent setup | An appended system prompt (`--append-system-prompt`) drafted from the criterion, the instructions the agent already loads and the starting folder layout: standing instructions that fill gaps in those, no task-specific facts, at most 12 lines | The leak check rejects it twice |
 | Harness | The default tool set with every non-safety restriction lifted, the files the episode read or edited preloaded into the prompt as context, and double the spend cap | Never |
 | Model | `--model claude-fable-5-1` | The episode already ran on Fable |
+
+**What a drafter may see.** Anything the agent could have known before the episode started; nothing from
+during or after it (the leak check against the prompt and follow-ups is unchanged).
+
+- *Agent setup* sees every instruction Claude Code loads when the replay launches, mirroring its documented
+  launch-time load order (code.claude.com/docs/en/memory): managed policy (`/Library/Application
+  Support/ClaudeCode/CLAUDE.md`, `/etc/claude-code/CLAUDE.md`, and a `claudeMd` string in
+  `managed-settings.json`); the user's `~/.claude/CLAUDE.md` and `~/.claude/rules/**/*.md` (replays run with
+  the user's config); then `CLAUDE.md`, `.claude/CLAUDE.md` and `CLAUDE.local.md` in every folder from `/`
+  down to the working folder, then the project's `.claude/rules/**/*.md`. `AGENTS.md` is read in their place
+  only when none of those three exist at any level. `@path` imports are followed (5 deep, no cycles). Left
+  out, as Claude Code leaves them out at launch: `CLAUDE.md` files in subfolders and rules with a `paths:`
+  frontmatter (both load on demand), files over 4 MiB, and files a `claudeMdExcludes` glob in the user or
+  project settings matches (never managed policy). Files under the working folder are read from the
+  restored starting copy, so edits made during or after the episode never reach the drafter; folders above
+  it are read from disk as they are now, as the replay itself reads them. Together at most 20,000
+  characters, keeping the files nearest the working folder when trimming. It also sees the starting copy's
+  top two folder levels (skipping `.git`, `node_modules`, virtualenvs, caches and build output), at most
+  150 lines. The draft is appended to those instructions, so it is told to fill their gaps rather than repeat
+  them.
 
 ### What "passes clearly" means
 
