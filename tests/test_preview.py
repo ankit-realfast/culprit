@@ -71,3 +71,32 @@ def test_on_disk_a_changed_criterion_reuses_nothing(tmp_path):
     (baseline / "outcome.json").write_text(json.dumps({"variant": "baseline", "passes": 0, "runs": 5, "cost_usd": 1}))
     plan = diagnose_cost_for(tmp_path, CRITERION, 1.0, model=None, env_fix=True, n=5, spent_usd=0.0, cap_usd=1e4)
     assert plan.replays == 17 * 10
+
+
+def test_the_preview_counts_every_call_a_drafted_oracle_can_make(write_session, tmp_path):
+    """The preview's drafting calls per drafted oracle match what building one costs at worst (every draft
+    leaks), whatever context the drafter is shown."""
+    from culprit.diagnose import CALLS_PER_DRAFT_ATTEMPT, DRAFTED_CAUSES, MAX_DRAFT_ATTEMPTS, build_variant
+    from culprit.logs import episodes_from_session
+    from culprit.model import Criterion
+    from culprit.replay import ReplaySettings
+    from culprit.store import Symptom
+    from records import assistant, human
+
+    (pristine := tmp_path / "pristine").mkdir()
+    (pristine / "CLAUDE.md").write_text("Run the tests.\n")
+    episode = list(episodes_from_session(write_session([human("start", "p1", cwd=str(tmp_path / "repo")),
+                                                        assistant(text="ok"),
+                                                        human("now finish", "p2", cwd=str(tmp_path / "repo"))])))[1]
+    for cause in DRAFTED_CAUSES:
+        calls = []
+
+        def ask(prompt, schema):
+            calls.append(prompt)
+            return {"leaks": True, "evidence": "x"} if "leaks" in schema.get("properties", {}) else {"text": "t"}
+
+        build_variant(cause, ReplaySettings(prompt="now finish", model="m", permission_mode="auto",
+                                            max_budget_usd=1.0),
+                      episode=episode, follow_ups=[], criterion=Criterion("done", (), (), approved=True),
+                      symptom=Symptom.STOPPED_SHORT, pristine=pristine, env_script=None, ask=ask)
+        assert len(calls) == MAX_DRAFT_ATTEMPTS * CALLS_PER_DRAFT_ATTEMPT
