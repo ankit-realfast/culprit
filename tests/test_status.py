@@ -59,7 +59,7 @@ def test_each_stage_names_the_first_missing_step(tmp_path):
     assert f"culprit confirm {short_id(ID)} <symptom>" in hints[0]
     assert f"culprit confirm {short_id(ID)} wrong-result" in hints[1] and "draft" in hints[1]
     assert f"culprit status {short_id(ID)}" in hints[2] and "approve" in hints[2]
-    assert f"culprit confirm {short_id(ID)} wrong-result" in hints[2]
+    assert f"culprit confirm {short_id(ID)} approve" in hints[2]
     for hint in hints[3:6]:  # diagnose restores and runs the baseline itself
         assert hint == f"run `culprit diagnose {short_id(ID)}`"
     assert "culprit report" in hints[6]

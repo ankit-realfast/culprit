@@ -123,6 +123,26 @@ def display_id(runs_dir: Path, episode_id: str) -> str:
         return episode_id
 
 
+def episode_ref(runs_dir: Path, typed: str, episode_id: str) -> str:
+    """How suggested commands name the episode: what the person typed (a row, a short id, a prefix) while it still
+    leads to this episode and is no longer than the short id, else the short id."""
+    shown = display_id(runs_dir, episode_id)
+    typed = typed.removeprefix("#")
+    try:
+        same = resolve_episode_id(runs_dir, typed) == episode_id
+    except (UnknownEpisode, NotReady):
+        same = False
+    return typed if same and len(typed) <= len(shown) else shown
+
+
+def prompt_excerpt(runs_dir: Path, episode_id: str) -> str | None:
+    """The prompt's excerpt as triage stored it in the queue, or None."""
+    for row in candidate_rows(runs_dir):
+        if row["summary"]["episode_id"] == episode_id:
+            return row["summary"].get("prompt_excerpt")
+    return None
+
+
 def candidate_rows(runs_dir: Path) -> list[dict]:
     """The stored triage queue in row order (the latest ranking first); empty before the first triage."""
     return read_json(runs_dir / CANDIDATES_FILE, [])

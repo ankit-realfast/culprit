@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shutil
+import textwrap
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,7 +12,7 @@ from culprit.diagnose import (BASELINE, VariantOutcome, Verdict, load_instructio
                               load_verdict, costs_line, limits_line, models_line, network_line, numbers_line, pristine_dir, stored_spend)
 from culprit.model import Criterion, criterion_step, load_criterion
 from culprit.store import (SELFTEST_DIR, Cause, Symptom, confirm_step, display_id, episode_dir, known_episode_ids,
-                           load_restore, queued_ids, read_symptom)
+                           load_restore, prompt_excerpt, queued_ids, read_symptom)
 
 
 # --- report: The report: what to change, ranked by how many failed episodes each change would have fixed. ---
@@ -241,3 +243,92 @@ def next_step(runs_dir: Path, episode_id: str) -> str:
 def queue_status(runs_dir: Path) -> list[EpisodeStatus]:
     """Every episode in the triage queue (queue order), then every other episode with a folder."""
     return [episode_status(runs_dir, episode_id) for episode_id in known_episode_ids(runs_dir)]
+
+
+# --- text: How every command lays out what it prints for a person. ---
+# One block in reading order: the episode named once at the top, content, file paths last and shortened, then
+# one numbered Next section. Headings in plain words, lists numbered, long text wrapped and indented, ✓ for a
+# step done; no colour.
+
+TEXT_WIDTH = 100  # when the terminal's width is unknown (a pipe, a file)
+MIN_TEXT_WIDTH = 40
+DONE = "✓"
+NO_CHECKS = "none — add test commands (e.g. npm test) so replays are judged by tests"
+
+
+@dataclass(frozen=True)
+class Step:
+    """One numbered step of a Next section: what to do, and the command that does it (None when there is none)."""
+    words: str
+    command: str | None = None
+
+
+def text_width() -> int:
+    return max(shutil.get_terminal_size((TEXT_WIDTH, 24)).columns, MIN_TEXT_WIDTH)
+
+
+def wrap(text: str, indent: str = "", first: str | None = None) -> list[str]:
+    """text wrapped to the terminal; every line starts with indent, the first with first when given (a number)."""
+    first = indent if first is None else first
+    rest = indent if first == indent else " " * len(first)
+    return textwrap.wrap(text, text_width(), initial_indent=first, subsequent_indent=rest, break_long_words=False,
+                         break_on_hyphens=False) or [first.rstrip()]
+
+
+def numbered(items, indent: str = "    ") -> list[str]:
+    return [line for i, item in enumerate(items, 1) for line in wrap(item, first=f"{indent}{i}. ")]
+
+
+def block(heading: str, lines: list[str]) -> list[str]:
+    """A section: a blank line, the heading, its indented lines."""
+    return ["", heading, *lines]
+
+
+def next_section(steps: list[Step]) -> list[str]:
+    """The closing Next section; a command never breaks across lines, it moves to its own line instead."""
+    lines = ["", "Next"]
+    for i, step in enumerate(steps, 1):
+        number = f"  {i}. "
+        one_line = f"{number}{step.words}:  {step.command}" if step.command else None
+        if one_line and len(one_line) <= text_width():
+            lines.append(one_line)
+        elif step.command:
+            lines += wrap(f"{step.words}:", first=number) + [" " * len(number) + step.command]
+        else:
+            lines += wrap(step.words, first=number)
+    return lines
+
+
+def episode_header(runs_dir: Path, episode_id: str, ref: str) -> list[str]:
+    """`Episode 4 · 50c0a213:b0567c84` and the prompt's excerpt: the one place a command names the episode."""
+    shown = display_id(runs_dir, episode_id)
+    lines = [f"Episode {ref} · {shown}" if ref != shown else f"Episode {shown}"]
+    if excerpt := prompt_excerpt(runs_dir, episode_id):
+        lines += wrap(f'"{excerpt}"', "  ")
+    return lines
+
+
+def shown_runs(runs_dir: Path) -> Path:
+    """runs/ as the person would type it: relative to the current folder when it is inside it."""
+    try:
+        return runs_dir.resolve().relative_to(Path.cwd().resolve()) if runs_dir.is_absolute() else runs_dir
+    except ValueError:
+        return runs_dir
+
+
+def short_path(runs_dir: Path, episode_id: str, name: str = "") -> str:
+    """runs/<first 8 of the session>…<first 8 of the prompt>/name: a file in the episode's folder, short enough to
+    read (the folder itself is the full id); folders already that short are shown as they are."""
+    session, _, prompt = episode_id.partition(":")
+    folder = episode_dir(runs_dir, episode_id).name
+    if len(session) > 8 or len(prompt) > 8:
+        folder = f"{session[:8]}…{prompt[:8]}"
+    path = shown_runs(runs_dir) / folder
+    return str(path / name if name else path)
+
+
+def criterion_block(criterion: Criterion) -> list[str]:
+    heading = "Success criterion — approved" if criterion.approved else "Draft success criterion — not approved yet"
+    return [heading, "  Success means", *wrap(criterion.success_means, "    "),
+            "  Must not", *(numbered(criterion.must_not) or ["    none"]),
+            "  Checks", *(numbered(criterion.checks) or wrap(NO_CHECKS, "    "))]

@@ -27,11 +27,12 @@ from culprit.model import (CRITERION_FILE, LIMIT_WORDS, ClaudeCallFailed, Criter
                            criterion_step, draft_criterion, load_criterion, resolved_model, save_criterion)
 from culprit.replay import (REPLAY_BUDGET_FLOOR_USD, OriginalModified, SetupScriptFailed, apply_episode_originals,
                             baseline_settings, check_restore, episode_originals, restore, restore_from_git)
-from culprit.report import (REPORT_FILE, STAGES, EpisodeStatus, collect, episode_status, next_step, queue_status,
-                            render_report)
+from culprit.report import (DONE, REPORT_FILE, STAGES, EpisodeStatus, Step, block, collect, criterion_block,
+                            episode_header, episode_status, next_section, next_step, queue_status, render_report,
+                            short_path, wrap)
 from culprit.store import (ORACLE_ORDER, RESTORE_FILE, Cause, NotReady, Symptom, UnknownEpisode, confirm_step,
-                           display_id, episode_dir, queued_ids, read_symptom, record_symptom, require_queue,
-                           resolve_episode_id, save_candidates, write_json)
+                           display_id, episode_dir, episode_ref, queued_ids, read_symptom, record_symptom,
+                           require_queue, resolve_episode_id, save_candidates, write_json)
 from culprit.trust import (MIN_KAPPA, MIN_LABELS, UnknownRun, agreement, control_min_passes, is_control,
                            next_unlabelled, record_label, run_id, run_selftest, run_summary, selftest_accuracy,
                            selftest_cost)
@@ -169,22 +170,37 @@ def main(argv: list[str] | None = None) -> int:
         if getattr(args, "needs_store", False):
             require_store(args.runs)
         if getattr(args, "episode_id", None):
-            args.episode_id = resolve_episode_id(args.runs, args.episode_id)
+            typed = args.episode_id
+            args.episode_id = resolve_episode_id(args.runs, typed)
+            args.ref = episode_ref(args.runs, typed, args.episode_id)  # how this output names it in commands
         return args.handler(args)
     except NotReady as missing:
-        print(f"culprit: {missing}", file=sys.stderr)
+        err(f"culprit: {missing}")
         return EXIT_NOT_READY
     except BudgetExhausted as spent:
-        print(f"culprit: {spent}", file=sys.stderr)
+        err(f"culprit: {spent}")
         return EXIT_BUDGET
     except KeyboardInterrupt:
         # every replay is saved as soon as it is judged and reused on the next run, so nothing paid for is lost
-        print("\nculprit: stopped. finished runs are kept; rerun the same command to resume", file=sys.stderr)
+        err("\nculprit: stopped. finished runs are kept; rerun the same command to resume")
         return EXIT_INTERRUPTED
     except (UnknownEpisode, EpisodeNotFound, FileNotFoundError, ClaudeCallFailed,
             SetupScriptFailed, UnknownRun, OriginalModified, NotReplayable) as refusal:
-        print(f"culprit: {refusal}", file=sys.stderr)
+        err(f"culprit: {refusal}")
         return EXIT_REFUSED
+
+
+def say(lines: Sequence[str]) -> None:
+    """Lines for the person, on stdout in reading order."""
+    for line in lines:
+        print(line)
+
+
+def err(line: str) -> None:
+    """A progress line, warning or refusal on stderr; stdout is flushed first, so where both streams reach one
+    terminal nothing shows out of order."""
+    sys.stdout.flush()
+    print(line, file=sys.stderr, flush=True)
 
 
 def default_runs() -> Path:
@@ -215,17 +231,21 @@ EXAMPLE_RUN = """example run:
   culprit diagnose                         replay every confirmed episode, find the layer to change
   culprit report                           rank the changes across episodes
   culprit status                           where every episode stands, and what to run next
-one episode at a time (no terminal needed):
+one episode at a time:
+  culprit confirm 1 wrong-result          record it, draft what success means, ask to approve it
+  culprit diagnose 1                      restore, replay, find the layer to change
+without a terminal:
   culprit confirm 1 wrong-result          record it and draft what success means
   culprit status 1                        read the draft (edit runs/<episode>/criterion.json if needed)
-  culprit confirm 1 wrong-result          approve it
+  culprit confirm 1 approve               approve it
   culprit diagnose 1                      restore, replay, find the layer to change
 """
 EXAMPLES = {
     "triage": "  culprit triage --top 40\n  CULPRIT_PROJECTS=~/other/projects CULPRIT_RUNS=~/work/runs culprit triage\n",
     "confirm": ("  culprit confirm                         each queued episode in turn: symptom, criterion, restore\n"
-                "  culprit confirm 1 wrong-result         record it and draft what success means\n"
-                "  culprit confirm 1 wrong-result         again, once the draft reads right: approve it\n"
+                "  culprit confirm 1 wrong-result         record it, draft what success means, ask to approve it\n"
+                "  culprit confirm 1                      show the draft again and ask (once a symptom is recorded)\n"
+                "  culprit confirm 1 approve              approve the draft without a terminal\n"
                 "  culprit confirm 1a2b3c4d:5e6f7a8b no-failure\n"),
     "status": "  culprit status\n  culprit status 1\n  culprit status --json   one JSON document, for scripts\n",
     "env-fix": "  culprit env-fix 1 fix-env.sh         run before Claude starts in the environment oracle\n",
@@ -254,7 +274,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     confirm = add("confirm", "say what went wrong and approve what success means (no id: walk the queue)")
     confirm.add_argument("episode_id", nargs="?")
-    confirm.add_argument("symptom", nargs="?", choices=[s.value for s in Symptom])
+    confirm.add_argument("symptom", nargs="?", choices=[*(s.value for s in Symptom), APPROVE], metavar="symptom",
+                         help=f"what went wrong: {', '.join(s.value for s in Symptom)}; or {APPROVE}, which approves "
+                              f"the drafted success criterion")
     confirm.set_defaults(handler=confirm_command, needs_store=True)
 
     status = add("status", "where each episode stands and the command that moves it on")
@@ -306,7 +328,7 @@ def require_terminal(why: str, otherwise: str = "") -> None:
 def show_plan(plan: CostPlan) -> None:
     """The most a command can run and spend, on stderr before it starts: information, not a question."""
     for line in plan.lines():
-        print(line, file=sys.stderr)
+        err(line)
 
 
 def triage_command(args: argparse.Namespace) -> int:
@@ -356,33 +378,99 @@ def _evidence(signals: FailureSignals) -> str:
     return ", ".join(parts)
 
 
+APPROVE = "approve"  # in the symptom's place: approve the drafted criterion, without a terminal
+APPROVE_OPTIONS = ("approve", "edit first", "skip")
+
+
+def symptoms_needed(ref: str) -> str:
+    return (f"say what went wrong — `culprit confirm {ref} <symptom>`, where <symptom> is one of "
+            f"{', '.join(s.value for s in Symptom)}")
+
+
 def confirm_command(args: argparse.Namespace) -> int:
     if args.episode_id is None:
         return confirm_queue(args)
-    if args.symptom is None:
-        raise NotReady(f"say what went wrong — `culprit confirm {display_id(args.runs, args.episode_id)} <symptom>`, "
-                       f"where <symptom> is one of {', '.join(s.value for s in Symptom)}")
+    if args.symptom == APPROVE:
+        return confirm_approve(args)
     return confirm_one(args)
 
 
 def confirm_one(args: argparse.Namespace) -> int:
-    """Record the symptom, then move the criterion on: draft it when there is none, approve the draft when the
-    same symptom is confirmed again (the person has seen it by then), otherwise show it again."""
-    shown = display_id(args.runs, args.episode_id)
+    """Record the symptom (asked in a terminal when none is given or recorded), draft the criterion when there is
+    none, show it, and in a terminal ask whether to approve it. Confirming a symptom never approves anything."""
     before = read_symptom(args.runs, args.episode_id)
-    path = record_symptom(args.runs, args.episode_id, Symptom(args.symptom))
-    print(f"recorded {args.symptom} for {shown} in {path}")
+    if args.symptom is None and before is None and not stdin_is_tty():
+        raise NotReady(symptoms_needed(args.ref))
+    say(episode_header(args.runs, args.episode_id, args.ref))
+    if args.symptom is None and before is None:
+        answer = choose("\nWhat went wrong?", [*(s.value for s in Symptom), "skip"])
+        if answer == "skip":
+            say(next_section([Step("Say what went wrong", f"culprit confirm {args.ref} <symptom>")]))
+            return 0
+    else:
+        answer = args.symptom or before.value
+    say(["", symptom_line(args.runs, args.episode_id, before, Symptom(answer))])
+    answer = settle_criterion(args.runs, args.projects, args.episode_id, ask=stdin_is_tty(),
+                              options=APPROVE_OPTIONS)
+    say(next_section(criterion_next(args.runs, args.episode_id, args.ref, answer)))
+    return 0
+
+
+def symptom_line(runs_dir: Path, episode_id: str, before: Symptom | None, symptom: Symptom) -> str:
+    """Record the symptom unless it is already the one recorded; say which it was."""
+    if before == symptom:
+        return f"{DONE} What went wrong: {symptom.value} (recorded earlier)"
+    record_symptom(runs_dir, episode_id, symptom)
+    if before is None:
+        return f"{DONE} Recorded what went wrong: {symptom.value}"
+    return f"{DONE} Changed what went wrong: {before.value} → {symptom.value}"
+
+
+def settle_criterion(runs_dir: Path, projects_dir: Path, episode_id: str, *, ask: bool,
+                     options: Sequence[str]) -> str:
+    """Draft the criterion when there is none (a failed draft raises), show a draft and, when asking, let the
+    person approve it. Returns "approved", or the answer ("edit first", "skip", "quit"), or "shown" when not asked."""
+    criterion = load_criterion(runs_dir, episode_id)
+    if criterion is not None and criterion.approved:
+        say(["", f"{DONE} Success criterion already approved"])
+        return "approved"
+    if criterion is None:
+        err("drafting what success means (one model call)…")
+        criterion = draft_criterion_for(runs_dir, projects_dir, episode_id)
+    say(["", *criterion_block(criterion)])
+    if not ask:
+        return "shown"
+    answer = choose("\nApprove it?", options)  # the blank line goes with the question, which input() prints
+    if answer == "approve":
+        approve_criterion(runs_dir, episode_id)
+        say(["", f"{DONE} Approved the success criterion"])
+        return "approved"
+    return answer
+
+
+def criterion_next(runs_dir: Path, episode_id: str, ref: str, answer: str) -> list[Step]:
+    path = short_path(runs_dir, episode_id, CRITERION_FILE)
+    if answer == "approved":
+        return [Step("Diagnose it", f"culprit diagnose {ref}")]
+    if answer == "edit first":
+        return [Step(f"Edit {path}"), Step("Then read it again and approve it", f"culprit confirm {ref}")]
+    return [Step(f"Read the draft. To change it, edit {path}"), Step("Approve it", f"culprit confirm {ref} {APPROVE}")]
+
+
+def confirm_approve(args: argparse.Namespace) -> int:
+    """`confirm <episode> approve`: approve the drafted criterion — the one way to approve without a terminal."""
+    if read_symptom(args.runs, args.episode_id) is None:
+        raise NotReady(symptoms_needed(args.ref))
     criterion = load_criterion(args.runs, args.episode_id)
     if criterion is None:
-        criterion = draft_criterion_for(args.runs, args.projects, args.episode_id)
-        print(f"drafted {episode_dir(args.runs, args.episode_id) / CRITERION_FILE}:")
-        show_draft(args.runs, args.episode_id, criterion, args.symptom)
-    elif not criterion.approved and before is not None and before.value == args.symptom:
-        approve_criterion(args.runs, args.episode_id)
-        print(f"approved the criterion for {shown}")
-    elif not criterion.approved:
-        show_draft(args.runs, args.episode_id, criterion, args.symptom)
-    print_next(args.runs, args.episode_id)
+        raise NotReady(f"no draft to approve for episode {args.ref} — `culprit confirm {args.ref}` drafts one")
+    lines = episode_header(args.runs, args.episode_id, args.ref)
+    if criterion.approved:
+        lines += ["", f"{DONE} Success criterion already approved"]
+    else:
+        criterion = approve_criterion(args.runs, args.episode_id)
+        lines += ["", f"{DONE} Approved the success criterion", "", *criterion_block(criterion)]
+    say(lines + next_section(criterion_next(args.runs, args.episode_id, args.ref, "approved")))
     return 0
 
 
@@ -410,7 +498,7 @@ def confirm_queue(args: argparse.Namespace) -> int:
     require_terminal("confirm with no episode asks about each queued episode",
                      otherwise="run `culprit confirm <episode-id> <symptom>`")
     rows = require_queue(args.runs)
-    shown_any = False
+    shown_any = stopped = False
     for position, row in enumerate(rows, 1):
         episode_id = row["summary"]["episode_id"]
         approved, restored = _confirm_progress(args.runs, episode_id)
@@ -421,11 +509,12 @@ def confirm_queue(args: argparse.Namespace) -> int:
             continue
         shown_any = True
         if confirm_walk_step(args, position, row, blockers) == "quit":
+            stopped = True
             break
-    else:
-        if not shown_any:
-            print("nothing left to confirm: every queued episode is confirmed, approved and restored")
-    print("next: culprit diagnose", file=sys.stderr)
+    if not shown_any:
+        say([f"{DONE} Nothing left to confirm: every queued episode is confirmed, approved and restored"])
+    steps = [Step("Carry on where you stopped", "culprit confirm")] if stopped else []
+    say(next_section(steps + [Step("Diagnose every confirmed episode", "culprit diagnose")]))
     return 0
 
 
@@ -462,40 +551,31 @@ def confirm_walk_step(args: argparse.Namespace, position: int, row: dict, blocke
     summary = row["summary"]
     episode_id = summary["episode_id"]
     signals = summary.get("signals")
-    evidence = f"  [{_evidence(stored_signals(signals))}]" if signals else ""
-    print(f"\n{position} {display_id(args.runs, episode_id)}{evidence}  {summary.get('prompt_excerpt', '')}")
+    lines = ["", *episode_header(args.runs, episode_id, str(position))]
+    if signals:
+        lines.append(f"  {_evidence(stored_signals(signals))}")
     if follow_up := _next_prompt(args.projects, episode_id):
-        print(f"    you said next: {excerpt(follow_up)}")
-    for blocker in blockers:
-        print(f"    not replayable: {blocker}")
-    symptom = read_symptom(args.runs, episode_id)
-    if symptom is None:
-        answer = choose("what went wrong?", [*(s.value for s in Symptom), "skip", "quit"])
+        lines += wrap(f'You said next: "{excerpt(follow_up)}"', "  ")
+    lines += [line for blocker in blockers for line in wrap(f"Not replayable: {blocker}", "  ")]
+    say(lines)
+    before = read_symptom(args.runs, episode_id)
+    if before is None:
+        answer = choose("\nWhat went wrong?", [*(s.value for s in Symptom), "skip", "quit"])
         if answer in ("skip", "quit"):
             return answer
-        symptom = Symptom(answer)
-        record_symptom(args.runs, episode_id, symptom)
-    else:
-        print(f"symptom: {symptom.value}")
-    criterion = load_criterion(args.runs, episode_id)
-    if criterion is None:
-        try:
-            criterion = draft_criterion_for(args.runs, args.projects, episode_id)
-        except (EpisodeNotFound, ClaudeCallFailed) as failure:
-            print(f"criterion not drafted: {failure}")
-            return "skip"
-    if not criterion.approved:
-        print_criterion(criterion)
-        answer = choose("approve it?", ("approve", "edit later", "skip", "quit"))
-        if answer == "edit later":
-            print(f"edit {episode_dir(args.runs, episode_id) / CRITERION_FILE}, then run `culprit confirm` again")
-        if answer != "approve":
-            return "quit" if answer == "quit" else "skip"
-        approve_criterion(args.runs, episode_id)
-        print("approved")
+    say(["", symptom_line(args.runs, episode_id, before, before or Symptom(answer))])
+    try:
+        answer = settle_criterion(args.runs, args.projects, episode_id, ask=True,
+                                  options=(*APPROVE_OPTIONS, "quit"))
+    except (EpisodeNotFound, ClaudeCallFailed) as failure:
+        say(wrap(f"Criterion not drafted: {failure}", ""))
+        return "skip"
+    if answer == "edit first":
+        say(["", *wrap(f"Edit {short_path(args.runs, episode_id, CRITERION_FILE)}, then run `culprit confirm` again")])
+    if answer != "approved":
+        return "quit" if answer == "quit" else "skip"
     if not blockers and not pristine_dir(args.runs, episode_id).is_dir():
-        for line in restore_episode(args.runs, args.projects, episode_id):
-            print(line)
+        say(["", *restored_lines(restore_episode(args.runs, args.projects, episode_id))])
     return "done"
 
 
@@ -513,16 +593,9 @@ def criterion_lines(criterion: Criterion) -> list[str]:
             + [f"  must not: {rule}" for rule in criterion.must_not])
 
 
-def print_criterion(criterion: Criterion) -> None:
-    for line in criterion_lines(criterion):
-        print(f"  {line}")
-
-
-def show_draft(runs_dir: Path, episode_id: str, criterion: Criterion, symptom: str) -> None:
-    print_criterion(criterion)
-    shown = display_id(runs_dir, episode_id)
-    print(f"approve: rerun `culprit confirm {shown} {symptom}` once it says what success means "
-          f"(edit {episode_dir(runs_dir, episode_id) / CRITERION_FILE} first if it does not)")
+def restored_lines(details: list[str]) -> list[str]:
+    """What restore_episode found, under one done line."""
+    return [f"{DONE} Restored the starting files", *(line for detail in details for line in wrap(detail, "    "))]
 
 
 def print_next(runs_dir: Path, episode_id: str) -> None:
@@ -609,10 +682,9 @@ def restore_episode(runs_dir: Path, projects_dir: Path, episode_id: str) -> list
     checked, mismatches = check_restore(episode, destination)  # the snapshot, before the episode's record overrides it
     written, removed = apply_episode_originals(episode, destination)
     lines = [f"{report.restored} restored from snapshots, {len(report.unknown)} unknown (snapshot kept no backup), "
-             f"{len(report.missing_backups)} missing backups, {len(report.outside_cwd)} outside the working directory "
-             f"→ {destination}",
+             f"{len(report.missing_backups)} missing backups, {len(report.outside_cwd)} outside the working directory",
              f"snapshot agrees with the episode's own record for {checked - len(mismatches)} of {checked} files"]
-    lines += [f"  mismatch: {mismatch.path} ({mismatch.reason})" for mismatch in mismatches]
+    lines += [f"mismatch: {mismatch.path} ({mismatch.reason})" for mismatch in mismatches]
     lines.append(f"{written} file(s) set from the episode's own record, {removed} removed (created during the episode)")
     if from_git:
         lines.append(f"{from_git.restored} other file(s) set from git commit {from_git.commit[:10]} (the last before "
@@ -626,6 +698,7 @@ def restore_episode(runs_dir: Path, projects_dir: Path, episode_id: str) -> list
     write_json(episode_dir(runs_dir, episode_id) / RESTORE_FILE, trust)
     hooks = project_hooks(Path(episode.cwd))
     lines.append("project hooks that will run in every replay: " + "; ".join(hooks) if hooks else "no project hooks")
+    lines.append(f"in {short_path(runs_dir, episode_id, destination.name)}")
     return lines
 
 
@@ -639,8 +712,7 @@ def ready_to_replay(args: argparse.Namespace) -> tuple[Episode, Criterion]:
         raise NotReady(f"no approved criterion for {shown} — "
                        f"{criterion_step(criterion, shown, symptom.value if symptom else None)}")
     if not pristine_dir(args.runs, args.episode_id).is_dir():
-        for line in restore_episode(args.runs, args.projects, args.episode_id):
-            print(line)
+        say(["", *restored_lines(restore_episode(args.runs, args.projects, args.episode_id))])
     return episode, criterion
 
 

@@ -1,0 +1,203 @@
+"""What each command prints for a person: one block in reading order, the episode named once at the top,
+content before file paths, and one numbered Next section last. Synthetic records only."""
+
+import json
+
+import pytest
+
+import culprit.cli as cli
+from culprit.model import Criterion, load_criterion, save_criterion
+from culprit.store import episode_dir, read_symptom
+from fakes import FakeAsk
+from records import human, snapshot
+
+SESSION = "50c0a213-958f-4c4e-9d1a-0123456789ab"
+PROMPT = "b0567c84-1111-2222-3333-444444444444"
+EP = f"{SESSION}:{PROMPT}"
+EXCERPT = "when anny filter is active @dashboard/people.js , view load|list gets hidden"
+SUCCESS = ("On the dashboard people view, applying any filter keeps the list and its loading state visible: the "
+           "list shows only the matching people, and clearing the filter brings every person back.")
+DRAFT = {"success_means": SUCCESS, "checks": [],
+         "must_not": ["Remove or disable the filter feature", "Change how the list looks with no filter active"]}
+OTHERS = [f"{c * 8}-0000-0000-0000-000000000000:{d * 8}-0000-0000-0000-000000000000" for c, d in
+          (("1", "2"), ("3", "4"), ("5", "6"))]
+
+
+@pytest.fixture
+def row4(write_session, tmp_path, monkeypatch):
+    """The episode is row 4 of the queue; the store is runs/ in the current folder, as it is by default."""
+    monkeypatch.setenv("CULPRIT_RUNS", "runs")
+    monkeypatch.setenv("COLUMNS", "100")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    write_session([snapshot(f"u-{PROMPT}", {}), human(EXCERPT, PROMPT, session_id=SESSION, cwd=str(repo)),
+                   human("still hidden", "p2", session_id=SESSION, cwd=str(repo))], name=f"{SESSION}.jsonl")
+    runs = tmp_path / "cwd" / "runs"
+    runs.mkdir()
+    rows = [{"score": 9, "summary": {"episode_id": other, "prompt_excerpt": "other"}} for other in OTHERS]
+    rows.append({"score": 5, "summary": {"episode_id": EP, "prompt_excerpt": EXCERPT}})
+    (runs / "candidates.json").write_text(json.dumps(rows))
+    monkeypatch.setattr(cli, "ask_claude", FakeAsk(dict(DRAFT)))
+    return runs
+
+
+def terminal(monkeypatch, *answers):
+    left = list(answers)
+    monkeypatch.setattr(cli, "stdin_is_tty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt="": left.pop(0))
+    return left
+
+
+HEADER = f"""Episode 4 · 50c0a213:b0567c84
+  "{EXCERPT}"
+"""
+DRAFT_BLOCK = """Draft success criterion — not approved yet
+  Success means
+    On the dashboard people view, applying any filter keeps the list and its loading state visible:
+    the list shows only the matching people, and clearing the filter brings every person back.
+  Must not
+    1. Remove or disable the filter feature
+    2. Change how the list looks with no filter active
+  Checks
+    none — add test commands (e.g. npm test) so replays are judged by tests
+"""
+APPROVED_BLOCK = DRAFT_BLOCK.replace("Draft success criterion — not approved yet", "Success criterion — approved")
+
+
+def test_first_confirm_records_drafts_and_says_how_to_approve(row4, capsys):
+    assert cli.main(["confirm", "4", "wrong-result"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == f"""{HEADER}
+✓ Recorded what went wrong: wrong-result
+
+{DRAFT_BLOCK}
+Next
+  1. Read the draft. To change it, edit runs/50c0a213…b0567c84/criterion.json
+  2. Approve it:  culprit confirm 4 approve
+"""
+    assert "next:" not in captured.err
+    assert load_criterion(row4, EP).approved is False
+
+
+def test_confirming_the_same_symptom_again_never_approves(row4, capsys):
+    cli.main(["confirm", "4", "wrong-result"])
+    capsys.readouterr()
+    assert cli.main(["confirm", "4", "wrong-result"]) == 0
+    out = capsys.readouterr().out
+    assert "✓ What went wrong: wrong-result (recorded earlier)" in out and DRAFT_BLOCK in out
+    assert "culprit confirm 4 approve" in out
+    assert load_criterion(row4, EP).approved is False
+
+
+def test_approve_in_the_symptom_position_approves_the_draft(row4, capsys):
+    cli.main(["confirm", "4", "wrong-result"])
+    capsys.readouterr()
+    assert cli.main(["confirm", "4", "approve"]) == 0
+    assert capsys.readouterr().out == f"""{HEADER}
+✓ Approved the success criterion
+
+{APPROVED_BLOCK}
+Next
+  1. Diagnose it:  culprit diagnose 4
+"""
+    assert load_criterion(row4, EP).approved is True
+    assert read_symptom(row4, EP).value == "wrong-result"
+
+
+def test_in_a_terminal_confirm_asks_and_approves(row4, capsys, monkeypatch):
+    left = terminal(monkeypatch, "approve")
+    assert cli.main(["confirm", "4", "wrong-result"]) == 0
+    assert capsys.readouterr().out == f"""{HEADER}
+✓ Recorded what went wrong: wrong-result
+
+{DRAFT_BLOCK}
+✓ Approved the success criterion
+
+Next
+  1. Diagnose it:  culprit diagnose 4
+"""
+    assert left == [] and load_criterion(row4, EP).approved is True
+
+
+def test_in_a_terminal_edit_first_leaves_the_draft_and_names_the_file(row4, capsys, monkeypatch):
+    terminal(monkeypatch, "e")
+    assert cli.main(["confirm", "4", "wrong-result"]) == 0
+    out = capsys.readouterr().out
+    assert out.endswith("""Next
+  1. Edit runs/50c0a213…b0567c84/criterion.json
+  2. Then read it again and approve it:  culprit confirm 4
+""")
+    assert load_criterion(row4, EP).approved is False
+
+
+def test_in_a_terminal_confirm_with_no_symptom_shows_the_draft_and_asks(row4, capsys, monkeypatch):
+    cli.main(["confirm", "4", "wrong-result"])
+    capsys.readouterr()
+    left = terminal(monkeypatch, "skip")
+    assert cli.main(["confirm", "4"]) == 0
+    out = capsys.readouterr().out
+    assert DRAFT_BLOCK in out and left == [] and load_criterion(row4, EP).approved is False
+    assert out.endswith("""Next
+  1. Read the draft. To change it, edit runs/50c0a213…b0567c84/criterion.json
+  2. Approve it:  culprit confirm 4 approve
+""")
+
+
+def test_in_a_terminal_confirm_with_no_symptom_asks_what_went_wrong(row4, capsys, monkeypatch):
+    left = terminal(monkeypatch, "wasteful", "skip")
+    assert cli.main(["confirm", "4"]) == 0
+    assert left == [] and read_symptom(row4, EP).value == "wasteful"
+
+
+def test_without_a_terminal_confirm_with_no_symptom_lists_the_symptoms(row4, capsys):
+    assert cli.main(["confirm", "4"]) == 3
+    err = capsys.readouterr().err
+    assert "culprit confirm 4 <symptom>" in err and "wrong-result" in err and "no-failure" in err
+
+
+def test_approve_refuses_without_a_symptom_or_a_draft(row4, capsys):
+    assert cli.main(["confirm", "4", "approve"]) == 3
+    assert "culprit confirm 4 <symptom>" in capsys.readouterr().err
+    (episode_dir(row4, EP)).mkdir()
+    (episode_dir(row4, EP) / "symptom.json").write_text(json.dumps({"episode_id": EP, "symptom": "wasteful"}))
+    assert cli.main(["confirm", "4", "approve"]) == 3
+    assert "no draft to approve" in capsys.readouterr().err and load_criterion(row4, EP) is None
+
+
+def test_a_different_symptom_is_changed_and_the_draft_shown_again(row4, capsys):
+    cli.main(["confirm", "4", "wrong-result"])
+    capsys.readouterr()
+    assert cli.main(["confirm", "4", "stopped-short"]) == 0
+    out = capsys.readouterr().out
+    assert "✓ Changed what went wrong: wrong-result → stopped-short" in out and DRAFT_BLOCK in out
+    assert "culprit confirm 4 approve" in out and load_criterion(row4, EP).approved is False
+
+
+def test_an_approved_criterion_says_so_and_names_diagnose(row4, capsys):
+    cli.main(["confirm", "4", "wrong-result"])
+    cli.main(["confirm", "4", "approve"])
+    capsys.readouterr()
+    assert cli.main(["confirm", "4", "wrong-result"]) == 0
+    out = capsys.readouterr().out
+    assert "✓ Success criterion already approved" in out
+    assert out.endswith("Next\n  1. Diagnose it:  culprit diagnose 4\n")
+
+
+def test_a_short_id_typed_is_reused_and_named_once(row4, capsys):
+    assert cli.main(["confirm", "50c0a213:b0567c84", "wrong-result"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("Episode 50c0a213:b0567c84\n")
+    assert "culprit confirm 50c0a213:b0567c84 approve" in out and SESSION not in out
+
+
+def test_a_full_id_typed_is_shortened_in_commands(row4, capsys):
+    assert cli.main(["confirm", EP, "wrong-result"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("Episode 50c0a213:b0567c84\n") and EP not in out
+    assert "culprit confirm 50c0a213:b0567c84 approve" in out
+
+
+def test_checks_are_listed_by_number(row4, capsys, monkeypatch):
+    monkeypatch.setattr(cli, "ask_claude", FakeAsk({**DRAFT, "checks": ["npm test", "npm run lint"]}))
+    cli.main(["confirm", "4", "wrong-result"])
+    assert "  Checks\n    1. npm test\n    2. npm run lint\n" in capsys.readouterr().out

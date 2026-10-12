@@ -72,8 +72,11 @@ uv run culprit status [1]          # where episodes stand and the next command
 
 - **Naming episodes:** use the triage row number (`3`), the short id (`1a2b3c4d:5e6f7a8b`), any unique prefix,
   or the full id.
-- **Confirming one episode:** `confirm <episode> <symptom>` drafts the criterion. Edit
-  `runs/<episode>/criterion.json` if it's wrong, then run the same command again to approve it.
+- **Confirming one episode:** `confirm <episode> <symptom>` records what went wrong, drafts the success
+  criterion, shows it and, in a terminal, asks: approve, edit first, or skip. To edit, change
+  `runs/<episode>/criterion.json`, then run `confirm <episode>` (no symptom needed once one is recorded) to see
+  it again and approve it. Without a terminal, `confirm <episode> approve` approves the draft; confirming a
+  symptom never approves anything.
 - **Trust:** `review` asks you pass/fail on judged replays. The judge counts as calibrated at ≥ 20 labels
   and Cohen's kappa ≥ 0.6, and `status` and the report show its agreement. `selftest <episode>` plants a
   known fault in each layer of an episode that normally passes, and scores whether culprit names it.

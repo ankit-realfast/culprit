@@ -26,22 +26,24 @@ def queued_episode(write_session, tmp_path):
     return repo, runs
 
 
-def test_confirm_drafts_the_criterion_shows_it_and_a_second_confirm_approves_it(write_session, tmp_path, capsys,
-                                                                               monkeypatch):
+def test_confirm_drafts_the_criterion_shows_it_and_approve_approves_it(write_session, tmp_path, capsys,
+                                                                     monkeypatch):
     _, runs = queued_episode(write_session, tmp_path)
     fake = FakeAsk({"success_means": "a.py works", "checks": ["pytest -q"], "must_not": ["skip tests"]})
     monkeypatch.setattr(cli, "ask_claude", fake)
     assert cli.main(["confirm", "s1:p1", "wrong-result"]) == 0
     assert "still broken" in fake.calls[0][0]
     out = capsys.readouterr().out
-    assert str(runs / "s1__p1" / "criterion.json") in out
-    assert "criterion [draft, not approved]: a.py works" in out
-    assert "check: pytest -q" in out and "must not: skip tests" in out
-    assert "approve: rerun `culprit confirm s1:p1 wrong-result`" in out
+    assert "s1__p1/criterion.json" in out
+    assert "Draft success criterion — not approved yet" in out and "a.py works" in out
+    assert "1. pytest -q" in out and "1. skip tests" in out
+    assert "Approve it:  culprit confirm s1:p1 approve" in out
     assert load_criterion(runs, "s1:p1").approved is False
     assert cli.main(["confirm", "s1:p1", "wrong-result"]) == 0
+    assert load_criterion(runs, "s1:p1").approved is False  # the same symptom again never approves
+    assert cli.main(["confirm", "s1:p1", "approve"]) == 0
     assert len(fake.calls) == 1  # never redrafted
-    assert "approved the criterion" in capsys.readouterr().out
+    assert "✓ Approved the success criterion" in capsys.readouterr().out
     assert load_criterion(runs, "s1:p1").approved is True
 
 
@@ -52,14 +54,14 @@ def test_confirm_with_a_different_symptom_corrects_it_without_approving(write_se
     assert cli.main(["confirm", "s1:p1", "stopped-short"]) == 0
     assert read_symptom(runs, "s1:p1").value == "stopped-short"
     assert load_criterion(runs, "s1:p1").approved is False
-    assert "approve: rerun `culprit confirm s1:p1 stopped-short`" in capsys.readouterr().out
+    assert "Approve it:  culprit confirm s1:p1 approve" in capsys.readouterr().out
 
 
 def test_confirm_never_overwrites_a_criterion(write_session, tmp_path, capsys, monkeypatch):
     _, runs = queued_episode(write_session, tmp_path)
     monkeypatch.setattr(cli, "ask_claude", FakeAsk({"success_means": "first", "checks": [], "must_not": []}))
     cli.main(["confirm", "s1:p1", "wrong-result"])
-    cli.main(["confirm", "s1:p1", "wrong-result"])
+    cli.main(["confirm", "s1:p1", "approve"])
     second = FakeAsk({"success_means": "second", "checks": [], "must_not": []})
     monkeypatch.setattr(cli, "ask_claude", second)
     assert cli.main(["confirm", "s1:p1", "stopped-short"]) == 0

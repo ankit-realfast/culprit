@@ -78,12 +78,14 @@ def test_the_walk_confirms_approves_and_restores_each_episode_in_queue_order(wri
     assert (episode_dir(runs, "s1:p1") / "pristine" / "a.py").read_text() == "old\n"
     assert not (episode_dir(runs, "s2:p1") / "pristine").exists()
     out = captured.out
-    assert out.index("fix a") < out.index("tidy b")
+    assert out.index("Episode 1 · s1:p1\n") < out.index("fix a") < out.index("Episode 2 · s2:p1\n") < out.index("tidy b")
     assert "2 tool errors" in out
-    assert "you said next: no, still broken" in out and "you said next: that's wrong" in out
-    assert "criterion [draft, not approved]: works 0" in out and "1 restored from snapshots" in out
-    assert "not replayable: working directory" in out
-    assert "next: culprit diagnose" in captured.err
+    assert 'You said next: "no, still broken"' in out and 'You said next: "that\'s wrong"' in out
+    assert "Draft success criterion — not approved yet\n  Success means\n    works 0" in out
+    assert "✓ Approved the success criterion" in out and "1 restored from snapshots" in out
+    assert "Not replayable: working directory" in out
+    assert out.endswith("Next\n  1. Diagnose every confirmed episode:  culprit diagnose\n")
+    assert "next:" not in captured.err
 
 
 def test_episodes_already_past_every_step_are_not_shown(write_session, tmp_path, capsys, monkeypatch):
@@ -97,7 +99,7 @@ def test_episodes_already_past_every_step_are_not_shown(write_session, tmp_path,
     left, asked = answering(monkeypatch, "a")  # only s2:p1's draft is waiting, and its symptom is known
     assert cli.main(["confirm"]) == 0
     out = capsys.readouterr().out
-    assert "fix a" not in out and "symptom: stopped-short" in out
+    assert "fix a" not in out and "✓ What went wrong: stopped-short (recorded earlier)" in out
     assert left == [] and len(asked) == 1 and load_criterion(runs, "s2:p1").approved
 
 
@@ -109,7 +111,7 @@ def test_an_unreplayable_episode_that_is_confirmed_and_approved_is_done(write_se
     (episode_dir(runs, "s1:p1") / "pristine").mkdir()
     answering(monkeypatch)
     assert cli.main(["confirm"]) == 0
-    assert "nothing left to confirm" in capsys.readouterr().out
+    assert "Nothing left to confirm" in capsys.readouterr().out
 
 
 def test_skip_moves_on_and_quit_stops(write_session, tmp_path, capsys, monkeypatch):
@@ -129,7 +131,7 @@ def test_edit_later_leaves_the_draft_and_does_not_restore(write_session, tmp_pat
     out = capsys.readouterr().out
     assert load_criterion(runs, "s1:p1").approved is False
     assert not (episode_dir(runs, "s1:p1") / "pristine").exists()
-    assert str(episode_dir(runs, "s1:p1") / "criterion.json") in out
+    assert "Edit" in out and "/s1__p1/criterion.json" in out
 
 
 def test_an_unknown_answer_is_asked_again_and_end_of_input_quits(write_session, tmp_path, capsys, monkeypatch):
@@ -158,7 +160,7 @@ def test_an_episode_whose_log_is_gone_keeps_its_symptom_and_the_walk_goes_on(wri
     assert cli.main(["confirm"]) == 0
     out = capsys.readouterr().out
     assert read_symptom(runs, "s1:p1") is Symptom.WRONG_RESULT and load_criterion(runs, "s1:p1") is None
-    assert "criterion not drafted" in out and "tidy b" in out and left == []
+    assert "Criterion not drafted" in out and "tidy b" in out and left == []
 
 
 def test_a_row_stored_with_the_retired_corrected_signal_still_shows(write_session, tmp_path, capsys, monkeypatch):

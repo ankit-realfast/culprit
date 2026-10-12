@@ -174,6 +174,10 @@ Eight commands: `triage`, `confirm`, `env-fix`, `diagnose`, `report`, `status`, 
 The only flags are `triage --top` and `status --json`; everything else comes from the two environment
 variables above. An episode is named by its row number in the triage queue (plain `3`; a shell drops
 `#3` as a comment), its short id or a unique prefix. `confirm` with no id walks the queue in a terminal;
+`confirm <episode> <symptom>` records the symptom, drafts the criterion and, in a terminal, asks to approve
+it (approve, edit first, skip); `confirm <episode>` shows the draft and asks again once a symptom is recorded;
+`confirm <episode> approve` is the only way to approve without a terminal, and confirming a symptom again never
+approves;
 `diagnose` restores the starting files when they are missing, runs the baseline and the oracles, and with
 no id diagnoses the whole queue and writes the report. Every replaying command prints the most it can run
 and spend before it starts.

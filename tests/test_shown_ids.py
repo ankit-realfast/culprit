@@ -39,8 +39,8 @@ def test_next_lines_and_status_rows_use_the_short_id(write_session, tmp_path, ca
     queue(runs, A, B)
     logged(write_session, tmp_path, A)
     assert cli.main(["confirm", A, "wrong-result"]) == 0
-    err = capsys.readouterr().err
-    assert "culprit confirm aaaaaaaa:bbbbbbbb wrong-result" in err and A not in err
+    out = capsys.readouterr().out
+    assert "culprit confirm aaaaaaaa:bbbbbbbb approve" in out and A not in out
     assert cli.main(["status"]) == 0
     out = capsys.readouterr().out
     assert "culprit status aaaaaaaa:bbbbbbbb" in out and "culprit confirm cccccccc:dddddddd" in out
@@ -52,7 +52,7 @@ def test_an_ambiguous_short_id_falls_back_to_the_full_id(write_session, tmp_path
     queue(runs, A, TWIN)
     logged(write_session, tmp_path, A)
     assert cli.main(["confirm", A, "wrong-result"]) == 0
-    assert f"culprit confirm {A} wrong-result" in capsys.readouterr().err
+    assert f"culprit confirm {A} approve" in capsys.readouterr().out
 
 
 def test_refusals_name_the_short_id(write_session, tmp_path, capsys):

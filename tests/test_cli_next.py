@@ -22,13 +22,23 @@ def last_err_line(capsys):
     return capsys.readouterr().err.strip().splitlines()[-1]
 
 
-def test_confirm_names_the_approval_next_then_diagnose(write_session, tmp_path, capsys):
+def next_section(capsys):
+    """The numbered steps of the Next section, which closes stdout; nothing about next steps goes to stderr."""
+    captured = capsys.readouterr()
+    assert "next:" not in captured.err
+    head, _, steps = captured.out.rpartition("\nNext\n")
+    return [line.strip() for line in steps.splitlines()]
+
+
+def test_confirm_names_the_approval_next_then_diagnose(write_session, tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "400")  # the store's long tmp path stays on one line
     _, runs = queued(write_session, tmp_path)
     assert cli.main(["confirm", "s1:p1", "wrong-result"]) == 0
-    assert last_err_line(capsys) == ("next: review it with `culprit status s1:p1`, then rerun "
-                                     "`culprit confirm s1:p1 wrong-result` to approve it")
-    assert cli.main(["confirm", "s1:p1", "wrong-result"]) == 0
-    assert last_err_line(capsys) == "next: run `culprit diagnose s1:p1`"
+    read, approve = next_section(capsys)
+    assert read.startswith("1. Read the draft. To change it, edit ") and read.endswith("/s1__p1/criterion.json")
+    assert approve == "2. Approve it:  culprit confirm s1:p1 approve"
+    assert cli.main(["confirm", "s1:p1", "approve"]) == 0
+    assert next_section(capsys) == ["1. Diagnose it:  culprit diagnose s1:p1"]
 
 
 def test_a_symptom_without_a_criterion_names_confirm_to_draft_it(write_session, tmp_path, capsys):
@@ -37,6 +47,14 @@ def test_a_symptom_without_a_criterion_names_confirm_to_draft_it(write_session, 
     (episode_dir(runs, "s1:p1")).mkdir()
     (episode_dir(runs, "s1:p1") / "symptom.json").write_text('{"episode_id": "s1:p1", "symptom": "wasteful"}')
     assert next_step(runs, "s1:p1") == "run `culprit confirm s1:p1 wasteful` to draft what success means"
+
+
+def test_the_json_next_step_names_approve_for_a_draft(write_session, tmp_path, capsys):
+    from culprit.report import next_step
+    _, runs = queued(write_session, tmp_path)
+    cli.main(["confirm", "s1:p1", "wrong-result"])
+    assert next_step(runs, "s1:p1") == ("review it with `culprit status s1:p1`, then approve it with "
+                                        "`culprit confirm s1:p1 approve`")
 
 
 def test_diagnose_and_env_fix_name_their_next_step(write_session, tmp_path, capsys, monkeypatch):

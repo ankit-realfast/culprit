@@ -265,12 +265,13 @@ def load_criterion(runs_dir: Path, episode_id: str) -> Criterion | None:
 
 
 def criterion_step(criterion: Criterion | None, episode_id: str, symptom: str | None) -> str:
-    """The command that gets this episode an approved criterion: `confirm` drafts it, and confirming the same
-    symptom again approves the draft. Never suggests redrafting over a draft."""
+    """The command that gets this episode an approved criterion: `confirm` drafts it, and
+    `confirm <episode> approve` approves the draft. Never suggests redrafting over a draft."""
     confirm = f"`culprit confirm {episode_id} {symptom or '<symptom>'}`"
     if criterion is None:
         return f"run {confirm} to draft what success means"
-    return f"review it with `culprit status {episode_id}`, then rerun {confirm} to approve it"
+    return (f"review it with `culprit status {episode_id}`, then approve it with "
+            f"`culprit confirm {episode_id} approve`")
 
 
 def approve_criterion(runs_dir: Path, episode_id: str) -> Criterion:
