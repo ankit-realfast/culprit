@@ -329,6 +329,7 @@ def require_terminal(why: str, otherwise: str = "") -> None:
 
 def show_plan(plan: CostPlan) -> None:
     """The most a command can run and spend, on stderr before it starts: information, not a question."""
+    err("")  # set apart from the stdout block above it when both reach one terminal
     for line in plan.lines():
         err(line)
 
@@ -467,7 +468,7 @@ def settle_criterion(runs_dir: Path, projects_dir: Path, episode_id: str, *, ask
         say(["", f"{DONE} Success criterion already approved"])
         return "approved"
     if criterion is None:
-        err("drafting what success means (one model call)…")
+        err("\ndrafting what success means (one model call)…")
         criterion = draft_criterion_for(runs_dir, projects_dir, episode_id)
     say(["", *criterion_block(criterion)])
     if not ask:
