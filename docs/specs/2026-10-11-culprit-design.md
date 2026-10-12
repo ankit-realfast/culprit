@@ -137,7 +137,7 @@ state; v1 uses `claude -p` in a throwaway directory and revisits Harbor if isola
 | 4 | restore (`replay`) | Restore the episode's starting state in a throwaway directory | Episode → directory |
 | 5 | oracles (`diagnose`) | Build one variant per cause | Episode → variants: task, environment, agent setup, harness, model |
 | 6 | replayer (`replay`, `diagnose`) | Run each variant N times, baseline first | Variant + directory → stream-json transcripts, cost |
-| 7 | judge (`model`) | Score a replay against the criterion | Final answer, diff, check results and the transcript's tool calls + criterion → pass/fail |
+| 7 | judge (`model`) | Score a replay against the criterion | Final answer, diff, check results and the transcript's tool calls + criterion → pass/fail; a failing check, a run over the criterion's limits or an errored run fails without a model call |
 | 8 | verdict (`diagnose`) | Apply the cause checklist to the pass rates, then the pair test | Pass rates → Cause |
 | 9 | report (`report`) | Lead with what to fix first (single-layer fixes ranked by episodes covered), then interacting causes (multi-cause, by layer set), then the grid and trust | Verdicts → report |
 | 10 | selftest (`trust`) | Plant known faults and check culprit names them | Planted episodes → accuracy |
@@ -217,6 +217,17 @@ Other symptoms may set limits but usually do not. The leak rule is unchanged: de
 fix, the file or the code. `criterion.json` keeps `limits` (`{max_tool_calls, max_minutes, max_usd}`, any of
 them null), `limits_reason`, the `symptom` it was drafted for and `drafted_hash`, a hash of what the draft said
 when written; a file written before these fields loads with no limits and no symptom.
+
+**Limits are checked from the run, never by the model.** Before the judge's model call, a run fails with
+`by: limit` and a reason such as `over the limit: 31 tool calls > 15` when it made more tool calls than
+`max_tool_calls` (counted from the transcript: the agent's own calls, not a subagent's, which carry a
+`parent_tool_use_id`, since the original's log holds only the agent's own), ran longer than `max_minutes` (the
+result line's `duration_ms`, else the wall clock; a run killed at culprit's time limit took all of it) or cost
+more than `max_usd` (the result's `total_cost_usd`; a run killed at the time limit has no known cost, so its
+cost is not held against it). Within its limits a run is judged as before. The criterion block that `confirm`,
+`status` and the report print shows them under **Limits**: `at most 15 tool calls · 4 minutes — <reason>`.
+Limits are part of the criterion's key, so changing them retires earlier runs like any other change; a
+criterion without limits keys as it did before limits existed.
 
 ### Every replay runs locked down
 

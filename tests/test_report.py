@@ -172,3 +172,15 @@ def test_each_verdict_says_which_model_each_variant_ran_as(tmp_path):
 def test_the_model_fix_names_the_same_family_upgrade_too():
     from culprit.report import FIX_ACTIONS
     assert "the latest of the same family where it says upgrade" in FIX_ACTIONS["model"]
+
+
+def test_the_criterion_block_shows_its_limits_and_why():
+    from culprit.model import Criterion, Limits
+    from culprit.report import criterion_block
+    criterion = Criterion("the bug is fixed", (), (), limits=Limits(max_tool_calls=15, max_minutes=4),
+                          limits_reason="half of what the original took")
+    lines = criterion_block(criterion)
+    assert lines[lines.index("  Limits") + 1] == "    at most 15 tool calls · 4 minutes — half of what the original took"
+    assert "  Limits" not in criterion_block(Criterion("the bug is fixed", (), ()))
+    costly = Criterion("x", (), (), limits=Limits(max_minutes=1, max_usd=0.5))
+    assert "    at most 1 minute · $0.50" in criterion_block(costly)

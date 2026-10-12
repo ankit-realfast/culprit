@@ -504,8 +504,8 @@ def check_leak(drafted_text: str, original_prompt: str, follow_ups: list[str], a
 
 
 # --- judge: Pass or fail for one replay, against the approved criterion. ---
-# A failing check or an errored run fails on the spot; only otherwise does a model read the run's final
-# answer and diff. Every judgement says which of the three decided it.
+# A failing check, a run over the criterion's limits or an errored run fails on the spot; only otherwise does a
+# model read the run's final answer and diff. Every judgement says which decided it.
 
 MAX_DIFF_CHARS = 60_000
 MAX_ACTIONS_CHARS = 20_000
@@ -521,7 +521,7 @@ JUDGEMENT_SCHEMA = {
 class Judgement:
     passed: bool
     reason: str
-    by: str  # "check", "replay", "model", or "void" (not counted)
+    by: str  # "check", "limit", "replay", "model", or "void" (not counted)
     model: str | None = None  # by "model": the model that judged, when the call reported one
 
 
@@ -541,6 +541,35 @@ def actions_from_transcript(transcript: str) -> str:
     if len(text) > MAX_ACTIONS_CHARS:
         text = text[:MAX_ACTIONS_CHARS] + f"\n[{len(text) - MAX_ACTIONS_CHARS} more characters of tool calls cut]"
     return text
+
+
+def tool_call_count(transcript: str) -> int:
+    """The tool calls the agent itself made (a subagent's carry a parent_tool_use_id and are not counted, as the
+    original's log holds only the agent's own)."""
+    count = 0
+    for raw in transcript.splitlines():
+        try:
+            record = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict) or record.get("type") != "assistant" or record.get("parent_tool_use_id"):
+            continue
+        count += sum(1 for block in (record.get("message") or {}).get("content") or []
+                     if isinstance(block, dict) and block.get("type") == "tool_use")
+    return count
+
+
+def over_limit(limits: Limits, replay: ReplayResult, tool_calls: int) -> str | None:
+    """The first limit the run went over, as `over the limit: 31 tool calls > 15`; None when within all of them.
+    A run stopped at the time limit has no known cost, so only its calls and time are held against it."""
+    if limits.max_tool_calls is not None and tool_calls > limits.max_tool_calls:
+        return f"over the limit: {tool_calls} tool calls > {limits.max_tool_calls}"
+    minutes = (replay.duration_s or 0) / 60
+    if limits.max_minutes is not None and minutes > limits.max_minutes:
+        return f"over the limit: {round(minutes, 1):g} minutes > {limits.max_minutes:g}"
+    if limits.max_usd is not None and replay.limit != LIMIT_TIME and replay.cost_usd > limits.max_usd:
+        return f"over the limit: ${replay.cost_usd:.2f} > ${limits.max_usd:.2f}"
+    return None
 
 
 LIMIT_WORDS = {LIMIT_BUDGET: "spend limit", LIMIT_TIME: "time limit"}
@@ -592,10 +621,13 @@ def judge_replay(criterion: Criterion, replay: ReplayResult, ask: Ask = ask_clau
     failed = [check for check in replay.checks if check.exit_code != 0]
     if failed:
         return Judgement(False, f"check failed: {failed[0].command} (exit {failed[0].exit_code})", "check")
+    transcript_path = replay.run_dir / TRANSCRIPT_FILE
+    transcript = transcript_path.read_text(errors="replace") if transcript_path.exists() else ""
+    if criterion.limits and (over := over_limit(criterion.limits, replay, tool_call_count(transcript))):
+        return Judgement(False, over, "limit")
     if replay.is_error and not replay.limit:
         return Judgement(False, f"the replay ended in an error: {replay.result_text[:300]}", "replay")
     diff = (replay.run_dir / DIFF_FILE).read_text(errors="replace")
-    transcript_path = replay.run_dir / TRANSCRIPT_FILE
-    actions = actions_from_transcript(transcript_path.read_text(errors="replace")) if transcript_path.exists() else ""
+    actions = actions_from_transcript(transcript)
     answer = ask(judging_prompt(criterion, replay, diff, actions), JUDGEMENT_SCHEMA)
     return Judgement(bool(answer["passed"]), str(answer["reason"]), "model", answer.get(MODEL_RAN_KEY))

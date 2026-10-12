@@ -719,3 +719,18 @@ def test_without_an_init_model_the_assistant_messages_name_the_model(tmp_path):
     (tmp_path / "x").mkdir()
     assert run_replay(settings(), pristine_tree(tmp_path / "x"), tmp_path / "run1", tmp_path / ".culprit-replay-o",
                       (), run=FakeRun(claude_stdout=RESULT), projects_dir=tmp_path / "p").model is None
+
+
+def test_a_run_records_how_long_it_took(tmp_path):
+    timed = json.dumps({**json.loads(RESULT), "duration_ms": 125_000})
+    result = run_replay(settings(), pristine_tree(tmp_path), tmp_path / "run0", tmp_path / ".culprit-replay-d", (),
+                        run=FakeRun(claude_stdout=timed), projects_dir=tmp_path / "p")
+    assert result.duration_s == 125.0
+    assert json.loads((tmp_path / "run0" / "result.json").read_text())["duration_s"] == 125.0
+
+
+def test_a_timed_out_run_took_its_whole_time_limit(tmp_path):
+    run = FakeRun(claude_raises=subprocess.TimeoutExpired(cmd="claude", timeout=1))
+    result = run_replay(settings(timeout_s=900), pristine_tree(tmp_path), tmp_path / "run0",
+                        tmp_path / ".culprit-replay-u", (), run=run, projects_dir=tmp_path / "p")
+    assert result.duration_s == 900

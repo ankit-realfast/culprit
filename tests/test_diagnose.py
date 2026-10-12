@@ -352,3 +352,15 @@ def test_the_family_step_is_skipped_when_it_would_test_nothing_new(write_session
                                     {"original-max-effort": 0})
         assert "latest-in-family" not in [name for name, _ in calls], model
         assert "needs Fable (original model at max effort did not pass: 0/5)" in verdict.evidence
+
+
+def test_changing_only_the_limits_counts_as_a_changed_criterion():
+    from dataclasses import replace
+    from culprit.diagnose import criterion_key
+    from culprit.model import Limits
+    import hashlib, json
+    # a criterion without limits keys as it did before limits existed, so its earlier runs are not retired
+    before = json.dumps([CRITERION.success_means, list(CRITERION.checks), list(CRITERION.must_not)])
+    assert criterion_key(CRITERION) == hashlib.sha256(before.encode()).hexdigest()[:16]
+    assert criterion_key(replace(CRITERION, symptom="wasteful")) == criterion_key(CRITERION)
+    assert criterion_key(replace(CRITERION, limits=Limits(max_tool_calls=3))) != criterion_key(CRITERION)

@@ -11,7 +11,7 @@ from pathlib import Path
 from culprit.diagnose import (BASELINE, VariantOutcome, Verdict, load_instructions_draft, load_outcome, load_outcomes,
                               load_verdict, costs_line, limits_line, models_line, network_line, numbers_line, pristine_dir, stored_spend)
 from culprit.logs import WhatHappened
-from culprit.model import CRITERION_FILE, Criterion, Suggestion, criterion_step, load_criterion
+from culprit.model import CRITERION_FILE, Criterion, Limits, Suggestion, criterion_step, load_criterion
 from culprit.store import (SELFTEST_DIR, SYMPTOM_MEANINGS, Cause, Symptom, confirm_step, display_id, episode_dir,
                            known_episode_ids, load_restore, prompt_excerpt, queued_ids, read_symptom)
 
@@ -356,10 +356,24 @@ def symptoms_block(numbered: bool = False) -> list[str]:
     return lines
 
 
+def _plural(count: float, word: str) -> str:
+    return f"{count:g} {word}{'' if count == 1 else 's'}"
+
+
+def limits_text(limits: Limits, reason: str = "") -> str:
+    """`at most 15 tool calls · 4 minutes · $0.50 — <reason>`"""
+    parts = ([_plural(limits.max_tool_calls, "tool call")] if limits.max_tool_calls is not None else []) + \
+            ([_plural(limits.max_minutes, "minute")] if limits.max_minutes is not None else []) + \
+            ([f"${limits.max_usd:.2f}"] if limits.max_usd is not None else [])
+    return "at most " + " · ".join(parts) + (f" — {reason}" if reason else "")
+
+
 def criterion_block(criterion: Criterion) -> list[str]:
     heading = "Success criterion — approved" if criterion.approved else "Draft success criterion — not approved yet"
+    limits = ["  Limits", *wrap(limits_text(criterion.limits, criterion.limits_reason), "    ")] \
+        if criterion.limits else []
     return [heading, "  Success means", *wrap(criterion.success_means, "    "),
-            "  Must not", *(numbered(criterion.must_not) or ["    none"]),
+            "  Must not", *(numbered(criterion.must_not) or ["    none"]), *limits,
             "  Checks", *(numbered(criterion.checks) or wrap(NO_CHECKS, "    "))]
 
 

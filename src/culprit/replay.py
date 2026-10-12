@@ -10,6 +10,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 import uuid
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
@@ -303,6 +304,7 @@ class ReplayResult:
     usage: dict = field(default_factory=dict)  # token counts, by USAGE_KEYS
     model: str | None = None  # the model id the run actually ran as (an alias resolved), from its stream
     network: dict = field(default_factory=dict)  # network calls culprit's hooks served from the log / refused
+    duration_s: float | None = None  # how long the run took: the CLI's duration_ms, else the wall clock
 
 
 class SetupScriptFailed(RuntimeError):
@@ -608,6 +610,7 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
             project_folder.mkdir(parents=True, exist_ok=True)
             forked = forked_history(history, resume_id, original_cwd, workdir.resolve())
             forked_log.write_text("".join(json.dumps(record) + "\n" for record in forked))
+        started = time.monotonic()
         try:
             completed = run(replay_command(settings, original_cwd, workdir, memory_dir, recordings_file, answers_file,
                                            resume_id, network_file),
@@ -619,6 +622,7 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
         except subprocess.TimeoutExpired as timed_out:
             stdout, exit_code = _text(timed_out.stdout), -1
             stderr = f"{_text(timed_out.stderr)}\ntimed out after {settings.timeout_s:.0f}s"
+        took_s = round(time.monotonic() - started, 1)
         (run_dir / TRANSCRIPT_FILE).write_text(stdout)
         (run_dir / "stderr.txt").write_text(stderr)
         result_line = _result_line(stdout)
@@ -647,7 +651,11 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
                                   void_reason=_void_reason(result_line), limit=limit,
                                   usage=_counts(result_line.get("usage")) or _streamed_usage(stdout),
                                   model=ran_as(stdout))
-        replay = replace(replay, network=network_counts(run_dir))
+        if exit_code == -1:
+            took_s = settings.timeout_s  # killed at the limit: it took all of it
+        elif result_line is not None and isinstance(result_line.get("duration_ms"), (int, float)):
+            took_s = result_line["duration_ms"] / 1000
+        replay = replace(replay, network=network_counts(run_dir), duration_s=took_s)
         (run_dir / RESULT_FILE).write_text(json.dumps(asdict(replay), default=str, indent=2))
         if watched:
             after = tree_fingerprint(watched)

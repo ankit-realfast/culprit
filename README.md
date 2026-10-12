@@ -82,13 +82,15 @@ uv run culprit status [1]          # any time: where episodes stand and what to 
   symptoms with what each means; in a terminal Enter accepts the suggestion. Without a terminal,
   `confirm <episode>` shows the same and records nothing: run `confirm <episode> <symptom>` to choose.
 - **Confirming one episode:** `confirm <episode> <symptom>` records what went wrong, drafts the success
-  criterion for that symptom (for `wasteful` it also sets limits — at most so many tool calls and minutes,
-  about half of what the original took — since the outcome alone would let an equally wasteful replay pass;
-  for `stopped-short` it names every part that must be finished; for `ignored-instructions` it spells out each
-  ignored instruction), shows it and, in a terminal, asks: approve, edit first, or skip. To edit, change
+  criterion for that symptom, shows it and, in a terminal, asks: approve, edit first, or skip. To edit, change
   `runs/<episode>/criterion.json`, then run `confirm <episode>` (no symptom needed once one is recorded) to see
   it again and approve it. Without a terminal, `confirm <episode> approve` approves the draft; confirming a
   symptom never approves anything.
+- **The criterion fits the symptom:** for `stopped-short` it names every part that must be finished; for
+  `ignored-instructions` it spells out each ignored instruction; for `wasteful` it also sets **limits**,
+  shown as `at most 15 tool calls · 4 minutes — <why>` (about half of what the original took), since the
+  outcome alone would let an equally wasteful replay pass. A replay over any limit fails on the spot,
+  counted from the run rather than judged by a model.
 - **Trust:** `review` asks you pass/fail on judged replays. The judge counts as calibrated at ≥ 20 labels
   and Cohen's kappa ≥ 0.6, and `status` and the report show its agreement. `selftest <episode>` plants a
   known fault in each layer of an episode that normally passes, and scores whether culprit names it.

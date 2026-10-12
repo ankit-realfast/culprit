@@ -828,7 +828,9 @@ CRITERION_USED_FILE = "criterion_used.json"
 
 
 def criterion_key(criterion: Criterion) -> str:
-    text = json.dumps([criterion.success_means, list(criterion.checks), list(criterion.must_not)])
+    # limits join the key only when set, so a criterion without them keys as it did before limits existed
+    limits = [asdict(criterion.limits)] if criterion.limits else []
+    text = json.dumps([criterion.success_means, list(criterion.checks), list(criterion.must_not), *limits])
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
