@@ -82,7 +82,10 @@ uv run culprit status [1]          # any time: where episodes stand and what to 
   symptoms with what each means; in a terminal Enter accepts the suggestion. Without a terminal,
   `confirm <episode>` shows the same and records nothing: run `confirm <episode> <symptom>` to choose.
 - **Confirming one episode:** `confirm <episode> <symptom>` records what went wrong, drafts the success
-  criterion, shows it and, in a terminal, asks: approve, edit first, or skip. To edit, change
+  criterion for that symptom (for `wasteful` it also sets limits — at most so many tool calls and minutes,
+  about half of what the original took — since the outcome alone would let an equally wasteful replay pass;
+  for `stopped-short` it names every part that must be finished; for `ignored-instructions` it spells out each
+  ignored instruction), shows it and, in a terminal, asks: approve, edit first, or skip. To edit, change
   `runs/<episode>/criterion.json`, then run `confirm <episode>` (no symptom needed once one is recorded) to see
   it again and approve it. Without a terminal, `confirm <episode> approve` approves the draft; confirming a
   symptom never approves anything.

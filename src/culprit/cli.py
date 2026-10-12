@@ -675,9 +675,11 @@ def confirm_walk_step(args: argparse.Namespace, position: int, row: dict, blocke
 
 
 def draft_criterion_for(runs_dir: Path, projects_dir: Path, episode_id: str) -> Criterion:
-    """Draft what success means from the episode and the human's follow-ups (one model call) and save it."""
+    """Draft what success means from the episode, the human's follow-ups and the recorded symptom (one model
+    call) and save it."""
     episode = find_episode(projects_dir, episode_id)
-    criterion = draft_criterion(episode, follow_up_prompts(projects_dir, episode_id), ask=ask_claude)
+    criterion = draft_criterion(episode, follow_up_prompts(projects_dir, episode_id),
+                                read_symptom(runs_dir, episode_id), ask=ask_claude)
     save_criterion(runs_dir, episode_id, criterion)
     return criterion
 

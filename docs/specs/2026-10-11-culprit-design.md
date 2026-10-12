@@ -133,7 +133,7 @@ state; v1 uses `claude -p` in a throwaway directory and revisits Harbor if isola
 |---|---|---|---|
 | 1 | episodes (`logs`) | Split sessions into episodes | `.jsonl` → `Episode{prompt, transcript, model, cwd, branch, snapshot ref, signals}` |
 | 2 | triage (`logs`) | Rank failure candidates for the human to confirm, from interrupts, tool errors (capped), compactions and slow turns (an interrupted turn logs no duration, so it is timed from its first to its last timestamp); API errors are infrastructure failures, so they add nothing to the score and a row that has them is marked likely not reproducible; a prompt that is only a slash command (one line: `/`, a command word, its arguments, e.g. `/compact` or `/model opus`) asks Claude Code rather than the agent for something and is never a candidate | Episodes → confirmed episodes, each with a Symptom (human-confirmed; this is the Misjudged check) |
-| 3 | criterion (`model`) | Draft what success means, from the human's follow-up messages | Episode → success criterion the human approves (`culprit confirm` with no id walks the queue: each row with its What happened recap, which includes the human's next prompt, since whether that prompt corrects Claude is for the human to judge, not a phrase list; symptom, then the drafted criterion to approve, then the restore) |
+| 3 | criterion (`model`) | Draft what success means, from the human's follow-up messages, the What happened facts and the confirmed symptom (see *The success criterion*) | Episode → success criterion the human approves (`culprit confirm` with no id walks the queue: each row with its What happened recap, which includes the human's next prompt, since whether that prompt corrects Claude is for the human to judge, not a phrase list; symptom, then the drafted criterion to approve, then the restore) |
 | 4 | restore (`replay`) | Restore the episode's starting state in a throwaway directory | Episode → directory |
 | 5 | oracles (`diagnose`) | Build one variant per cause | Episode → variants: task, environment, agent setup, harness, model |
 | 6 | replayer (`replay`, `diagnose`) | Run each variant N times, baseline first | Variant + directory → stream-json transcripts, cost |
@@ -197,6 +197,26 @@ symptom is ever recorded without the person choosing it (Enter on a shown sugges
 `diagnose` restores the starting files when they are missing, runs the baseline and the oracles, and with
 no id diagnoses the whole queue and writes the report. Every replaying command prints the most it can run
 and spend before it starts.
+
+### The success criterion
+
+The drafter (`sonnet`, one call) is shown the request, the person's later messages, the What happened facts,
+what the original attempt took (tool calls, minutes, and cost when the log has it) and the confirmed symptom
+with its meaning. A criterion that only describes the outcome cannot fail an attempt for the way it failed when
+the symptom is not about the outcome, so the symptom shapes the draft:
+
+| Symptom | What the draft must carry |
+|---|---|
+| stopped-short | `success_means` names every part of the request that must be finished |
+| wrong-result | the correct outcome |
+| ignored-instructions | each ignored instruction as its own explicit line: must in `success_means`, must not in `must_not` |
+| wasteful | the outcome plus **limits**: `max_tool_calls` and `max_minutes` (and `max_usd` only when the original's cost is known), clearly tighter than the original — about half — with a one-line `limits_reason`; the call's schema requires them, and a draft without them falls back to half of what the original took |
+| no-failure | the outcome the attempt reached |
+
+Other symptoms may set limits but usually do not. The leak rule is unchanged: describe the outcome, never the
+fix, the file or the code. `criterion.json` keeps `limits` (`{max_tool_calls, max_minutes, max_usd}`, any of
+them null), `limits_reason`, the `symptom` it was drafted for and `drafted_hash`, a hash of what the draft said
+when written; a file written before these fields loads with no limits and no symptom.
 
 ### Every replay runs locked down
 

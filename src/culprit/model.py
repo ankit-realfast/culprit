@@ -3,6 +3,7 @@ check and the judge."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -13,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from culprit.logs import Episode
+from culprit.logs import Episode, episode_cost_usd, signals_for, tool_uses, what_happened
 from culprit.replay import (DIFF_FILE, LIMIT_BUDGET, LIMIT_TIME, NO_MCP_SERVERS, TRANSCRIPT_FILE, ReplayResult,
                             ran_as)
 from culprit.store import SYMPTOM_MEANINGS, NotReady, Symptom, display_id, episode_dir, read_json, write_json
@@ -204,15 +205,40 @@ def resolved_model(runs_dir: Path, alias: str, now: float | None = None) -> Reso
 # Every pass/fail judgement culprit makes about a replay is made against this criterion.
 
 CRITERION_FILE = "criterion.json"
-CRITERION_SCHEMA = {
+LIMITS_SCHEMA = {
     "type": "object",
-    "properties": {
-        "success_means": {"type": "string"},
-        "checks": {"type": "array", "items": {"type": "string"}},
-        "must_not": {"type": "array", "items": {"type": "string"}},
-    },
-    "required": ["success_means", "checks", "must_not"],
+    "properties": {"max_tool_calls": {"type": "integer"}, "max_minutes": {"type": "number"},
+                   "max_usd": {"type": "number"}},
 }
+
+
+def criterion_schema(symptom: Symptom | None = None) -> dict:
+    """What the drafter answers. Limits are optional, except for a wasteful episode, where the outcome alone
+    cannot tell a lean attempt from a wasteful one: it must set a tool-call and a time limit and say why."""
+    wasteful = symptom == Symptom.WASTEFUL
+    limits = {**LIMITS_SCHEMA, **({"required": ["max_tool_calls", "max_minutes"]} if wasteful else {})}
+    return {
+        "type": "object",
+        "properties": {
+            "success_means": {"type": "string"},
+            "checks": {"type": "array", "items": {"type": "string"}},
+            "must_not": {"type": "array", "items": {"type": "string"}},
+            "limits": limits,
+            "limits_reason": {"type": "string"},
+        },
+        "required": ["success_means", "checks", "must_not", *(["limits", "limits_reason"] if wasteful else [])],
+    }
+
+
+CRITERION_SCHEMA = criterion_schema()
+
+
+@dataclass(frozen=True)
+class Limits:
+    """The most a replay may take before it fails, checked from the run without a model."""
+    max_tool_calls: int | None = None
+    max_minutes: float | None = None
+    max_usd: float | None = None
 
 
 @dataclass(frozen=True)
@@ -222,9 +248,67 @@ class Criterion:
     must_not: tuple[str, ...]
     approved: bool = False
     model: str | None = None  # the model that drafted it, when the call reported one
+    limits: Limits | None = None
+    limits_reason: str = ""
+    symptom: str | None = None  # the symptom it was drafted for; None when drafted before drafts were tagged
+    drafted_hash: str | None = None  # content_hash as drafted: a different hash now means the person edited it
 
 
-def drafting_prompt(episode: Episode, follow_ups: list[str]) -> str:
+def content_hash(criterion: Criterion) -> str:
+    """A hash of what the criterion says (not whether it is approved, who drafted it or what for)."""
+    text = json.dumps([criterion.success_means, list(criterion.checks), list(criterion.must_not),
+                       asdict(criterion.limits) if criterion.limits else None, criterion.limits_reason])
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+@dataclass(frozen=True)
+class Effort:
+    """What the original attempt took, as far as its log tells."""
+    tool_calls: int
+    minutes: float  # 0 when the log does not say
+    usd: float | None  # None when the log does not say
+
+
+def original_effort(episode: Episode) -> Effort:
+    return Effort(len(tool_uses(episode)), round(signals_for(episode).duration_s / 60, 1), episode_cost_usd(episode))
+
+
+def _number(value: float) -> str:
+    return f"{value:g}"
+
+
+def effort_text(effort: Effort) -> str:
+    minutes = f"{_number(effort.minutes)} minutes" if effort.minutes else "time unknown"
+    cost = f"${effort.usd:.2f}" if effort.usd is not None else "cost unknown"
+    return f"{effort.tool_calls} tool calls, {minutes}, {cost}"
+
+
+SYMPTOM_GUIDANCE = {
+    Symptom.STOPPED_SHORT: "The agent quit before finishing. success_means must name every part of the request "
+                           "that must be finished, so an attempt that does only some of them fails.",
+    Symptom.WRONG_RESULT: "The agent finished but the result was wrong. success_means states the correct outcome.",
+    Symptom.IGNORED_INSTRUCTIONS: "The agent did not follow what the person said. Write each instruction the agent "
+                                  "ignored as its own explicit line: what it must do goes in success_means, what it "
+                                  "must not do goes in must_not.",
+    Symptom.WASTEFUL: "The agent got there, but spent far too much doing it, so the outcome alone cannot catch the "
+                      "failure. Also set limits: max_tool_calls and max_minutes (max_usd only when the original's "
+                      "cost is known), clearly tighter than what the original attempt took (about half), and "
+                      "limits_reason: one line saying why. An attempt that goes over any limit fails.",
+    Symptom.NO_FAILURE: "The person says nothing went wrong. success_means states the outcome the attempt reached.",
+}
+
+
+def drafting_prompt(episode: Episode, follow_ups: list[str], symptom: Symptom | None = None) -> str:
+    facts = what_happened(episode, follow_ups[0] if follow_ups else None).as_text()
+    if symptom is None:
+        what_went_wrong = ""
+    else:
+        what_went_wrong = f"""
+What went wrong, as the person confirmed it: {symptom.value} ({SYMPTOM_MEANINGS[symptom]}).
+{SYMPTOM_GUIDANCE[symptom]}
+"""
+    limits_line = ("" if symptom == Symptom.WASTEFUL else
+                   "\n- limits: leave them out unless the person's reaction makes a limit part of success.")
     return f"""You are writing the success criterion for one request a person made to a coding agent.
 A later step will re-run the agent on this request and judge each attempt against what you write.
 
@@ -236,20 +320,53 @@ What the person typed next. Their reaction reveals what they actually wanted:
 {as_messages(follow_ups)}
 </follow_ups>
 
+What happened in the original attempt:
+<facts>
+{facts}
+</facts>
+What the original attempt took: {effort_text(original_effort(episode))}.
+{what_went_wrong}
 Working directory: {episode.cwd}
 
-Write three things:
+Write these:
 - success_means: one or two sentences stating the observable outcome a correct attempt produces.
 - checks: shell commands, run in the working directory after the attempt, that exit 0 only when the
   attempt succeeded. Leave the list empty unless such a command can be written reliably.
-- must_not: things a correct attempt must not do.
+- must_not: things a correct attempt must not do.{limits_line}
 Describe the outcome, never the implementation: do not name the fix, the file to change, or the code."""
 
 
-def draft_criterion(episode: Episode, follow_ups: list[str], ask: Ask = ask_claude) -> Criterion:
-    answer = ask(drafting_prompt(episode, follow_ups), CRITERION_SCHEMA)
-    return Criterion(answer["success_means"], tuple(answer["checks"]), tuple(answer["must_not"]), approved=False,
-                     model=answer.get(MODEL_RAN_KEY))
+def _limits(answer: dict) -> Limits | None:
+    """The limits a draft set, keeping only positive numbers; None when it set none."""
+    raw = answer.get("limits") if isinstance(answer.get("limits"), dict) else {}
+
+    def positive(key: str, kind):
+        value = raw.get(key)
+        return kind(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0 else None
+
+    limits = Limits(positive("max_tool_calls", int), positive("max_minutes", float), positive("max_usd", float))
+    return None if limits == Limits() else limits
+
+
+def half_of(effort: Effort) -> tuple[Limits | None, str]:
+    """A wasteful draft's limits when the drafter set none: half of what the original took, where known."""
+    limits = Limits(max(1, effort.tool_calls // 2) if effort.tool_calls else None,
+                    round(effort.minutes / 2, 1) if effort.minutes else None)
+    if limits == Limits():
+        return None, ""
+    return limits, f"half of what the original took ({effort_text(effort)}); the draft set no limits"
+
+
+def draft_criterion(episode: Episode, follow_ups: list[str], symptom: Symptom | None = None,
+                    ask: Ask = ask_claude) -> Criterion:
+    answer = ask(drafting_prompt(episode, follow_ups, symptom), criterion_schema(symptom))
+    limits, reason = _limits(answer), " ".join(str(answer.get("limits_reason") or "").split())
+    if limits is None and symptom == Symptom.WASTEFUL:
+        limits, reason = half_of(original_effort(episode))
+    criterion = Criterion(answer["success_means"], tuple(answer["checks"]), tuple(answer["must_not"]),
+                          approved=False, model=answer.get(MODEL_RAN_KEY), limits=limits,
+                          limits_reason=reason if limits else "", symptom=symptom.value if symptom else None)
+    return replace(criterion, drafted_hash=content_hash(criterion))
 
 
 def save_criterion(runs_dir: Path, episode_id: str, criterion: Criterion) -> Path:
@@ -260,8 +377,10 @@ def load_criterion(runs_dir: Path, episode_id: str) -> Criterion | None:
     data = read_json(episode_dir(runs_dir, episode_id) / CRITERION_FILE)
     if data is None:
         return None
+    limits = data.get("limits")
     return Criterion(data["success_means"], tuple(data["checks"]), tuple(data["must_not"]), bool(data["approved"]),
-                     data.get("model"))
+                     data.get("model"), _limits({"limits": limits}),
+                     data.get("limits_reason") or "", data.get("symptom"), data.get("drafted_hash"))
 
 
 def criterion_step(criterion: Criterion | None, episode_id: str, symptom: str | None) -> str:

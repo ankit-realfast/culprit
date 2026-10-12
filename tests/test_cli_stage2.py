@@ -148,3 +148,15 @@ def test_triage_lists_unreplayable_candidates_after_every_replayable_one(write_s
     assert "not replayable: working directory" in lines[lines.index(rows[1]) + 1]
     assert cli.main(["confirm", "1", "wasteful"]) == 0
     assert read_symptom(runs, "s1:p1").value == "wasteful"
+
+
+def test_confirm_drafts_for_the_confirmed_symptom_and_keeps_which_it_was(write_session, tmp_path, monkeypatch):
+    _, runs = queued_episode(write_session, tmp_path)
+    fake = FakeAsk({"success_means": "a.py works", "checks": [], "must_not": [],
+                    "limits": {"max_tool_calls": 1, "max_minutes": 1}, "limits_reason": "it took far too long"})
+    monkeypatch.setattr(cli, "ask_claude", fake)
+    assert cli.main(["confirm", "s1:p1", "wasteful"]) == 0
+    prompt, schema = fake.calls[0]
+    assert "What went wrong, as the person confirmed it: wasteful" in prompt
+    assert "limits" in schema["required"]
+    assert load_criterion(runs, "s1:p1").symptom == "wasteful"
