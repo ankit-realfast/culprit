@@ -229,3 +229,29 @@ def test_a_draft_from_before_symptom_tags_is_redrafted(write_session, tmp_path, 
     fake = drafted_for(monkeypatch, "wasteful", LEAN)
     assert len(fake.calls) == 1 and "✓ Redrafted for wasteful" in capsys.readouterr().out
     assert load_criterion(runs, "s1:p1").limits is not None
+
+
+def next_lines(out):
+    return out[out.index("Next\n"):].splitlines()[1:]
+
+
+def test_next_after_keeping_an_edited_draft_is_to_fit_it_to_the_symptom(write_session, tmp_path, monkeypatch,
+                                                                      capsys):
+    _, runs = queued_episode(write_session, tmp_path)
+    drafted_for(monkeypatch, "wrong-result", OUTCOME)
+    path = runs / "s1__p1" / "criterion.json"
+    path.write_text(json.dumps({**json.loads(path.read_text()), "must_not": ["skip tests"]}))
+    capsys.readouterr()
+    drafted_for(monkeypatch, "wasteful")
+    steps = " ".join(" ".join(next_lines(capsys.readouterr().out)).split())
+    assert f"1. Edit {path} so it fits wasteful (for wasteful, add limits)" in steps
+    assert "2. Then read it again and approve it: culprit confirm s1:p1" in steps
+
+
+def test_next_after_a_draft_with_limits_asks_to_check_them(write_session, tmp_path, monkeypatch, capsys):
+    _, runs = queued_episode(write_session, tmp_path)
+    drafted_for(monkeypatch, "wasteful", LEAN)
+    steps = " ".join(" ".join(next_lines(capsys.readouterr().out)).split())
+    assert f"1. Read the draft and check its limits. To change them, edit {runs / 's1__p1' / 'criterion.json'}" \
+        in steps
+    assert "2. Approve it: culprit confirm s1:p1 approve" in steps

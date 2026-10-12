@@ -234,7 +234,9 @@ cannot show an edit, so it counts as unedited; since the tag and the hash were a
 the untagged legacy draft, and a person's edits to one before this change are lost to the redraft. An edited
 draft is kept, with `Kept your edited draft; it was written for <old> — edit runs/…/criterion.json to match
 <symptom>`. An approved criterion is never redrafted; when its tag names another symptom, `confirm` says so.
-`confirm <episode>` with no symptom and the queue walk never redraft.
+`confirm <episode>` with no symptom and the queue walk never redraft. Next follows what happened: after a kept edited
+draft, `Edit runs/…/criterion.json so it fits <symptom>` (for wasteful, "add limits") then `culprit confirm
+<episode>` to read and approve it; after a draft with limits, `Read the draft and check its limits` then approve.
 
 Limits are part of the criterion's key, so changing them retires earlier runs like any other change; a
 criterion without limits keys as it did before limits existed.

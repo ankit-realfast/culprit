@@ -479,11 +479,14 @@ def confirm_one(args: argparse.Namespace) -> int:
         say(stored_suggestion_lines(args.runs, args.episode_id))
         answer = args.symptom or before.value
     say(["", symptom_line(args.runs, args.episode_id, before, Symptom(answer))])
+    kept = False
     if args.symptom:
-        say(redraft_for(args.runs, args.projects, args.episode_id, Symptom(args.symptom)))
+        lines, kept = redraft_for(args.runs, args.projects, args.episode_id, Symptom(args.symptom))
+        say(lines)
     answer = settle_criterion(args.runs, args.projects, args.episode_id, ask=stdin_is_tty(),
                               options=APPROVE_OPTIONS)
-    say(next_section(criterion_next(args.runs, args.episode_id, args.ref, answer)))
+    say(next_section(criterion_next(args.runs, args.episode_id, args.ref, answer,
+                                    misfit=Symptom(args.symptom) if kept else None)))
     return 0
 
 
@@ -509,25 +512,26 @@ def symptom_line(runs_dir: Path, episode_id: str, before: Symptom | None, sympto
     return f"{DONE} Changed what went wrong: {before.value} → {symptom.value}"
 
 
-def redraft_for(runs_dir: Path, projects_dir: Path, episode_id: str, symptom: Symptom) -> list[str]:
+def redraft_for(runs_dir: Path, projects_dir: Path, episode_id: str, symptom: Symptom) -> tuple[list[str], bool]:
     """Redraft an unapproved draft written for another symptom (or before drafts were tagged with one) when the
     person has not edited it; keep an edited one and say what it was written for. An approved criterion is never
-    redrafted. Returns the lines saying which happened (none when the draft already fits the symptom)."""
+    redrafted. Returns the lines saying which happened (none when the draft already fits the symptom) and whether
+    an edited draft written for another symptom was kept."""
     criterion = load_criterion(runs_dir, episode_id)
     if criterion is None or criterion.symptom == symptom.value:
-        return []
+        return [], False
     if criterion.approved:
         if criterion.symptom is None:
-            return []
+            return [], False
         return ["", *wrap(f"The approved criterion was written for {criterion.symptom}, not {symptom.value}; "
-                          f"approved criteria are never redrafted")]
+                          f"approved criteria are never redrafted")], False
     if criterion_edited(criterion):
         path = short_path(runs_dir, episode_id, CRITERION_FILE)
         return ["", *wrap(f"Kept your edited draft; it was written for {criterion.symptom} — edit {path} to match "
-                          f"{symptom.value}")]
+                          f"{symptom.value}")], True
     err(f"\nredrafting what success means for {symptom.value} (one model call)…")
     draft_criterion_for(runs_dir, projects_dir, episode_id)
-    return ["", f"{DONE} Redrafted for {symptom.value}"]
+    return ["", f"{DONE} Redrafted for {symptom.value}"], False
 
 
 def settle_criterion(runs_dir: Path, projects_dir: Path, episode_id: str, *, ask: bool,
@@ -552,13 +556,23 @@ def settle_criterion(runs_dir: Path, projects_dir: Path, episode_id: str, *, ask
     return answer
 
 
-def criterion_next(runs_dir: Path, episode_id: str, ref: str, answer: str) -> list[Step]:
+def criterion_next(runs_dir: Path, episode_id: str, ref: str, answer: str,
+                   misfit: Symptom | None = None) -> list[Step]:
+    """The next steps after confirm: diagnose once approved; otherwise edit or read the draft, then approve it.
+    misfit names the symptom a kept edited draft was not written for: the edit is then to fit it to that."""
     path = short_path(runs_dir, episode_id, CRITERION_FILE)
     if answer == "approved":
         return [Step("Diagnose it", f"culprit diagnose {ref}")]
+    if misfit is not None:
+        hint = " (for wasteful, add limits)" if misfit == Symptom.WASTEFUL else ""
+        return [Step(f"Edit {path} so it fits {misfit.value}{hint}"),
+                Step("Then read it again and approve it", f"culprit confirm {ref}")]
     if answer == "edit first":
         return [Step(f"Edit {path}"), Step("Then read it again and approve it", f"culprit confirm {ref}")]
-    return [Step(f"Read the draft. To change it, edit {path}"), Step("Approve it", f"culprit confirm {ref} {APPROVE}")]
+    criterion = load_criterion(runs_dir, episode_id)
+    read = (f"Read the draft and check its limits. To change them, edit {path}" if criterion and criterion.limits
+            else f"Read the draft. To change it, edit {path}")
+    return [Step(read), Step("Approve it", f"culprit confirm {ref} {APPROVE}")]
 
 
 def confirm_approve(args: argparse.Namespace) -> int:
