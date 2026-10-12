@@ -33,8 +33,10 @@ def test_review_labels_each_judged_replay_in_turn_then_status_shows_the_agreemen
     left = answering(monkeypatch, "p", "f")
     assert cli.main(["review"]) == 0
     out = capsys.readouterr().out
-    assert "s1__p1/replays/baseline/0" in out and "s1__p1/replays/baseline/1" in out and "judge: pass" in out
-    assert "every judged replay is labelled" in out
+    assert "Replay · s1:p1 · baseline run 0\n" in out and "Replay · s1:p1 · baseline run 1\n" in out
+    assert "  The judge said: pass" in out
+    assert "✓ Every judged replay is labelled" in out
+    assert out.endswith("Next\n  1. Label more replays as diagnoses add them:  culprit review\n")
     assert left == []
     assert json.loads((runs / "s1__p1/replays/baseline/0/human_label.json").read_text())["passed"] is True
     assert json.loads((runs / "s1__p1/replays/baseline/1/human_label.json").read_text())["passed"] is False
@@ -53,7 +55,7 @@ def test_review_skips_and_quits_on_request(tmp_path, capsys, monkeypatch):
     assert not (runs / "s1__p1/replays/baseline/0/human_label.json").exists()  # skipped
     assert (runs / "s1__p1/replays/baseline/1/human_label.json").exists()  # "maybe" asked again, then "pass"
     assert not (runs / "s1__p1/replays/baseline/2/human_label.json").exists()  # quit before it
-    assert "judge: 1 of 1 labels agree" in out
+    assert "Judge: 1 of 1 labels agree" in out
 
 
 def test_review_without_a_terminal_is_not_ready(tmp_path, capsys, monkeypatch):
@@ -92,7 +94,8 @@ def test_selftest_refuses_an_episode_that_is_not_a_control(write_session, tmp_pa
     outcome.write_text('{"variant": "baseline", "passes": 7, "runs": 10, "cost_usd": 1.0}')
     assert cli.main(["selftest", "s1:p1"]) == 1
     err = capsys.readouterr().err
-    assert "control" in err and "passed 7 of 10" in err and "at least 8 of 10" in err
+    assert "episode s1:p1 is not a control" in err and "passed 7 of 10" in err and "at least 8 of 10" in err
+    assert "Next\n  1. " in err
 
 
 def test_selftest_prints_each_fault_and_the_accuracy(write_session, tmp_path, capsys, monkeypatch):
@@ -109,9 +112,11 @@ def test_selftest_prints_each_fault_and_the_accuracy(write_session, tmp_path, ca
                                                               SelftestResult("truncated-prompt", "task", "harness")])
     assert cli.main(["selftest", "s1:p1"]) == 0
     out = capsys.readouterr().out
-    assert "weak-model: expected model, got model ✓" in out
-    assert "truncated-prompt: expected task, got harness ✗" in out
-    assert "1 of 2 planted faults named correctly" in out
+    assert out.startswith("Episode s1:p1\n")
+    assert "Planted faults\n  1. weak-model: expected model, got model — named correctly\n" in out
+    assert "  2. truncated-prompt: expected task, got harness — missed\n" in out
+    assert "Score\n  1 of 2 planted faults named correctly\n" in out
+    assert out.endswith("Next\n  1. See how far to trust the verdicts:  culprit status\n")
 
 
 def test_review_asks_with_the_shared_chooser(tmp_path, capsys, monkeypatch):
@@ -121,5 +126,5 @@ def test_review_asks_with_the_shared_chooser(tmp_path, capsys, monkeypatch):
     answers = ["2"]
     monkeypatch.setattr("builtins.input", lambda prompt="": asked.append(prompt) or answers.pop(0))
     assert cli.main(["review"]) == 0
-    assert asked == ["your verdict? 1 pass · 2 fail · 3 skip · 4 quit: "]
+    assert asked == ["\nYour verdict? 1 pass · 2 fail · 3 skip · 4 quit: "]
     assert json.loads((tmp_path / "runs/s1__p1/replays/baseline/0/human_label.json").read_text())["passed"] is False

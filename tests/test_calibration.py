@@ -76,5 +76,6 @@ def test_next_unlabelled_passes_over_skipped_runs(tmp_path):
 
 def test_the_summary_shows_answer_judgement_and_diff(tmp_path):
     summary = run_summary(judged(tmp_path, "s1__p1", "baseline", 0, False, reason="tests still fail"))
-    for expected in ["I fixed it", "judge: fail — tests still fail", "+new", "1 file changed"]:
+    for expected in ["Final answer\n  I fixed it", "The judge said: fail — tests still fail", "  +new",
+                     "1 file changed"]:
         assert expected in summary

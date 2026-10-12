@@ -93,9 +93,10 @@ def run_summary(run_dir: Path) -> str:
     verdict = "pass" if judgement["passed"] else "fail"
     preview = "\n".join(diff_lines[:DIFF_PREVIEW_LINES])
     more = f"\n… {len(diff_lines) - DIFF_PREVIEW_LINES} more diff lines" if len(diff_lines) > DIFF_PREVIEW_LINES else ""
-    return (f"final answer: {result.get('result_text', '')}\n"
-            f"judge: {verdict} — {judgement['reason']}\n"
-            f"{files_changed} file{'s' if files_changed != 1 else ''} changed\n{preview}{more}")
+    answer = "\n".join(f"  {line}" for line in (result.get("result_text") or "(none)").splitlines())
+    diff = "\n".join(f"  {line}" for line in f"{preview}{more}".splitlines())
+    return (f"Final answer\n{answer}\nThe judge said: {verdict} — {judgement['reason']}\n"
+            f"{files_changed} file{'s' if files_changed != 1 else ''} changed" + (f"\n{diff}" if diff else ""))
 
 
 # --- selftest ---

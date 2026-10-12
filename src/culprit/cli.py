@@ -814,9 +814,11 @@ def review_command(args: argparse.Namespace) -> int:
     """Show each judged replay nobody has labelled and record the person's pass/fail, until none are left."""
     require_terminal("review asks for your verdict on each replay")
     skipped: set[Path] = set()
+    lines = []
     while (run_dir := next_unlabelled(args.runs, skip=skipped)) is not None:
-        print(f"\n{run_id(args.runs, run_dir)}\n{run_summary(run_dir)}")
-        answer = choose("your verdict?", ("pass", "fail", "skip", "quit"))
+        say(["", replay_heading(args.runs, run_id(args.runs, run_dir)),
+             *(f"  {line}" for line in run_summary(run_dir).splitlines())])
+        answer = choose("\nYour verdict?", ("pass", "fail", "skip", "quit"))
         if answer == "quit":
             break
         if answer == "skip":
@@ -824,9 +826,21 @@ def review_command(args: argparse.Namespace) -> int:
         else:
             record_label(args.runs, run_id(args.runs, run_dir), answer == "pass")
     else:
-        print("every judged replay is labelled" + (f" or skipped ({len(skipped)} skipped)" if skipped else ""))
-    print(trust_lines(args.runs)[0])
+        lines = ["", f"{DONE} Every judged replay is labelled" + (f" ({len(skipped)} skipped)" if skipped else "")]
+    calibrated = agreement(args.runs).calibrated
+    step = (Step("See where every episode stands", "culprit status") if calibrated
+            else Step("Label more replays as diagnoses add them", "culprit review"))
+    say(lines + ["", *trust_block(trust_lines(args.runs))] + next_section([step]))
     return 0
+
+
+def replay_heading(runs_dir: Path, run: str) -> str:
+    """`Replay · s1:p1 · baseline run 0` for runs/<episode>/replays/<variant>/<n>; other runs by their path."""
+    folder, found, rest = run.partition("/replays/")
+    if not found or "__" not in folder:
+        return f"Replay · {run}"
+    variant, _, index = rest.rpartition("/")
+    return f"Replay · {display_id(runs_dir, folder.replace('__', ':', 1))} · {variant} run {index}"
 
 
 def agreement_json(result) -> dict:
@@ -840,10 +854,11 @@ def selftest_command(args: argparse.Namespace) -> int:
     if baseline is None:
         baseline = run_baseline(args, episode, criterion)
     if not is_control(args.runs, args.episode_id, RUNS_PER_VARIANT):
-        print(f"culprit: {display_id(args.runs, args.episode_id)} is not a control — its baseline passed "
-              f"{baseline.passes} of {baseline.runs}, and a control must pass at least "
-              f"{control_min_passes(RUNS_PER_VARIANT)} of {RUNS_PER_VARIANT}",
-              file=sys.stderr)
+        err("\n".join([f"culprit: episode {args.ref} is not a control — its baseline passed {baseline.passes} of "
+                       f"{baseline.runs}, and a control must pass at least {control_min_passes(RUNS_PER_VARIANT)} "
+                       f"of {RUNS_PER_VARIANT}",
+                       *next_section([Step("Plant faults in an episode that usually passes",
+                                           "culprit selftest <episode>")])]))
         return EXIT_REFUSED
     base = baseline_settings(episode)
     per_fault = fault_cap_usd(base.max_budget_usd)
@@ -853,9 +868,11 @@ def selftest_command(args: argparse.Namespace) -> int:
         results = run_selftest(episode, criterion, base, runs_dir=args.runs,
                                follow_ups=follow_up_prompts(args.projects, args.episode_id), n=RUNS_PER_VARIANT,
                                budget_per_fault=per_fault, progress=progress)
-    for result in results:
-        print(f"{result.fault}: expected {result.expected}, got {result.got} {'✓' if result.correct else '✗'}")
-    print(planted_line(sum(r.correct for r in results), len(results)))
+    faults = [f"{r.fault}: expected {r.expected}, got {r.got} — {'named correctly' if r.correct else 'missed'}"
+              for r in results]
+    say(["", "Planted faults", *numbered(faults, "  "), "", "Score",
+         f"  {planted_line(sum(r.correct for r in results), len(results))}",
+         *next_section([Step("See how far to trust the verdicts", "culprit status")])])
     return 0
 
 
