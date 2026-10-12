@@ -319,7 +319,8 @@ def test_the_report_and_status_show_the_network_counts(tmp_path):
     assert "network calls: baseline 12 served from the log, 3 refused as unrecorded" in render_report(collect(tmp_path), [])
     status = EpisodeStatus("a:1", "baselined", "run it",
                            outcomes=(VariantOutcome("baseline", 1, 10, 3.0, network={"served": 4, "refused": 2}),))
-    assert "baseline: 1 of 10 passed, network 4 served, 2 refused as unrecorded, $3.00" in status_lines(status)
+    assert "  baseline: 1 of 10 passed, network 4 served, 2 refused as unrecorded, $3.00" in status_lines(
+        tmp_path, status, "a:1")
 
 
 def test_a_web_hook_that_cannot_even_start_still_blocks_the_call(tmp_path):

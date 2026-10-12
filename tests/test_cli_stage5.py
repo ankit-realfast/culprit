@@ -39,7 +39,7 @@ def test_review_labels_each_judged_replay_in_turn_then_status_shows_the_agreemen
     assert json.loads((runs / "s1__p1/replays/baseline/0/human_label.json").read_text())["passed"] is True
     assert json.loads((runs / "s1__p1/replays/baseline/1/human_label.json").read_text())["passed"] is False
     assert cli.main(["status"]) == 0
-    assert "judge: 2 of 2 labels agree" in capsys.readouterr().out
+    assert "Judge: 2 of 2 labels agree" in capsys.readouterr().out
 
 
 def test_review_skips_and_quits_on_request(tmp_path, capsys, monkeypatch):

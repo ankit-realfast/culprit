@@ -10,7 +10,7 @@ from pathlib import Path
 
 from culprit.diagnose import (BASELINE, VariantOutcome, Verdict, load_instructions_draft, load_outcome, load_outcomes,
                               load_verdict, costs_line, limits_line, models_line, network_line, numbers_line, pristine_dir, stored_spend)
-from culprit.model import Criterion, criterion_step, load_criterion
+from culprit.model import CRITERION_FILE, Criterion, criterion_step, load_criterion
 from culprit.store import (SELFTEST_DIR, Cause, Symptom, confirm_step, display_id, episode_dir, known_episode_ids,
                            load_restore, prompt_excerpt, queued_ids, read_symptom)
 
@@ -332,3 +332,72 @@ def criterion_block(criterion: Criterion) -> list[str]:
     return [heading, "  Success means", *wrap(criterion.success_means, "    "),
             "  Must not", *(numbered(criterion.must_not) or ["    none"]),
             "  Checks", *(numbered(criterion.checks) or wrap(NO_CHECKS, "    "))]
+
+
+def verdict_lines(verdict: Verdict) -> list[str]:
+    """The verdict as `status` and `diagnose` show it: the cause, the evidence behind it, what was not tested."""
+    evidence = [verdict.evidence] + [line for line in (numbers_line(verdict), limits_line(verdict),
+                                                       network_line(verdict), costs_line(verdict),
+                                                       models_line(verdict)) if line]
+    lines = ["Verdict", f"  Cause: {verdict.cause}", "  Evidence", *(l for e in evidence for l in wrap(e, "    "))]
+    if verdict.pair:
+        lines.append(f"  Changed together: {' + '.join(verdict.pair)}")
+    if verdict.untested:
+        lines += ["  Not tested", *numbered(f"{cause}: {reason}" for cause, reason in verdict.untested.items())]
+    return lines
+
+
+def trust_block(trust: list[str]) -> list[str]:
+    """How far to trust the verdicts (trust_lines in the CLI), as a section for a person."""
+    lines = ["How far to trust the verdicts"]
+    for line in trust:
+        head, _, state = line.partition(" — ")  # the judge's calibration state goes on its own line
+        lines += wrap(head[:1].upper() + head[1:], "  ") + (wrap(state, "    ") if state else [])
+    return lines
+
+
+def progress_lines(runs_dir: Path, status: EpisodeStatus) -> list[str]:
+    """Each step of the pipeline, ✓ once done."""
+    steps = [("Queued", status.episode_id in queued_ids(runs_dir)),
+             (f"What went wrong: {status.symptom}" if status.symptom else "What went wrong", bool(status.symptom)),
+             ("Success criterion drafted", status.criterion is not None),
+             ("Success criterion approved", bool(status.criterion and status.criterion.approved)),
+             ("Starting files restored", pristine_dir(runs_dir, status.episode_id).is_dir()),
+             ("Baseline replayed", any(o.variant == BASELINE for o in status.outcomes)),
+             ("Diagnosed", status.verdict is not None)]
+    return [f"  {DONE if done else ' '} {words}" for words, done in steps]
+
+
+def episode_steps(runs_dir: Path, status: EpisodeStatus, ref: str) -> list[Step]:
+    """What to do next with one episode, in order, naming the episode as ref."""
+    confirm = Step("Say what went wrong (one of " + ", ".join(s.value for s in Symptom) + ")",
+                   f"culprit confirm {ref} <symptom>")
+    if status.stage == "not queued":
+        return [Step("Put it in the queue: rank failures until it is listed", "culprit triage"), confirm]
+    return {"queued": [confirm],
+            "confirmed": [Step("Draft what success means", f"culprit confirm {ref}")],
+            "criterion drafted": [
+                Step(f"Read the draft. To change it, edit {short_path(runs_dir, status.episode_id, CRITERION_FILE)}"),
+                Step("Approve it", f"culprit confirm {ref} approve")],
+            "diagnosed": [Step("Rank the changes across episodes", "culprit report")],
+            }.get(status.stage, [Step("Diagnose it", f"culprit diagnose {ref}")])
+
+
+def row_command(status: EpisodeStatus, ref: str) -> str:
+    """The one command that moves an episode on, for its row in the `status` list."""
+    return {"not queued": "culprit triage", "queued": f"culprit confirm {ref} <symptom>",
+            "confirmed": f"culprit confirm {ref}", "criterion drafted": f"culprit confirm {ref}",
+            "diagnosed": "culprit report"}.get(status.stage, f"culprit diagnose {ref}")
+
+
+def queue_steps(statuses: list[EpisodeStatus]) -> list[Step]:
+    """The Next section under the `status` list: the walk, the batch, the report, as far as the queue has got."""
+    stages = {status.stage for status in statuses}
+    steps = []
+    if stages & {"queued", "confirmed", "criterion drafted"}:
+        steps.append(Step("Confirm the queue, episode by episode", "culprit confirm"))
+    if stages & {"criterion approved", "restored", "baselined"}:
+        steps.append(Step("Diagnose every confirmed episode", "culprit diagnose"))
+    if "diagnosed" in stages:
+        steps.append(Step("Rank the changes across episodes", "culprit report"))
+    return steps + [Step("See one episode in full", "culprit status <row>")]

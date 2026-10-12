@@ -43,7 +43,7 @@ def test_next_lines_and_status_rows_use_the_short_id(write_session, tmp_path, ca
     assert "culprit confirm aaaaaaaa:bbbbbbbb approve" in out and A not in out
     assert cli.main(["status"]) == 0
     out = capsys.readouterr().out
-    assert "culprit status aaaaaaaa:bbbbbbbb" in out and "culprit confirm cccccccc:dddddddd" in out
+    assert "culprit confirm aaaaaaaa:bbbbbbbb\n" in out and "culprit confirm cccccccc:dddddddd <symptom>" in out
     assert A not in out
 
 
@@ -75,11 +75,11 @@ def test_status_rows_line_up_whatever_the_id_lengths(tmp_path, capsys):
     runs = tmp_path / "runs"
     queue(runs, A, TWIN, "s1:p1", B)
     assert cli.main(["status"]) == 0
-    rows = capsys.readouterr().out.split("\n\n")[0].splitlines()
-    assert len(rows) == 4
-    assert len({row.index("next:") for row in rows}) == 1
-    assert len({row.index("queued") for row in rows}) == 1
-    assert rows[0].startswith(A) and rows[2].startswith("s1:p1 ") and rows[3].startswith("cccccccc:dddddddd ")
+    rows = capsys.readouterr().out.split("\n\n")[0].splitlines()[1:]  # the heading, the column names, the rows
+    assert len(rows) == 5
+    assert len({row.index("Stage" if i == 0 else "queued") for i, row in enumerate(rows)}) == 1
+    assert len({row.index("Do next" if i == 0 else "culprit") for i, row in enumerate(rows)}) == 1
+    assert A in rows[1] and "s1:p1 " in rows[3] and "cccccccc:dddddddd " in rows[4]
 
 
 def test_triage_rows_show_the_short_id_and_the_queue_keeps_the_full_id(write_session, tmp_path, capsys):

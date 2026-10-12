@@ -27,12 +27,12 @@ from culprit.model import (CRITERION_FILE, LIMIT_WORDS, ClaudeCallFailed, Criter
                            criterion_step, draft_criterion, load_criterion, resolved_model, save_criterion)
 from culprit.replay import (REPLAY_BUDGET_FLOOR_USD, OriginalModified, SetupScriptFailed, apply_episode_originals,
                             baseline_settings, check_restore, episode_originals, restore, restore_from_git)
-from culprit.report import (DONE, REPORT_FILE, STAGES, EpisodeStatus, Step, block, collect, criterion_block,
-                            episode_header, episode_status, next_section, next_step, queue_status, render_report,
-                            short_path, wrap)
+from culprit.report import (DONE, REPORT_FILE, EpisodeStatus, Step, block, collect, criterion_block, episode_header,
+                            episode_status, episode_steps, next_section, next_step, progress_lines, queue_status,
+                            queue_steps, render_report, row_command, short_path, trust_block, verdict_lines, wrap)
 from culprit.store import (ORACLE_ORDER, RESTORE_FILE, Cause, NotReady, Symptom, UnknownEpisode, confirm_step,
-                           display_id, episode_dir, episode_ref, queued_ids, read_symptom, record_symptom,
-                           require_queue, resolve_episode_id, save_candidates, write_json)
+                           display_id, episode_dir, episode_ref, prompt_excerpt, queued_ids, read_symptom,
+                           record_symptom, require_queue, resolve_episode_id, save_candidates, write_json)
 from culprit.trust import (MIN_KAPPA, MIN_LABELS, UnknownRun, agreement, control_min_passes, is_control,
                            next_unlabelled, record_label, run_id, run_selftest, run_summary, selftest_accuracy,
                            selftest_cost)
@@ -587,12 +587,6 @@ def draft_criterion_for(runs_dir: Path, projects_dir: Path, episode_id: str) -> 
     return criterion
 
 
-def criterion_lines(criterion: Criterion) -> list[str]:
-    state = "approved" if criterion.approved else "draft, not approved"
-    return ([f"criterion [{state}]: {criterion.success_means}"] + [f"  check: {check}" for check in criterion.checks]
-            + [f"  must not: {rule}" for rule in criterion.must_not])
-
-
 def restored_lines(details: list[str]) -> list[str]:
     """What restore_episode found, under one done line."""
     return [f"{DONE} Restored the starting files", *(line for detail in details for line in wrap(detail, "    "))]
@@ -609,8 +603,7 @@ def status_command(args: argparse.Namespace) -> int:
         if args.json:
             emit(status_json(status))
             return 0
-        for line in status_lines(status):
-            print(line)
+        say(status_lines(args.runs, status, args.ref))
         return 0
     statuses = queue_status(args.runs)
     if args.json:
@@ -619,16 +612,27 @@ def status_command(args: argparse.Namespace) -> int:
               "selftest": {"correct": correct, "total": total}})
         return 0
     if not statuses:
-        print("nothing queued — run `culprit triage`")
-    shown = [display_id(args.runs, status.episode_id) for status in statuses]
-    id_width = max(map(len, shown), default=0)
-    stage_width = max(map(len, STAGES))
-    for name, status in zip(shown, statuses):
-        print(f"{name:<{id_width}}  {status.stage:<{stage_width}}  next: {status.next_step}")
-    print()
-    for line in trust_lines(args.runs):
-        print(line)
+        say(["Nothing queued yet.", *next_section([Step("Rank likely failures", "culprit triage")])])
+        return 0
+    say(status_table(args.runs, statuses) + ["", *trust_block(trust_lines(args.runs))]
+        + next_section(queue_steps(statuses)))
     return 0
+
+
+def status_table(runs_dir: Path, statuses: list[EpisodeStatus]) -> list[str]:
+    """One row per episode: its queue row, short id, stage and the command that moves it on; the prompt beneath."""
+    queue = queued_ids(runs_dir)
+    shown = [display_id(runs_dir, status.episode_id) for status in statuses]
+    rows = [(str(queue.index(status.episode_id) + 1) if status.episode_id in queue else "", name, status.stage,
+             row_command(status, name)) for name, status in zip(shown, statuses)]
+    id_width = max(len("Episode"), *map(len, shown))
+    stage_width = max(len("Stage"), *(len(status.stage) for status in statuses))
+    lines = ["Episodes", f"  Row  {'Episode':<{id_width}}  {'Stage':<{stage_width}}  Do next"]
+    for (row, name, stage, command), status in zip(rows, statuses):
+        lines.append(f"  {row:>3}  {name:<{id_width}}  {stage:<{stage_width}}  {command}")
+        if excerpt := prompt_excerpt(runs_dir, status.episode_id):
+            lines += wrap(f'"{excerpt}"', " " * 7)
+    return lines
 
 
 def status_json(status: EpisodeStatus) -> dict:
@@ -639,25 +643,30 @@ def status_json(status: EpisodeStatus) -> dict:
     return data
 
 
-def status_lines(status: EpisodeStatus) -> list[str]:
-    lines = [status.episode_id, f"stage: {status.stage}", f"symptom: {status.symptom or 'not confirmed'}"]
-    lines += criterion_lines(status.criterion) if status.criterion else ["criterion: none"]
+def status_lines(runs_dir: Path, status: EpisodeStatus, ref: str) -> list[str]:
+    lines = [*episode_header(runs_dir, status.episode_id, ref), *block("Progress", progress_lines(runs_dir, status))]
+    if status.criterion:
+        lines += ["", *criterion_block(status.criterion)]
     if status.restore:
         r = status.restore
-        lines.append(f"restore: snapshot agrees for {r.get('snapshot_agreed', 0)} of {r.get('checked', 0)} files, "
-                     f"{r.get('unknown', 0)} unknown, {r.get('missing_backups', 0)} missing backups")
-    for outcome in status.outcomes:
-        void = f", {outcome.void} void" if outcome.void else ""
-        if outcome.limits:
-            void += f", {sum(outcome.limits.values())} stopped at a limit ({limit_tally(outcome.limits)})"
-        if outcome.network:
-            void += f", network {outcome.network.get('served', 0)} served, {outcome.network.get('refused', 0)} refused as unrecorded"
-        lines.append(f"{outcome.variant}: {outcome.passes} of {outcome.runs} passed{void}, ${outcome.cost_usd:.2f}")
-    lines.append(f"spent: ${status.spent_usd:.2f}")
+        lines += block("Starting files", wrap(
+            f"The snapshot agrees with the episode's own record for {r.get('snapshot_agreed', 0)} of "
+            f"{r.get('checked', 0)} files; {r.get('unknown', 0)} unknown, {r.get('missing_backups', 0)} missing backups",
+            "  "))
+    if status.outcomes:
+        lines += ["", "Replays"]
+        for outcome in status.outcomes:
+            void = f", {outcome.void} void" if outcome.void else ""
+            if outcome.limits:
+                void += f", {sum(outcome.limits.values())} stopped at a limit ({limit_tally(outcome.limits)})"
+            if outcome.network:
+                void += (f", network {outcome.network.get('served', 0)} served, "
+                         f"{outcome.network.get('refused', 0)} refused as unrecorded")
+            lines.append(f"  {outcome.variant}: {outcome.passes} of {outcome.runs} passed{void}, ${outcome.cost_usd:.2f}")
+        lines.append(f"  Spent so far: ${status.spent_usd:.2f}")
     if status.verdict:
-        lines.append(f"cause: {status.verdict.cause} — {status.verdict.evidence}")
-    lines.append(f"next: {status.next_step}")
-    return lines
+        lines += ["", *verdict_lines(status.verdict)]
+    return lines + next_section(episode_steps(runs_dir, status, ref))
 
 
 class NotReplayable(Exception):

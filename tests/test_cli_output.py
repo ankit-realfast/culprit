@@ -201,3 +201,127 @@ def test_checks_are_listed_by_number(row4, capsys, monkeypatch):
     monkeypatch.setattr(cli, "ask_claude", FakeAsk({**DRAFT, "checks": ["npm test", "npm run lint"]}))
     cli.main(["confirm", "4", "wrong-result"])
     assert "  Checks\n    1. npm test\n    2. npm run lint\n" in capsys.readouterr().out
+
+
+def diagnosed(runs):
+    """Row 4 confirmed, approved, restored, baselined and diagnosed, from files as the pipeline writes them."""
+    from culprit.diagnose import Verdict, save_verdict
+    folder = episode_dir(runs, EP)
+    (folder / "pristine").mkdir(parents=True)
+    (folder / "symptom.json").write_text(json.dumps({"episode_id": EP, "symptom": "wrong-result"}))
+    save_criterion(runs, EP, Criterion(SUCCESS, ("npm test",), tuple(DRAFT["must_not"]), approved=True))
+    (folder / "restore.json").write_text(json.dumps({"snapshot_agreed": 3, "checked": 4, "unknown": 1,
+                                                     "missing_backups": 0}))
+    outcomes = {"baseline": {"variant": "baseline", "passes": 0, "runs": 5, "cost_usd": 1.5, "void": 0},
+                "harness": {"variant": "harness", "passes": 4, "runs": 5, "cost_usd": 2.0, "void": 1}}
+    for name, outcome in outcomes.items():
+        (folder / "replays" / name).mkdir(parents=True)
+        (folder / "replays" / name / "outcome.json").write_text(json.dumps(outcome))
+        (folder / "replays" / name / "0").mkdir()
+        (folder / "replays" / name / "0" / "result.json").write_text(json.dumps({"cost_usd": outcome["cost_usd"]}))
+    verdict = Verdict(EP, "wrong-result", "harness", "harness passed 4/5 against the baseline's 0/5", outcomes,
+                      {"environment": "no environment fix supplied (culprit env-fix)"})
+    save_verdict(folder, verdict)
+    return verdict
+
+
+STATUS_DIAGNOSED = f"""{HEADER}
+Progress
+  ✓ Queued
+  ✓ What went wrong: wrong-result
+  ✓ Success criterion drafted
+  ✓ Success criterion approved
+  ✓ Starting files restored
+  ✓ Baseline replayed
+  ✓ Diagnosed
+
+Success criterion — approved
+  Success means
+    On the dashboard people view, applying any filter keeps the list and its loading state visible:
+    the list shows only the matching people, and clearing the filter brings every person back.
+  Must not
+    1. Remove or disable the filter feature
+    2. Change how the list looks with no filter active
+  Checks
+    1. npm test
+
+Starting files
+  The snapshot agrees with the episode's own record for 3 of 4 files; 1 unknown, 0 missing backups
+
+Replays
+  baseline: 0 of 5 passed, $1.50
+  harness: 4 of 5 passed, 1 void, $2.00
+  Spent so far: $3.50
+
+Verdict
+  Cause: harness
+  Evidence
+    harness passed 4/5 against the baseline's 0/5
+    harness: baseline 0/5 → 4/5, p = 0.0238
+  Not tested
+    1. environment: no environment fix supplied (culprit env-fix)
+
+Next
+  1. Rank the changes across episodes:  culprit report
+"""
+
+
+def test_status_of_one_episode_reads_top_to_bottom(row4, capsys):
+    diagnosed(row4)
+    assert cli.main(["status", "4"]) == 0
+    assert capsys.readouterr().out == STATUS_DIAGNOSED
+
+
+def test_status_of_a_draft_marks_the_steps_done_and_names_approve(row4, capsys):
+    cli.main(["confirm", "4", "wrong-result"])
+    capsys.readouterr()
+    assert cli.main(["status", "4"]) == 0
+    assert capsys.readouterr().out == f"""{HEADER}
+Progress
+  ✓ Queued
+  ✓ What went wrong: wrong-result
+  ✓ Success criterion drafted
+    Success criterion approved
+    Starting files restored
+    Baseline replayed
+    Diagnosed
+
+{DRAFT_BLOCK}
+Next
+  1. Read the draft. To change it, edit runs/50c0a213…b0567c84/criterion.json
+  2. Approve it:  culprit confirm 4 approve
+"""
+
+
+def test_status_lists_every_episode_then_trust_then_next(row4, capsys):
+    cli.main(["confirm", "4", "wrong-result"])
+    capsys.readouterr()
+    assert cli.main(["status"]) == 0
+    assert capsys.readouterr().out == f"""Episodes
+  Row  Episode            Stage              Do next
+    1  11111111:22222222  queued             culprit confirm 11111111:22222222 <symptom>
+       "other"
+    2  33333333:44444444  queued             culprit confirm 33333333:44444444 <symptom>
+       "other"
+    3  55555555:66666666  queued             culprit confirm 55555555:66666666 <symptom>
+       "other"
+    4  50c0a213:b0567c84  criterion drafted  culprit confirm 50c0a213:b0567c84
+       "{EXCERPT}"
+
+How far to trust the verdicts
+  Judge: 0 of 0 labels agree, kappa not computable yet
+    uncalibrated (needs 20 labels and kappa ≥ 0.6)
+  Selftest: not run
+
+Next
+  1. Confirm the queue, episode by episode:  culprit confirm
+  2. See one episode in full:  culprit status <row>
+"""
+
+
+def test_status_with_nothing_queued_names_triage(tmp_path, capsys):
+    (tmp_path / "runs").mkdir()
+    assert cli.main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("Nothing queued yet.\n")
+    assert out.endswith("Next\n  1. Rank likely failures:  culprit triage\n")

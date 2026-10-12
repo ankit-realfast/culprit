@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import culprit.cli as cli
 from culprit.diagnose import Verdict, save_verdict
@@ -81,16 +82,17 @@ def test_queue_status_lists_queued_episodes_and_episode_folders(tmp_path):
         (ID, "queued"), ("cccccccc3333:dddddddd4444", "queued"), ("eeeeeeee5555:ffffffff6666", "confirmed")]
 
 
-def test_status_without_an_id_prints_one_line_per_episode(tmp_path, capsys):
+def test_status_without_an_id_prints_one_row_per_episode(tmp_path, capsys):
     runs = tmp_path / "runs"
     queue(runs, ID)
     confirm(runs)
     assert cli.main(["status"]) == 0
-    out, trust = capsys.readouterr().out.split("\n\n")  # the episode rows, then how far to trust verdicts
-    out = out.splitlines()
-    assert len(out) == 1
-    assert "judge: 0 of 0 labels agree" in trust and "selftest: not run" in trust
-    assert "aaaaaaaa:bbbbbbbb" in out[0] and "confirmed" in out[0] and f"culprit confirm {short_id(ID)} wrong-result" in out[0]
+    episodes, trust, steps = capsys.readouterr().out.split("\n\n")  # the rows, how far to trust verdicts, Next
+    rows = episodes.splitlines()[2:]
+    assert len(rows) == 1
+    assert "Judge: 0 of 0 labels agree" in trust and "Selftest: not run" in trust
+    assert "aaaaaaaa:bbbbbbbb" in rows[0] and "confirmed" in rows[0] and f"culprit confirm {short_id(ID)}" in rows[0]
+    assert steps.startswith("Next\n")
 
 
 def test_status_with_an_id_shows_criterion_restore_runs_spend_and_verdict(tmp_path, capsys):
@@ -105,13 +107,14 @@ def test_status_with_an_id_shows_criterion_restore_runs_spend_and_verdict(tmp_pa
     save_verdict(episode_dir(runs, ID), Verdict(ID, "wrong-result", "harness", "harness passed 4/5", {}, {}))
     assert cli.main(["status", "#1"]) == 0
     out = capsys.readouterr().out
-    assert "diagnosed" in out
-    assert "approved" in out and "the tests pass" in out
-    assert "check: pytest -q" in out and "must not: delete tests" in out
+    assert out.startswith("Episode 1 · aaaaaaaa:bbbbbbbb\n")
+    assert "✓ Diagnosed" in out
+    assert "Success criterion — approved" in out and "the tests pass" in out
+    assert "Checks\n    1. pytest -q" in out and "Must not\n    1. delete tests" in out
     assert "3 of 4" in out
     assert "baseline: 1 of 5 passed" in out
     assert "$1.50" in out
-    assert "cause: harness" in out
+    assert "Cause: harness" in out
 
 
 def test_status_refuses_a_missing_store(tmp_path, capsys, monkeypatch):
@@ -126,4 +129,5 @@ def test_status_shows_runs_stopped_at_a_limit():
     from culprit.diagnose import VariantOutcome
     status = EpisodeStatus(ID, "baselined", "run it", outcomes=(VariantOutcome("baseline", 1, 10, 30.0, 0,
                                                                                {"budget": 4}),))
-    assert "baseline: 1 of 10 passed, 4 stopped at a limit (budget 4), $30.00" in status_lines(status)
+    lines = status_lines(Path("runs"), status, "1")
+    assert "  baseline: 1 of 10 passed, 4 stopped at a limit (budget 4), $30.00" in lines
