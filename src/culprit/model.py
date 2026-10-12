@@ -16,7 +16,7 @@ from typing import Callable
 from culprit.logs import Episode
 from culprit.replay import (DIFF_FILE, LIMIT_BUDGET, LIMIT_TIME, NO_MCP_SERVERS, TRANSCRIPT_FILE, ReplayResult,
                             ran_as)
-from culprit.store import NotReady, display_id, episode_dir, read_json, write_json
+from culprit.store import SYMPTOM_MEANINGS, NotReady, Symptom, display_id, episode_dir, read_json, write_json
 
 
 # --- claude: The one place culprit asks a model a question: a locked-down headless Claude call with a JSON schema. ---
@@ -282,6 +282,63 @@ def approve_criterion(runs_dir: Path, episode_id: str) -> Criterion:
     approved = replace(criterion, approved=True)
     save_criterion(runs_dir, episode_id, approved)
     return approved
+
+
+# --- suggestion: Which symptom the What happened facts point to, for the person to accept or overrule. ---
+# Shown the facts only (never the criterion or the person's later messages beyond the next prompt the facts
+# quote), so the person can check the reason against the block printed above it.
+
+SUGGESTION_FILE = "suggestion.json"
+SUGGESTION_SCHEMA = {
+    "type": "object",
+    "properties": {"symptom": {"type": "string", "enum": [s.value for s in Symptom]},
+                   "reason": {"type": "string"}},
+    "required": ["symptom", "reason"],
+}
+
+
+@dataclass(frozen=True)
+class Suggestion:
+    symptom: Symptom
+    reason: str
+    model: str | None = None
+
+
+def suggestion_prompt(facts: str) -> str:
+    symptoms = "\n".join(f"- {symptom.value}: {meaning}" for symptom, meaning in SYMPTOM_MEANINGS.items())
+    return f"""A person asked a coding agent for something. Below are the facts of what happened, taken from the
+session log. Suggest which one symptom describes it best; the person will accept or overrule you.
+
+<facts>
+{facts}
+</facts>
+
+The symptoms:
+{symptoms}
+
+Pick no-failure only when nothing in the facts points to a problem. A next message that repeats or corrects
+the request usually means the attempt did not work.
+
+reason: one line, under 25 words, that cites a specific fact above (a number, a file name, or a short quote),
+so the person can check it."""
+
+
+def suggest_symptom(facts: str, ask: Ask = ask_claude) -> Suggestion:
+    """One call; raises ClaudeCallFailed when the answer names no known symptom or gives no reason."""
+    answer = ask(suggestion_prompt(facts), SUGGESTION_SCHEMA)
+    symptom, reason = answer.get("symptom"), answer.get("reason")
+    if symptom not in {s.value for s in Symptom} or not isinstance(reason, str) or not reason.strip():
+        raise ClaudeCallFailed("the suggestion named no known symptom or gave no reason")
+    return Suggestion(Symptom(symptom), " ".join(reason.split()), answer.get(MODEL_RAN_KEY))
+
+
+def save_suggestion(runs_dir: Path, episode_id: str, suggestion: Suggestion) -> Path:
+    return write_json(episode_dir(runs_dir, episode_id) / SUGGESTION_FILE, asdict(suggestion))
+
+
+def load_suggestion(runs_dir: Path, episode_id: str) -> Suggestion | None:
+    data = read_json(episode_dir(runs_dir, episode_id) / SUGGESTION_FILE)
+    return None if data is None else Suggestion(Symptom(data["symptom"]), data["reason"], data.get("model"))
 
 
 # --- leak: The leak check: an oracle may add only what its actor could have known before starting. ---

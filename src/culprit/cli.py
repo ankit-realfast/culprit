@@ -23,14 +23,15 @@ from culprit.diagnose import (BASELINE, DRAFTED_CAUSES, ENV_FIX_FILE, BudgetExha
 from culprit.logs import (Episode, EpisodeNotFound, FailureSignals, WhatHappened, find_episode, follow_up_prompts,
                           load_snapshot, project_hooks, rank_candidates, replay_blockers, session_files, session_root,
                           summarize_session, what_happened)
-from culprit.model import (CRITERION_FILE, LIMIT_WORDS, ClaudeCallFailed, Criterion, approve_criterion, ask_claude,
-                           draft_criterion, load_criterion, resolved_model, save_criterion)
+from culprit.model import (CALL_CAP_USD, CRITERION_FILE, LIMIT_WORDS, ClaudeCallFailed, Criterion, Suggestion,
+                           approve_criterion, ask_claude, draft_criterion, load_criterion, load_suggestion,
+                           resolved_model, save_criterion, save_suggestion, suggest_symptom)
 from culprit.replay import (REPLAY_BUDGET_FLOOR_USD, OriginalModified, SetupScriptFailed, apply_episode_originals,
                             baseline_settings, check_restore, episode_originals, restore, restore_from_git)
 from culprit.report import (DONE, REPORT_FILE, EpisodeStatus, Step, block, collect, criterion_block, episode_header,
                             episode_status, episode_steps, next_section, progress_lines, queue_status,
                             numbered, queue_steps, render_report, row_command, short_path, shown_runs, trust_block,
-                            verdict_lines, what_happened_block, wrap)
+                            suggestion_lines, symptoms_block, verdict_lines, what_happened_block, wrap)
 from culprit.store import (ORACLE_ORDER, RESTORE_FILE, Cause, NotReady, Symptom, UnknownEpisode,
                            display_id, episode_dir, episode_ref, prompt_excerpt, queued_ids, read_symptom,
                            record_symptom, require_queue, resolve_episode_id, save_candidates, write_json)
@@ -237,6 +238,7 @@ one episode at a time:
   culprit confirm 1 wrong-result          record it, draft what success means, ask to approve it
   culprit diagnose 1                      restore, replay, find the layer to change
 without a terminal:
+  culprit confirm 1                       what happened and a suggested symptom; records nothing
   culprit confirm 1 wrong-result          record it and draft what success means
   culprit status 1                        read the draft (edit runs/<episode>/criterion.json if needed)
   culprit confirm 1 approve               approve it
@@ -246,7 +248,8 @@ EXAMPLES = {
     "triage": "  culprit triage --top 40\n  CULPRIT_PROJECTS=~/other/projects CULPRIT_RUNS=~/work/runs culprit triage\n",
     "confirm": ("  culprit confirm                         each queued episode in turn: symptom, criterion, restore\n"
                 "  culprit confirm 1 wrong-result         record it, draft what success means, ask to approve it\n"
-                "  culprit confirm 1                      show the draft again and ask (once a symptom is recorded)\n"
+                "  culprit confirm 1                      what happened and a suggested symptom (Enter accepts it);\n"
+                "                                         once a symptom is recorded, the draft again to approve\n"
                 "  culprit confirm 1 approve              approve the draft without a terminal\n"
                 "  culprit confirm 1a2b3c4d:5e6f7a8b no-failure\n"),
     "status": "  culprit status\n  culprit status 1\n  culprit status --json   one JSON document, for scripts\n",
@@ -420,6 +423,37 @@ def symptoms_needed(ref: str) -> str:
             f"{', '.join(s.value for s in Symptom)}")
 
 
+def suggestion_for(runs_dir: Path, episode_id: str, recap: WhatHappened | None) -> Suggestion | None:
+    """The stored suggestion, else one model call shown only the recap's facts, charged to the episode at its cap
+    and stored; None when there are no facts or the call fails (the question is then asked with no default)."""
+    if (stored := load_suggestion(runs_dir, episode_id)) is not None or recap is None:
+        return stored
+    err("\nsuggesting a symptom from what happened (one model call)…")
+    record_call_spend(episode_dir(runs_dir, episode_id), CALL_CAP_USD)
+    try:
+        suggestion = suggest_symptom(recap.as_text(), ask=ask_claude)
+    except ClaudeCallFailed as failure:
+        err(f"culprit: no symptom suggested: {failure}")
+        return None
+    save_suggestion(runs_dir, episode_id, suggestion)
+    return suggestion
+
+
+def ask_symptom(runs_dir: Path, episode_id: str, recap: WhatHappened | None, extra: Sequence[str]) -> str:
+    """Suggest a symptom (below the recap already shown), list the five with their meanings and ask; Enter takes
+    the suggestion. Returns a symptom's value or one of extra ("skip", "quit")."""
+    suggestion = suggestion_for(runs_dir, episode_id, recap)
+    say((suggestion_lines(suggestion) if suggestion else []) + symptoms_block(numbered=True))
+    return choose("\nWhat went wrong?", [*(s.value for s in Symptom), *extra],
+                  default=suggestion.symptom.value if suggestion else None)
+
+
+def stored_suggestion_lines(runs_dir: Path, episode_id: str) -> list[str]:
+    """A suggestion made earlier, shown again without a call."""
+    suggestion = load_suggestion(runs_dir, episode_id)
+    return suggestion_lines(suggestion) if suggestion else []
+
+
 def confirm_command(args: argparse.Namespace) -> int:
     if args.episode_id is None:
         return confirm_queue(args)
@@ -432,20 +466,34 @@ def confirm_one(args: argparse.Namespace) -> int:
     """Record the symptom (asked in a terminal when none is given or recorded), draft the criterion when there is
     none, show it, and in a terminal ask whether to approve it. Confirming a symptom never approves anything."""
     before = read_symptom(args.runs, args.episode_id)
+    recap = recap_for(args.projects, args.episode_id)
+    say(episode_header(args.runs, args.episode_id, args.ref) + (["", *what_happened_block(recap)] if recap else []))
     if args.symptom is None and before is None and not stdin_is_tty():
-        raise NotReady(symptoms_needed(args.ref))
-    say(episode_header(args.runs, args.episode_id, args.ref) + recap_lines(args.projects, args.episode_id))
+        return show_suggestion(args, recap)
     if args.symptom is None and before is None:
-        answer = choose("\nWhat went wrong?", [*(s.value for s in Symptom), "skip"])
+        answer = ask_symptom(args.runs, args.episode_id, recap, ["skip"])
         if answer == "skip":
             say(next_section([Step("Say what went wrong", f"culprit confirm {args.ref} <symptom>")]))
             return 0
     else:
+        say(stored_suggestion_lines(args.runs, args.episode_id))
         answer = args.symptom or before.value
     say(["", symptom_line(args.runs, args.episode_id, before, Symptom(answer))])
     answer = settle_criterion(args.runs, args.projects, args.episode_id, ask=stdin_is_tty(),
                               options=APPROVE_OPTIONS)
     say(next_section(criterion_next(args.runs, args.episode_id, args.ref, answer)))
+    return 0
+
+
+def show_suggestion(args: argparse.Namespace, recap: WhatHappened | None) -> int:
+    """Without a terminal and with no symptom: suggest one and list the five, then name the commands that record
+    it. Records nothing — the person chooses by running one."""
+    suggestion = suggestion_for(args.runs, args.episode_id, recap)
+    steps = [Step("Say what went wrong", f"culprit confirm {args.ref} <symptom>")]
+    if suggestion:
+        steps = [Step("Record the suggested symptom", f"culprit confirm {args.ref} {suggestion.symptom.value}"),
+                 Step("Or say another one", f"culprit confirm {args.ref} <symptom>")]
+    say((suggestion_lines(suggestion) if suggestion else []) + symptoms_block() + next_section(steps))
     return 0
 
 
@@ -507,10 +555,13 @@ def confirm_approve(args: argparse.Namespace) -> int:
     return 0
 
 
-def choose(prompt: str, options: Sequence[str], read: Callable[[str], str] | None = None) -> str:
+def choose(prompt: str, options: Sequence[str], read: Callable[[str], str] | None = None,
+           default: str | None = None) -> str:
     """Ask until the answer picks one of options — its number, its first letter when no other option shares
-    it, or the whole word — and return that word. End of input picks "quit" when it is an option."""
-    question = f"{prompt} " + " · ".join(f"{i} {word}" for i, word in enumerate(options, 1)) + ": "
+    it, or the whole word — and return that word; Enter alone picks default when there is one, which the
+    question names. End of input picks "quit" when it is an option."""
+    question = (f"{prompt} " + " · ".join(f"{i} {word}" for i, word in enumerate(options, 1))
+                + (f" — Enter for {default}" if default else "") + ": ")
     letters = [word[0] for word in options]
     picks = {**{str(i): word for i, word in enumerate(options, 1)}, **{word: word for word in options},
              **{word[0]: word for word in options if letters.count(word[0]) == 1}}
@@ -523,6 +574,8 @@ def choose(prompt: str, options: Sequence[str], read: Callable[[str], str] | Non
             raise
         if answer in picks:
             return picks[answer]
+        if not answer and default:
+            return default
 
 
 def confirm_queue(args: argparse.Namespace) -> int:
@@ -593,16 +646,18 @@ def confirm_walk_step(args: argparse.Namespace, position: int, row: dict, blocke
     episode_id = summary["episode_id"]
     signals = summary.get("signals")
     lines = ["", *episode_header(args.runs, episode_id, str(position))]
-    recap = recap_lines(args.projects, episode_id)
+    recap = recap_for(args.projects, episode_id)
     if not recap and signals:  # the session log is gone: what triage saw of it is all there is
         lines.append(f"  {_evidence(stored_signals(signals))}")
-    lines += [line for blocker in blockers for line in wrap(f"Not replayable: {blocker}", "  ")] + recap
-    say(lines)
+    lines += [line for blocker in blockers for line in wrap(f"Not replayable: {blocker}", "  ")]
+    say(lines + (["", *what_happened_block(recap)] if recap else []))
     before = read_symptom(args.runs, episode_id)
     if before is None:
-        answer = choose("\nWhat went wrong?", [*(s.value for s in Symptom), "skip", "quit"])
+        answer = ask_symptom(args.runs, episode_id, recap, ["skip", "quit"])
         if answer in ("skip", "quit"):
             return answer
+    else:
+        say(stored_suggestion_lines(args.runs, episode_id))
     say(["", symptom_line(args.runs, episode_id, before, before or Symptom(answer))])
     try:
         answer = settle_criterion(args.runs, args.projects, episode_id, ask=True,
@@ -638,7 +693,8 @@ def status_command(args: argparse.Namespace) -> int:
         if args.json:
             emit(status_json(status))
             return 0
-        say(status_lines(args.runs, status, args.ref, recap_lines(args.projects, args.episode_id)))
+        say(status_lines(args.runs, status, args.ref, recap_lines(args.projects, args.episode_id)
+                         + stored_suggestion_lines(args.runs, args.episode_id)))
         return 0
     statuses = queue_status(args.runs)
     if args.json:

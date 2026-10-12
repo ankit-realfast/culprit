@@ -76,6 +76,10 @@ uv run culprit status [1]          # where episodes stand and the next command
   a recap read from the session log (no model call): what you asked, what Claude did (tool calls, files edited,
   tool errors and the first one), Claude's last words, how it ended (you interrupted it, it finished, or API
   errors ended it, with how long it took) and what you said next — so you can tell days later what went wrong.
+  Before asking what went wrong, confirm shows `Suggested: <symptom> — <reason>` from one model call that sees
+  only those facts (kept in `runs/<episode>/suggestion.json`, so it is paid for once) and lists the five
+  symptoms with what each means; in a terminal Enter accepts the suggestion. Without a terminal,
+  `confirm <episode>` shows the same and records nothing: run `confirm <episode> <symptom>` to choose.
 - **Confirming one episode:** `confirm <episode> <symptom>` records what went wrong, drafts the success
   criterion, shows it and, in a terminal, asks: approve, edit first, or skip. To edit, change
   `runs/<episode>/criterion.json`, then run `confirm <episode>` (no symptom needed once one is recorded) to see

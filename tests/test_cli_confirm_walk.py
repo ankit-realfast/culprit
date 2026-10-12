@@ -50,8 +50,22 @@ def two_queued(write_session, tmp_path):
     return runs
 
 
+class Drafts(FakeAsk):
+    """Answers criterion drafts in order (counted in calls) and every symptom suggestion with wrong-result."""
+
+    def __init__(self, *responses):
+        super().__init__(*responses)
+        self.suggested = []
+
+    def __call__(self, prompt, schema):
+        if "symptom" in schema["properties"]:
+            self.suggested.append(prompt)
+            return {"symptom": "wrong-result", "reason": "you said next that it was still broken"}
+        return super().__call__(prompt, schema)
+
+
 def drafts(monkeypatch, n=2):
-    fake = FakeAsk(*[{"success_means": f"works {i}", "checks": [], "must_not": []} for i in range(n)])
+    fake = Drafts(*[{"success_means": f"works {i}", "checks": [], "must_not": []} for i in range(n)])
     monkeypatch.setattr(cli, "ask_claude", fake)
     return fake
 
@@ -145,10 +159,12 @@ def test_an_unknown_answer_is_asked_again_and_end_of_input_quits(write_session, 
 
 
 def test_confirm_with_an_id_but_no_symptom_names_the_symptoms(write_session, tmp_path, capsys):
-    two_queued(write_session, tmp_path)
-    assert cli.main(["confirm", "s1:p1"]) == 3
-    err = capsys.readouterr().err
-    assert "wrong-result" in err and "culprit confirm s1:p1 <symptom>" in err
+    runs = two_queued(write_session, tmp_path)
+    assert cli.main(["confirm", "s1:p1"]) == 0  # the default fake answers no suggestion
+    out = capsys.readouterr().out
+    assert "Suggested" not in out and "  no-failure            nothing went wrong" in out
+    assert out.endswith("Next\n  1. Say what went wrong:  culprit confirm s1:p1 <symptom>\n")
+    assert read_symptom(runs, "s1:p1") is None
 
 
 def test_an_episode_whose_log_is_gone_keeps_its_symptom_and_the_walk_goes_on(write_session, tmp_path, capsys,

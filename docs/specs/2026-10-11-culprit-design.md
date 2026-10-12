@@ -144,8 +144,8 @@ state; v1 uses `claude -p` in a throwaway directory and revisits Harbor if isola
 
 The package is standard-library Python in nine modules, one per pipeline stage: `logs` (episodes,
 failure signals, triage, locating an episode, snapshots, replay eligibility), `store` (taxonomy and the
-plain-file store), `model` (every model call: the locked-down call, criterion drafting, leak check,
-judge), `replay` (restore and one replay), `stubs` (the stand-in MCP servers, run as their own light
+plain-file store), `model` (every model call: the locked-down call, criterion drafting, the symptom
+suggestion, leak check, judge), `replay` (restore and one replay), `stubs` (the stand-in MCP servers, run as their own light
 processes: `python -m culprit.stubs mcp …` and `python -m culprit.stubs answers …`), `diagnose`
 (variants, oracles, verdict and its statistics, cost preview, the whole-queue batch), `trust` (judge
 calibration and selftest), `report` (the report and per-episode status) and `cli`.
@@ -156,7 +156,7 @@ Storage is plain files: one folder per episode holding its variants, transcripts
 
 Models are named by Claude Code alias (2.1.296: `fable`, `opus`, `sonnet`, `haiku`, each the latest model of
 its tier), so culprit follows new releases without a code change: the model oracle uses `fable`, every
-drafting, leak-check and judge call `sonnet`, and selftest's weak-model fault `haiku`. `CULPRIT_ORACLE_MODEL`,
+drafting, suggestion, leak-check and judge call `sonnet`, and selftest's weak-model fault `haiku`. `CULPRIT_ORACLE_MODEL`,
 `CULPRIT_DRAFTING_MODEL` and `CULPRIT_WEAK_MODEL` pin another alias or id; each is read when it is used.
 
 culprit knows four families (`fable`, `opus`, `sonnet`, `haiku`, parsed from ids like `claude-<family>-<version>`).
@@ -183,7 +183,17 @@ What happened, built from the episode's records with no model call: what the per
 characters), what Claude did (tool calls; files Edit, Write and NotebookEdit targeted, relative to the working
 directory, at most five then "+N more"; tool errors and the first one's first line), Claude's last text, how it
 ended (the person interrupted it, it finished — each with how long it took — or API errors ended it) and the
-person's next prompt; a missing session log leaves it out;
+person's next prompt; a missing session log leaves it out.
+Below it comes a suggested symptom, `Suggested: wrong-result — <reason>`: one `sonnet` call shown only those
+facts (never the criterion) picks one of the five symptoms and gives a non-empty one-line reason citing a fact
+from the block; the call is charged to the episode at its cap and the answer kept in
+`runs/<episode>/suggestion.json`, so it is paid for once. It is asked only when the symptom question is about to
+be asked (no recorded symptom and none typed); otherwise a stored suggestion is shown beside the recorded or
+typed symptom, without a warning when they differ. In a terminal the question lists the five symptoms, each
+with its one-line meaning, and Enter accepts the suggestion; a failed call leaves no suggestion and no
+default. Without a terminal, `confirm <episode>` with no symptom recorded shows What happened, the suggestion
+and the five meanings, names `culprit confirm <episode> <suggested>` as the next step and records nothing. No
+symptom is ever recorded without the person choosing it (Enter on a shown suggestion counts);
 `diagnose` restores the starting files when they are missing, runs the baseline and the oracles, and with
 no id diagnoses the whole queue and writes the report. Every replaying command prints the most it can run
 and spend before it starts.

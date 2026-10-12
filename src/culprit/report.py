@@ -11,9 +11,9 @@ from pathlib import Path
 from culprit.diagnose import (BASELINE, VariantOutcome, Verdict, load_instructions_draft, load_outcome, load_outcomes,
                               load_verdict, costs_line, limits_line, models_line, network_line, numbers_line, pristine_dir, stored_spend)
 from culprit.logs import WhatHappened
-from culprit.model import CRITERION_FILE, Criterion, criterion_step, load_criterion
-from culprit.store import (SELFTEST_DIR, Cause, Symptom, confirm_step, display_id, episode_dir, known_episode_ids,
-                           load_restore, prompt_excerpt, queued_ids, read_symptom)
+from culprit.model import CRITERION_FILE, Criterion, Suggestion, criterion_step, load_criterion
+from culprit.store import (SELFTEST_DIR, SYMPTOM_MEANINGS, Cause, Symptom, confirm_step, display_id, episode_dir,
+                           known_episode_ids, load_restore, prompt_excerpt, queued_ids, read_symptom)
 
 
 # --- report: The report: what to change, ranked by how many failed episodes each change would have fixed. ---
@@ -338,6 +338,21 @@ def what_happened_block(recap: WhatHappened) -> list[str]:
         first = f"  {label:<{RECAP_LABEL_WIDTH}}  "
         lines += wrap(values[0], first=first)
         lines += [line for value in values[1:] for line in wrap(value, " " * len(first))]
+    return lines
+
+
+def suggestion_lines(suggestion: Suggestion) -> list[str]:
+    """`Suggested: wrong-result — <reason>`, set apart under What happened."""
+    return ["", *wrap(f"Suggested: {suggestion.symptom.value} — {suggestion.reason}", "  ", first="")]
+
+
+def symptoms_block(numbered: bool = False) -> list[str]:
+    """The five symptoms, each with its one-line meaning; numbered as the question that follows numbers them."""
+    width = max(len(symptom.value) for symptom in SYMPTOM_MEANINGS)
+    lines = ["", "Symptoms"]
+    for i, (symptom, meaning) in enumerate(SYMPTOM_MEANINGS.items(), 1):
+        first = f"  {f'{i} ' if numbered else ''}{symptom.value:<{width}}  "
+        lines += wrap(meaning, first=first)
     return lines
 
 

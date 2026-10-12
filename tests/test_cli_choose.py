@@ -35,3 +35,14 @@ def test_anything_else_is_asked_again():
 
 def test_end_of_input_quits():
     assert choose("?", ("pass", "fail", "quit"), read=typed(EOFError)[0]) == "quit"
+
+
+def test_enter_picks_the_default_which_the_question_names():
+    read, asked = typed("")
+    assert choose("?", ("stopped-short", "wrong-result", "skip"), read=read, default="wrong-result") == "wrong-result"
+    assert asked == ["? 1 stopped-short · 2 wrong-result · 3 skip — Enter for wrong-result: "]
+
+
+def test_without_a_default_enter_asks_again():
+    read, asked = typed("", "2")
+    assert choose("?", ("stopped-short", "wrong-result"), read=read) == "wrong-result" and len(asked) == 2

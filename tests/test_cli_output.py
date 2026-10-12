@@ -152,15 +152,32 @@ def test_in_a_terminal_confirm_with_no_symptom_shows_the_draft_and_asks(row4, ca
 
 
 def test_in_a_terminal_confirm_with_no_symptom_asks_what_went_wrong(row4, capsys, monkeypatch):
+    monkeypatch.setattr(cli, "ask_claude", FakeAsk({"symptom": "wrong-result", "reason": "still hidden"}, dict(DRAFT)))
     left = terminal(monkeypatch, "wasteful", "skip")
     assert cli.main(["confirm", "4"]) == 0
     assert left == [] and read_symptom(row4, EP).value == "wasteful"
 
 
-def test_without_a_terminal_confirm_with_no_symptom_lists_the_symptoms(row4, capsys):
-    assert cli.main(["confirm", "4"]) == 3
-    err = capsys.readouterr().err
-    assert "culprit confirm 4 <symptom>" in err and "wrong-result" in err and "no-failure" in err
+def test_without_a_terminal_confirm_with_no_symptom_suggests_one_and_records_nothing(row4, capsys, monkeypatch):
+    monkeypatch.setattr(cli, "ask_claude", FakeAsk({"symptom": "wrong-result",
+                                                    "reason": 'you said next "still hidden" after it finished'}))
+    assert cli.main(["confirm", "4"]) == 0
+    assert capsys.readouterr().out == f"""{HEADER}
+{RECAP}
+Suggested: wrong-result — you said next "still hidden" after it finished
+
+Symptoms
+  stopped-short         quit before finishing
+  wrong-result          finished but the result was wrong
+  ignored-instructions  did what you said not to, or skipped what you asked
+  wasteful              got there but took far too long, too many steps or too much money
+  no-failure            nothing went wrong
+
+Next
+  1. Record the suggested symptom:  culprit confirm 4 wrong-result
+  2. Or say another one:  culprit confirm 4 <symptom>
+"""
+    assert read_symptom(row4, EP) is None and load_criterion(row4, EP) is None
 
 
 def test_approve_refuses_without_a_symptom_or_a_draft(row4, capsys):

@@ -20,6 +20,16 @@ class Symptom(StrEnum):
     NO_FAILURE = "no-failure"  # the human rejected the candidate: the spec's Misjudged check
 
 
+# what each symptom means, in one line a person can match an episode against
+SYMPTOM_MEANINGS = {
+    Symptom.STOPPED_SHORT: "quit before finishing",
+    Symptom.WRONG_RESULT: "finished but the result was wrong",
+    Symptom.IGNORED_INSTRUCTIONS: "did what you said not to, or skipped what you asked",
+    Symptom.WASTEFUL: "got there but took far too long, too many steps or too much money",
+    Symptom.NO_FAILURE: "nothing went wrong",
+}
+
+
 class Cause(StrEnum):
     """The cause axis: what to change, cheapest fix first; the first cause proven wins."""
 
