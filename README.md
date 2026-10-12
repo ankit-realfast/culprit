@@ -62,12 +62,13 @@ uv run pytest -q
 ## Use
 
 ```bash
-uv run culprit triage --top 40     # rank likely failures into the queue
-uv run culprit confirm             # walk the queue: symptom, criterion, restore (needs a terminal)
-uv run culprit diagnose 1          # one episode (queue row 1): baseline, oracles, verdict
-uv run culprit diagnose            # every confirmed episode, then the report
-uv run culprit report              # write runs/report.md
-uv run culprit status [1]          # where episodes stand and the next command
+uv run culprit triage --top 40     # 1. rank likely failures into the queue
+uv run culprit confirm             # 2. walk the queue: say what went wrong, approve what success means (needs a terminal)
+uv run culprit diagnose 1          # 3. diagnose one episode first (queue row 1) and read its verdict
+uv run culprit diagnose            # 4. then every confirmed episode; writes runs/report.md at the end
+
+uv run culprit report              # any time: rewrite runs/report.md, e.g. after diagnosing single episodes
+uv run culprit status [1]          # any time: where episodes stand and what to run next
 ```
 
 - **Naming episodes:** use the triage row number (`3`), the short id (`1a2b3c4d:5e6f7a8b`), any unique prefix,
