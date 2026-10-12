@@ -298,7 +298,7 @@ def test_status_lists_every_episode_then_trust_then_next(row4, capsys):
     capsys.readouterr()
     assert cli.main(["status"]) == 0
     assert capsys.readouterr().out == f"""Episodes
-  Row  Episode            Stage              Do next
+  ROW  EPISODE            STAGE              DO NEXT
     1  11111111:22222222  queued             culprit confirm 11111111:22222222 <symptom>
        "other"
     2  33333333:44444444  queued             culprit confirm 33333333:44444444 <symptom>
@@ -409,3 +409,43 @@ Next
   1. Read the report, saved in runs/report.md:  culprit report
   2. Carry on from where the total ran out:  culprit diagnose
 """
+
+
+def test_triage_has_a_header_row_a_stage_column_and_ends_with_next(write_session, tmp_path, capsys, monkeypatch):
+    from records import interrupt
+    monkeypatch.setenv("CULPRIT_RUNS", "runs")
+    write_session([human("first thing", "p1", session_id="s1"), interrupt("p1"),
+                   human("second thing", "p2", session_id="s1"), interrupt("p2")])
+    assert cli.main(["triage"]) == 0
+    capsys.readouterr()
+    runs = tmp_path / "cwd" / "runs"
+    (episode_dir(runs, "s1:p2")).mkdir()
+    (episode_dir(runs, "s1:p2") / "symptom.json").write_text(json.dumps({"episode_id": "s1:p2", "symptom": "wasteful"}))
+    assert cli.main(["triage"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    header, end = lines[0], lines.index("")
+    assert header.split() == ["ROW", "SCORE", "EPISODE", "STAGE", "EVIDENCE", "PROMPT"]
+    first, second = [line for line in lines[1:end] if line.split()[0].isdigit()]
+    for sub_line in (line for line in lines[1:end] if not line.split()[0].isdigit()):
+        assert sub_line.index("not replayable:") == header.index("EPISODE")  # under its row's episode
+    rows = {line.split()[2]: line for line in (first, second)}
+    assert rows["s1:p2"][header.index("STAGE"):].startswith("confirmed ")
+    assert rows["s1:p1"][header.index("STAGE"):header.index("EVIDENCE")].strip() == ""
+    for row in (first, second):
+        assert row[header.index("EVIDENCE"):].startswith("interrupted")
+        assert row[header.index("PROMPT") - 2:header.index("PROMPT")] == "  "
+    assert lines[end:] == ["", "Scanned 2 episodes; the 2 shown are the whole queue",
+                         "Saved the queue in runs/candidates.json",
+                         "", "Next",
+                         "  1. Say what went wrong and approve what success means, row by row:  culprit confirm",
+                         "  2. Or one row at a time:  culprit confirm <row> <symptom>"]
+
+
+def test_triage_marks_each_stage_an_episode_has_reached(tmp_path):
+    from culprit.report import EpisodeStatus
+    from culprit.diagnose import Verdict
+    marks = [cli.stage_mark(EpisodeStatus("a:1", stage, "")) for stage in
+             ("not queued", "queued", "confirmed", "criterion drafted", "criterion approved", "restored", "baselined")]
+    assert marks == ["", "", "confirmed", "draft", "approved", "restored", "baselined"]
+    verdict = Verdict("a:1", "wrong-result", "harness", "e", {}, {})
+    assert cli.stage_mark(EpisodeStatus("a:1", "diagnosed", "", verdict=verdict)) == "diagnosed: harness"

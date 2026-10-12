@@ -77,8 +77,8 @@ def test_status_rows_line_up_whatever_the_id_lengths(tmp_path, capsys):
     assert cli.main(["status"]) == 0
     rows = capsys.readouterr().out.split("\n\n")[0].splitlines()[1:]  # the heading, the column names, the rows
     assert len(rows) == 5
-    assert len({row.index("Stage" if i == 0 else "queued") for i, row in enumerate(rows)}) == 1
-    assert len({row.index("Do next" if i == 0 else "culprit") for i, row in enumerate(rows)}) == 1
+    assert len({row.index("STAGE" if i == 0 else "queued") for i, row in enumerate(rows)}) == 1
+    assert len({row.index("DO NEXT" if i == 0 else "culprit") for i, row in enumerate(rows)}) == 1
     assert A in rows[1] and "s1:p1 " in rows[3] and "cccccccc:dddddddd " in rows[4]
 
 

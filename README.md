@@ -89,8 +89,12 @@ uv run culprit status [1]          # where episodes stand and the next command
   If your logs show a model of a family culprit doesn't know (not fable, opus, sonnet or haiku), `triage` and
   `diagnose` print a one-line warning on stderr: "your sessions used <id>; if it is stronger than
   claude-fable-5-1, set CULPRIT_ORACLE_MODEL=<id>".
-- **Output:** results go to stdout. Progress (one line per replay, plus a heartbeat every 30 s) and
-  `next:` hints go to stderr. `status --json` prints one JSON document.
+- **Output:** each command prints one block on stdout in reading order: the episode named once at the top
+  (what you typed · its short id, plus the prompt), the content, file paths last as
+  `runs/<session>…<prompt>/file`, and a numbered **Next** section at the end. Suggested commands reuse the row
+  number or short id you typed. Progress (one line per replay, plus a heartbeat every 30 s), the spend plan,
+  warnings and refusals go to stderr. `triage` and `status` print column headers; triage's STAGE column shows
+  how far each episode has got. `status --json` prints one JSON document.
 - **Exit codes:** 0 done · 1 refused or failed · 2 bad arguments · 3 a prior step is missing · 4 spend
   cap reached · 130 Ctrl-C. Finished replays are kept, so rerunning the command resumes.
 

@@ -14,7 +14,7 @@ def test_triage_prints_and_saves_the_ranked_queue(write_session, tmp_path, capsy
     assert exit_code == 0
     assert "s1:p2" in out and "went wrong" in out and "interrupted" in out
     assert "s1:p1" not in out
-    assert "2 episodes scanned" in out
+    assert "Scanned 2 episodes" in out
     assert (runs / "candidates.json").exists()
 
 
@@ -49,9 +49,8 @@ def test_a_second_triage_keeps_the_queue_and_says_how_many_are_queued(write_sess
     main(["triage"])
     out = capsys.readouterr().out
     assert "s2:p3" in out and "s1:p2" not in out
-    assert "2 queued" in out
-    assert out.split()[0] == "1"
-    assert "1 more queued, not in this top 1 — see `culprit status`" in out
+    assert "the top 1 is row 1 of the 2 queued; 1 more is queued but not shown — see culprit status" in out
+    assert out.splitlines()[1].split()[0] == "1"
     assert main(["confirm", "s1:p2", "stopped-short"]) == 1  # its log is gone, so no criterion can be drafted
     assert read_symptom(runs, "s1:p2").value == "stopped-short"
 
@@ -60,7 +59,7 @@ def test_triage_numbers_rows_and_commands_take_the_number(write_session, tmp_pat
     write_session([human("went wrong", "p2", session_id="s1"), interrupt("p2")])
     runs = tmp_path / "runs"
     main(["triage"])
-    assert capsys.readouterr().out.split()[0] == "1"
+    assert capsys.readouterr().out.splitlines()[1].split()[0] == "1"
     assert main(["confirm", "1", "wasteful"]) == 0
     assert read_symptom(runs, "s1:p2").value == "wasteful"
     assert main(["confirm", "s1", "stopped-short"]) == 0

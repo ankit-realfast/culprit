@@ -341,24 +341,54 @@ def triage_command(args: argparse.Namespace) -> int:
     candidates = sorted(ranked, key=lambda c: bool(blockers[c.summary.episode_id]))
     path = save_candidates(args.runs, candidates)
     queue = queued_ids(args.runs)
-    shown = [display_id(args.runs, c.summary.episode_id) for c in candidates]
-    id_width = max(map(len, shown), default=0)
-    for name, candidate in zip(shown, candidates):
+    columns = ("ROW", "SCORE", "EPISODE", "STAGE", "EVIDENCE", "PROMPT")
+    rows = [(str(queue.index(c.summary.episode_id) + 1), str(c.score), display_id(args.runs, c.summary.episode_id),
+             stage_mark(episode_status(args.runs, c.summary.episode_id)), _evidence(c.summary.signals),
+             c.summary.prompt_excerpt) for c in candidates]
+    widths = [max([len(column), *(len(row[i]) for row in rows)]) for i, column in enumerate(columns)]
+    lines = [table_row(columns, widths)] if rows else []
+    for row, candidate in zip(rows, candidates):
+        lines.append(table_row(row, widths))
+        indent = " " * (widths[0] + widths[1] + 4)  # sub-lines start under the episode
         s = candidate.summary
-        row = queue.index(s.episode_id) + 1
-        print(f"{row:>4} {candidate.score:>3}  {name:<{id_width}}  [{_evidence(s.signals)}]  {s.prompt_excerpt}")
         if s.signals.api_errors:
-            print(f"            {s.signals.api_errors} API errors — likely not reproducible")
+            lines.append(f"{indent}{s.signals.api_errors} API errors — likely not reproducible")
         if blockers[s.episode_id]:
-            print(f"            not replayable: {'; '.join(blockers[s.episode_id])}")
-    print(f"{len(summaries)} episodes scanned; top {len(candidates)} merged into {path} ({len(queue)} queued); "
-          f"refer to an episode by its row number, short id or any unique prefix")
-    if len(queue) > len(candidates):
-        print(f"{len(queue) - len(candidates)} more queued, not in this top {len(candidates)} — see `culprit status`")
+            lines.append(f"{indent}not replayable: {'; '.join(blockers[s.episode_id])}")
+    say(lines + ["", triage_summary(len(summaries), len(candidates), len(queue)),
+                 f"Saved the queue in {shown_runs(args.runs) / path.name}"]
+        + next_section([Step("Say what went wrong and approve what success means, row by row", "culprit confirm"),
+                        Step("Or one row at a time", "culprit confirm <row> <symptom>")]))
     # triage calls no model: the oracle is named as last resolved, or by its alias
     if warning := unknown_model_warning((s.model for s in summaries), known_oracle_id(args.runs) or oracle_model()):
-        print(f"culprit: warning: {warning}", file=sys.stderr)
+        err(f"culprit: warning: {warning}")
     return 0
+
+
+def table_row(cells: Sequence[str], widths: Sequence[int]) -> str:
+    """Cells padded to their column's width (numbers right-aligned under a heading of their own), the last unpadded."""
+    padded = [cell.rjust(width) if i < 2 else cell.ljust(width)
+              for i, (cell, width) in enumerate(zip(cells[:-1], widths))]
+    return "  ".join([*padded, cells[-1]]).rstrip()
+
+
+def triage_summary(scanned: int, shown: int, queued: int) -> str:
+    if not shown:
+        return f"Scanned {scanned} episodes; none looks like a failure" + (f" ({queued} queued earlier)" if queued else "")
+    if shown == queued:
+        return f"Scanned {scanned} episodes; the {shown} shown {'is' if shown == 1 else 'are'} the whole queue"
+    rows = "is row 1" if shown == 1 else f"are rows 1–{shown}"
+    more = queued - shown
+    return (f"Scanned {scanned} episodes; the top {shown} {rows} of the {queued} queued; {more} more "
+            f"{'is' if more == 1 else 'are'} queued but not shown — see culprit status")
+
+
+def stage_mark(status: EpisodeStatus) -> str:
+    """How far an episode has got, short enough for a triage column; blank until it is confirmed."""
+    if status.stage == "diagnosed" and status.verdict:
+        return f"diagnosed: {status.verdict.cause}"
+    return {"not queued": "", "queued": "", "criterion drafted": "draft",
+            "criterion approved": "approved"}.get(status.stage, status.stage)
 
 
 def _blockers_for(projects: Path, episode_id: str) -> list[str]:
@@ -624,7 +654,7 @@ def status_table(runs_dir: Path, statuses: list[EpisodeStatus]) -> list[str]:
              row_command(status, name)) for name, status in zip(shown, statuses)]
     id_width = max(len("Episode"), *map(len, shown))
     stage_width = max(len("Stage"), *(len(status.stage) for status in statuses))
-    lines = ["Episodes", f"  Row  {'Episode':<{id_width}}  {'Stage':<{stage_width}}  Do next"]
+    lines = ["Episodes", f"  ROW  {'EPISODE':<{id_width}}  {'STAGE':<{stage_width}}  DO NEXT"]
     for (row, name, stage, command), status in zip(rows, statuses):
         lines.append(f"  {row:>3}  {name:<{id_width}}  {stage:<{stage_width}}  {command}")
         if excerpt := prompt_excerpt(runs_dir, status.episode_id):
