@@ -343,7 +343,7 @@ def what_happened_block(recap: WhatHappened) -> list[str]:
 
 def suggestion_lines(suggestion: Suggestion) -> list[str]:
     """`Suggested: wrong-result — <reason>`, set apart under What happened."""
-    return ["", *wrap(f"Suggested: {suggestion.symptom.value} — {suggestion.reason}", "  ", first="")]
+    return ["", *wrap(f"{suggestion.symptom.value} — {suggestion.reason}", first="Suggested: ")]
 
 
 def symptoms_block(numbered: bool = False) -> list[str]:

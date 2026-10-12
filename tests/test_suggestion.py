@@ -54,13 +54,15 @@ def test_a_suggestion_needs_a_known_symptom_and_a_reason():
 
 def test_without_a_terminal_confirm_shows_the_suggestion_and_records_nothing(write_session, tmp_path, capsys,
                                                                               monkeypatch):
+    monkeypatch.setenv("COLUMNS", "80")  # the reason wraps, under the symptom
     runs = queued_busy_episode(write_session, tmp_path)
     fake = FakeAsk(dict(SUGGEST))
     monkeypatch.setattr(cli, "ask_claude", fake)
     assert cli.main(["confirm", "1"]) == 0
     out = capsys.readouterr().out
     assert out.index("What happened\n") < out.index("Suggested: wrong-result — it edited api.js")
-    assert "  wasteful              got there but took far too long, too many steps or too much money\n" in out
+    assert all(line.startswith(" " * 11) for line in out[out.index("Suggested:"):].split("\n\n")[0].splitlines()[1:])
+    assert "  wasteful              got there but took far too long" in out
     assert out.endswith("Next\n  1. Record the suggested symptom:  culprit confirm 1 wrong-result\n"
                         "  2. Or say another one:  culprit confirm 1 <symptom>\n")
     assert read_symptom(runs, "s1:p1") is None and len(fake.calls) == 1
