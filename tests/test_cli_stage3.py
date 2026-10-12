@@ -53,7 +53,7 @@ def test_the_baseline_needs_an_approved_criterion(write_session, tmp_path, capsy
     projects, runs = setup_episode(write_session, tmp_path, approved=False)
     assert cli.main(["selftest", "s1:p1"]) == 3
     err = capsys.readouterr().err
-    assert "culprit confirm s1:p1" in err and "approve" in err
+    assert "has no approved success criterion yet" in err and "culprit confirm s1:p1" in err
 
 
 def test_the_baseline_restores_the_starting_files_first(write_session, tmp_path, capsys, monkeypatch, no_selftest):

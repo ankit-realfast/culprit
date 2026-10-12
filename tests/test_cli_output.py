@@ -325,3 +325,87 @@ def test_status_with_nothing_queued_names_triage(tmp_path, capsys):
     out = capsys.readouterr().out
     assert out.startswith("Nothing queued yet.\n")
     assert out.endswith("Next\n  1. Rank likely failures:  culprit triage\n")
+
+
+TRUST = """How far to trust the verdicts
+  Judge: 0 of 0 labels agree, kappa not computable yet
+    uncalibrated (needs 20 labels and kappa ≥ 0.6)
+  Selftest: not run
+"""
+
+
+def test_diagnose_prints_the_verdict_then_trust_then_next(row4, capsys, monkeypatch):
+    verdict = diagnosed(row4)
+    monkeypatch.setattr(cli, "diagnose", lambda *args, **kwargs: verdict)
+    assert cli.main(["diagnose", "4"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == f"""{HEADER}
+Verdict
+  Cause: harness
+  Evidence
+    harness passed 4/5 against the baseline's 0/5
+    harness: baseline 0/5 → 4/5, p = 0.0238
+  Not tested
+    1. environment: no environment fix supplied (culprit env-fix)
+
+{TRUST}
+Next
+  1. Rank the changes across episodes:  culprit report
+  2. To test the environment too, store a script that fixes it:  culprit env-fix 4 <script>
+"""
+    assert "next:" not in captured.err and "up to" in captured.err  # the plan stays on stderr
+
+
+def test_diagnose_refuses_an_unapproved_criterion_with_numbered_steps(row4, capsys):
+    cli.main(["confirm", "4", "wrong-result"])
+    capsys.readouterr()
+    assert cli.main(["diagnose", "4"]) == 3
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == """culprit: episode 4 has no approved success criterion yet
+
+Next
+  1. Read the draft. To change it, edit runs/50c0a213…b0567c84/criterion.json
+  2. Approve it:  culprit confirm 4 approve
+"""
+
+
+def test_env_fix_names_the_episode_once_and_ends_with_next(row4, capsys, tmp_path):
+    diagnosed(row4)
+    (episode_dir(row4, EP) / "verdict.json").unlink()
+    script = tmp_path / "fix.sh"
+    script.write_text("true\n")
+    assert cli.main(["env-fix", "4", str(script)]) == 0
+    assert capsys.readouterr().out == f"""{HEADER}
+✓ Stored the environment fix in runs/50c0a213…b0567c84/env-fix.sh
+  The environment oracle runs it in each replay's copy before Claude starts.
+
+Next
+  1. Diagnose it:  culprit diagnose 4
+"""
+
+
+def test_diagnose_with_no_id_summarises_then_names_the_report(row4, capsys, monkeypatch):
+    from culprit.diagnose import BatchSummary
+    diagnosed(row4)
+    monkeypatch.setattr(cli, "diagnose_all", lambda *a, **k: BatchSummary(
+        diagnosed=[EP], skipped={OTHERS[0]: "not confirmed — run `culprit confirm 11111111:22222222 <symptom>`"},
+        over_cap={OTHERS[1]: 3900.0}, stopped_at=OTHERS[2], spent_usd=88.5))
+    assert cli.main(["diagnose"]) == 0
+    assert capsys.readouterr().out == f"""Diagnosed
+  1. 50c0a213:b0567c84  harness: baseline 0/5 → 4/5, p = 0.0238
+
+Skipped
+  1. 11111111:22222222  not confirmed — run `culprit confirm 11111111:22222222 <symptom>`
+
+Stopped at a spend cap
+  1. 33333333:44444444  hit its $3900.00 cap; its finished runs are kept
+  2. 55555555:66666666  stopped here: the $78000.00 total for this command is spent
+
+Spent $88.50
+
+{TRUST}
+Next
+  1. Read the report, saved in runs/report.md:  culprit report
+  2. Carry on from where the total ran out:  culprit diagnose
+"""

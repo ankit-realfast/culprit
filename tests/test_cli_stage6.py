@@ -30,9 +30,9 @@ def test_diagnose_without_an_id_prints_the_summary_and_writes_the_report(tmp_pat
     assert cli.main(["diagnose"]) == 0
     out = capsys.readouterr().out
     assert seen["total_usd"] == cli.TOTAL_CAP_USD and seen["per_episode_usd"] == cli.episode_cap_usd and seen["n"] == cli.RUNS_PER_VARIANT
-    for expected in ["diagnosed 1", "b:1 skipped: not restored", "c:1 hit its $3600.00 cap",
-                     "stopped at d:1", "$88.50", "rerun",
-                     "a:1 harness: baseline 0/5 → 4/5, p = 0.0238"]:
+    for expected in ["Diagnosed\n  1. a:1  harness: baseline 0/5 → 4/5, p = 0.0238", "1. b:1  not restored",
+                     "c:1  hit its $3600.00 cap", "d:1  stopped here", "Spent $88.50",
+                     "Carry on from where the total ran out:  culprit diagnose"]:
         assert expected in out
     assert "--" not in out  # no flag left to suggest
     assert (runs / "report.md").exists()

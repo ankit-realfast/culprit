@@ -18,10 +18,6 @@ def queued(write_session, tmp_path):
     return tmp_path / "projects", runs
 
 
-def last_err_line(capsys):
-    return capsys.readouterr().err.strip().splitlines()[-1]
-
-
 def next_section(capsys):
     """The numbered steps of the Next section, which closes stdout; nothing about next steps goes to stderr."""
     captured = capsys.readouterr()
@@ -66,7 +62,7 @@ def test_diagnose_and_env_fix_name_their_next_step(write_session, tmp_path, caps
     script.write_text("true\n")
     capsys.readouterr()
     assert cli.main(["env-fix", "s1:p1", str(script)]) == 0
-    assert last_err_line(capsys) == "next: run `culprit diagnose s1:p1`"
+    assert next_section(capsys) == ["1. Diagnose it:  culprit diagnose s1:p1"]
 
     def fake_diagnose(episode, criterion, symptom, base, **kwargs):
         verdict = Verdict("s1:p1", "wrong-result", "model", "model passed 4/5", {}, {})
@@ -76,4 +72,4 @@ def test_diagnose_and_env_fix_name_their_next_step(write_session, tmp_path, caps
 
     monkeypatch.setattr(cli, "diagnose", fake_diagnose)
     assert cli.main(["diagnose", "s1:p1"]) == 0
-    assert last_err_line(capsys) == "next: run `culprit report`"
+    assert next_section(capsys)[0] == "1. Rank the changes across episodes:  culprit report"

@@ -16,21 +16,22 @@ from typing import Callable, Sequence, TextIO
 from culprit import logs, replay
 from culprit.diagnose import (BASELINE, DRAFTED_CAUSES, ENV_FIX_FILE, BudgetExhausted, CostPlan, EpisodeBudget,
                               ReplayEvent, VariantOutcome, batch_cost, diagnose, diagnose_all, diagnose_cost,
-                              costs_line, diagnose_cost_for, env_fix_script, known_oracle_id, limit_tally,
-                              limits_line, load_outcome, load_verdict, models_line, network_line, numbers_line, plan_cost, tokens_per_run, usd_per_run,
+                              diagnose_cost_for, env_fix_script, known_oracle_id, limit_tally, load_outcome,
+                              load_verdict, numbers_line, plan_cost, tokens_per_run, usd_per_run,
                               oracle_model, pristine_dir, record_call_spend, retire_if_criterion_changed, run_variant,
                               stored_spend, unknown_model_warning)
 from culprit.logs import (Episode, EpisodeNotFound, FailureSignals, excerpt, find_episode, follow_up_prompts,
                           load_snapshot, project_hooks, rank_candidates, replay_blockers, session_files, session_root,
                           summarize_session)
 from culprit.model import (CRITERION_FILE, LIMIT_WORDS, ClaudeCallFailed, Criterion, approve_criterion, ask_claude,
-                           criterion_step, draft_criterion, load_criterion, resolved_model, save_criterion)
+                           draft_criterion, load_criterion, resolved_model, save_criterion)
 from culprit.replay import (REPLAY_BUDGET_FLOOR_USD, OriginalModified, SetupScriptFailed, apply_episode_originals,
                             baseline_settings, check_restore, episode_originals, restore, restore_from_git)
 from culprit.report import (DONE, REPORT_FILE, EpisodeStatus, Step, block, collect, criterion_block, episode_header,
-                            episode_status, episode_steps, next_section, next_step, progress_lines, queue_status,
-                            queue_steps, render_report, row_command, short_path, trust_block, verdict_lines, wrap)
-from culprit.store import (ORACLE_ORDER, RESTORE_FILE, Cause, NotReady, Symptom, UnknownEpisode, confirm_step,
+                            episode_status, episode_steps, next_section, progress_lines, queue_status,
+                            numbered, queue_steps, render_report, row_command, short_path, shown_runs, trust_block,
+                            verdict_lines, wrap)
+from culprit.store import (ORACLE_ORDER, RESTORE_FILE, Cause, NotReady, Symptom, UnknownEpisode,
                            display_id, episode_dir, episode_ref, prompt_excerpt, queued_ids, read_symptom,
                            record_symptom, require_queue, resolve_episode_id, save_candidates, write_json)
 from culprit.trust import (MIN_KAPPA, MIN_LABELS, UnknownRun, agreement, control_min_passes, is_control,
@@ -124,6 +125,7 @@ class ProgressPrinter:
                    f"{reused}")
 
     def print(self, line: str) -> None:
+        sys.stdout.flush()  # what stdout already holds shows first where both streams reach one terminal
         print(line, file=self.stream, flush=True)
 
 
@@ -592,11 +594,6 @@ def restored_lines(details: list[str]) -> list[str]:
     return [f"{DONE} Restored the starting files", *(line for detail in details for line in wrap(detail, "    "))]
 
 
-def print_next(runs_dir: Path, episode_id: str) -> None:
-    """Every state-changing command ends by naming the step that follows, as `culprit status` would."""
-    print(f"next: {next_step(runs_dir, episode_id)}", file=sys.stderr)
-
-
 def status_command(args: argparse.Namespace) -> int:
     if args.episode_id:
         status = episode_status(args.runs, args.episode_id)
@@ -711,15 +708,26 @@ def restore_episode(runs_dir: Path, projects_dir: Path, episode_id: str) -> list
     return lines
 
 
-def ready_to_replay(args: argparse.Namespace) -> tuple[Episode, Criterion]:
-    """The episode and its approved criterion, restoring its starting files first when they are missing."""
-    episode = find_episode(args.projects, args.episode_id)
+def not_ready(runs_dir: Path, episode_id: str, ref: str, problem: str) -> NotReady:
+    """A refusal that names what is missing, then the numbered steps that get the episode there."""
+    steps = episode_steps(runs_dir, episode_status(runs_dir, episode_id), ref)
+    return NotReady("\n".join([problem, *next_section(steps)]))
+
+
+def approved_criterion(args: argparse.Namespace) -> Criterion:
     criterion = load_criterion(args.runs, args.episode_id)
-    shown = display_id(args.runs, args.episode_id)
     if criterion is None or not criterion.approved:
-        symptom = read_symptom(args.runs, args.episode_id)
-        raise NotReady(f"no approved criterion for {shown} — "
-                       f"{criterion_step(criterion, shown, symptom.value if symptom else None)}")
+        raise not_ready(args.runs, args.episode_id, args.ref,
+                        f"episode {args.ref} has no approved success criterion yet")
+    return criterion
+
+
+def ready_to_replay(args: argparse.Namespace) -> tuple[Episode, Criterion]:
+    """The episode and its approved criterion, under the episode's header; restores its starting files first
+    when they are missing."""
+    criterion = approved_criterion(args)
+    say(episode_header(args.runs, args.episode_id, args.ref))
+    episode = find_episode(args.projects, args.episode_id)
     if not pristine_dir(args.runs, args.episode_id).is_dir():
         say(["", *restored_lines(restore_episode(args.runs, args.projects, args.episode_id))])
     return episode, criterion
@@ -733,14 +741,13 @@ def run_baseline(args: argparse.Namespace, episode: Episode, criterion: Criterio
     cap = episode_cap_usd(base.max_budget_usd)
     show_plan(plan_cost([base.max_budget_usd], n=RUNS_PER_VARIANT, spent_usd=spent, cap_usd=cap))
     if retire_if_criterion_changed(folder, criterion):
-        print("the criterion changed since the last runs: they were moved to superseded/ and will not be reused",
-              file=sys.stderr)
+        err("the criterion changed since the last runs: they were moved to superseded/ and will not be reused")
     budget = EpisodeBudget(cap, spent_usd=spent)
     with ProgressPrinter() as progress:
         outcome = run_variant(BASELINE, base, n=RUNS_PER_VARIANT,
                               episode=episode, runs_dir=args.runs, criterion=criterion, budget=budget,
                               progress=progress)
-    print(f"baseline: {outcome.passes} of {outcome.runs} passed, ${outcome.cost_usd:.2f} spent on replays")
+    say(["", "Replays", f"  baseline: {outcome.passes} of {outcome.runs} passed, ${outcome.cost_usd:.2f} spent on replays"])
     return outcome
 
 
@@ -748,8 +755,10 @@ def env_fix_command(args: argparse.Namespace) -> int:
     destination = episode_dir(args.runs, args.episode_id) / ENV_FIX_FILE
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(args.script, destination)
-    print(f"stored {destination}; the environment oracle runs it in each replay's clone before Claude starts")
-    print_next(args.runs, args.episode_id)
+    say([*episode_header(args.runs, args.episode_id, args.ref), "",
+         f"{DONE} Stored the environment fix in {short_path(args.runs, args.episode_id, ENV_FIX_FILE)}",
+         *wrap("The environment oracle runs it in each replay's copy before Claude starts.", "  "),
+         *next_section(episode_steps(args.runs, episode_status(args.runs, args.episode_id), args.ref))])
     return 0
 
 
@@ -758,8 +767,7 @@ def diagnose_command(args: argparse.Namespace) -> int:
         return diagnose_queue(args)
     symptom = read_symptom(args.runs, args.episode_id)
     if symptom is None:
-        raise NotReady(f"{display_id(args.runs, args.episode_id)} has no confirmed symptom — "
-                       f"{confirm_step(args.runs, args.episode_id)}")
+        raise not_ready(args.runs, args.episode_id, args.ref, f"episode {args.ref} has no confirmed symptom yet")
     episode, criterion = ready_to_replay(args)
     folder = episode_dir(args.runs, args.episode_id)
     env_script = env_fix_script(folder)
@@ -769,7 +777,7 @@ def diagnose_command(args: argparse.Namespace) -> int:
     if oracle.usd:
         record_call_spend(folder, oracle.usd)
     if warning := unknown_model_warning([episode.model], oracle.model or oracle_model()):
-        print(f"culprit: warning: {warning}", file=sys.stderr)
+        err(f"culprit: warning: {warning}")
     cap = episode_cap_usd(base.max_budget_usd)
     budget = EpisodeBudget(cap, spent_usd=stored_spend(folder))
     show_plan(diagnose_cost_for(folder, criterion, base.max_budget_usd, model=base.model, effort=base.effort,
@@ -781,24 +789,11 @@ def diagnose_command(args: argparse.Namespace) -> int:
                            runs_dir=args.runs, follow_ups=follow_up_prompts(args.projects, args.episode_id),
                            env_script=env_script, n=RUNS_PER_VARIANT, budget=budget,
                            progress=progress)
-    print(f"cause: {verdict.cause}\nevidence: {verdict.evidence}")
-    if numbers := numbers_line(verdict):
-        print(numbers)
-    if limited := limits_line(verdict):
-        print(limited)
-    if network := network_line(verdict):
-        print(network)
-    if costs := costs_line(verdict):
-        print(costs)
-    if models := models_line(verdict):
-        print(models)
-    if verdict.pair:
-        print(f"together: {' + '.join(verdict.pair)}")
-    for cause, reason in verdict.untested.items():
-        print(f"{cause} untested: {reason}")
-    for line in trust_lines(args.runs):
-        print(line)
-    print_next(args.runs, args.episode_id)
+    steps = episode_steps(args.runs, episode_status(args.runs, args.episode_id), args.ref)
+    if Cause.ENVIRONMENT.value in verdict.untested and env_script is None:
+        steps.append(Step("To test the environment too, store a script that fixes it",
+                          f"culprit env-fix {args.ref} <script>"))
+    say(["", *verdict_lines(verdict), "", *trust_block(trust_lines(args.runs)), *next_section(steps)])
     return 0
 
 
@@ -879,6 +874,7 @@ def report_command(args: argparse.Namespace) -> int:
 def diagnose_queue(args: argparse.Namespace) -> int:
     """Every confirmed episode in the queue: restore the ones not yet restored, diagnose them all, then report."""
     require_queue(args.runs)
+    restoring = []
     for episode_id in queued_ids(args.runs):
         approved, restored = _confirm_progress(args.runs, episode_id)
         if restored or not approved:
@@ -886,25 +882,39 @@ def diagnose_queue(args: argparse.Namespace) -> int:
         shown = display_id(args.runs, episode_id)
         try:
             restore_episode(args.runs, args.projects, episode_id)
-            print(f"restored {shown}")
+            restoring.append(f"  {DONE} {shown}")
         except (NotReplayable, EpisodeNotFound) as refusal:
-            print(f"{shown} not restored: {refusal}")
+            restoring += wrap(f"{shown} not restored: {refusal}", "    ", first="    ")
+    if restoring:
+        say(["Restoring starting files", *restoring, ""])
     show_plan(batch_cost(args.runs, args.projects, n=RUNS_PER_VARIANT, per_episode_usd=episode_cap_usd,
                          total_usd=TOTAL_CAP_USD))
     with ProgressPrinter() as progress:
         summary = diagnose_all(args.runs, args.projects, n=RUNS_PER_VARIANT, per_episode_usd=episode_cap_usd,
                                total_usd=TOTAL_CAP_USD, progress=progress)
-    print(f"diagnosed {len(summary.diagnosed)}: {', '.join(summary.diagnosed) or 'none'}")
-    for episode_id in summary.diagnosed:
-        verdict = load_verdict(episode_dir(args.runs, episode_id))
-        if verdict and (numbers := numbers_line(verdict)):
-            print(f"{display_id(args.runs, episode_id)} {numbers}")
-    for episode_id, reason in summary.skipped.items():
-        print(f"{episode_id} skipped: {reason}")
-    for episode_id, cap in summary.over_cap.items():
-        print(f"{episode_id} hit its ${cap:.2f} cap; its finished runs are kept")
-    if summary.stopped_at:
-        print(f"stopped at {summary.stopped_at}: the ${TOTAL_CAP_USD:.2f} total is spent — rerun to continue from there")
     write_report(args.runs)
-    print(f"spent ${summary.spent_usd:.2f}; report written to {args.runs / REPORT_FILE}")
+    say(batch_lines(args.runs, summary) + ["", *trust_block(trust_lines(args.runs))] + next_section(
+        [Step(f"Read the report, saved in {shown_runs(args.runs) / REPORT_FILE}", "culprit report")]
+        + ([Step("Carry on from where the total ran out", "culprit diagnose")] if summary.stopped_at else [])))
     return 0
+
+
+def batch_lines(runs_dir: Path, summary) -> list[str]:
+    """What `diagnose` with no id did: each episode diagnosed with its numbers, skipped, or stopped by a cap."""
+    def shown(episode_id: str) -> str:
+        return display_id(runs_dir, episode_id)
+
+    done = []
+    for episode_id in summary.diagnosed:
+        verdict = load_verdict(episode_dir(runs_dir, episode_id))
+        done.append(f"{shown(episode_id)}  {(verdict and numbers_line(verdict)) or (verdict.cause if verdict else '')}")
+    lines = ["Diagnosed", *(numbered(done, "  ") or ["  none"])]
+    if summary.skipped:
+        lines += block("Skipped", numbered((f"{shown(i)}  {reason}" for i, reason in summary.skipped.items()), "  "))
+    capped = [f"{shown(i)}  hit its ${cap:.2f} cap; its finished runs are kept" for i, cap in summary.over_cap.items()]
+    if summary.stopped_at:
+        capped.append(f"{shown(summary.stopped_at)}  stopped here: the ${TOTAL_CAP_USD:.2f} total for this command "
+                      f"is spent")
+    if capped:
+        lines += block("Stopped at a spend cap", numbered(capped, "  "))
+    return lines + ["", f"Spent ${summary.spent_usd:.2f}"]

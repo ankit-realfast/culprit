@@ -64,7 +64,7 @@ def test_refusals_name_the_short_id(write_session, tmp_path, capsys):
     (episode_dir(runs, A)).mkdir()
     (episode_dir(runs, A) / "symptom.json").write_text(json.dumps({"episode_id": A, "symptom": "wrong-result"}))
     assert cli.main(["diagnose", A]) == 3
-    assert "culprit confirm aaaaaaaa:bbbbbbbb wrong-result" in capsys.readouterr().err
+    assert "Draft what success means:  culprit confirm aaaaaaaa:bbbbbbbb\n" in capsys.readouterr().err
     save_criterion(runs, A, Criterion("works", (), (), approved=True))
     assert cli.main(["diagnose", A]) == 1  # the log has no snapshot for this prompt, so restoring first refuses
     assert "aaaaaaaa:bbbbbbbb cannot be replayed" in capsys.readouterr().err

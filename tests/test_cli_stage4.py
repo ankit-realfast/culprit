@@ -44,7 +44,7 @@ def test_diagnose_passes_everything_through_and_prints_the_verdict(write_session
     assert cli.main(["diagnose", "s1:p1"]) == 0
     out = capsys.readouterr().out
     assert seen == {"symptom": "wrong-result", "follow_ups": ["still wrong"], "cap": cli.episode_cap_usd(10.0), "env": None, "n": cli.RUNS_PER_VARIANT}
-    assert "cause: harness" in out and "4/5" in out and "environment untested" in out
+    assert "Cause: harness" in out and "4/5" in out and "1. environment: no environment fix supplied" in out
     assert "harness: baseline 0/5 → 4/5, p = 0.0238" in out
 
 
@@ -76,7 +76,8 @@ def test_diagnose_restores_the_starting_files_first_when_they_are_missing(write_
     assert (episode_dir(runs, "s1:p1") / "pristine").is_dir()
     assert (episode_dir(runs, "s1:p1") / "restore.json").is_file()
     out = capsys.readouterr().out
-    assert "restored from snapshots" in out and "cause: harness" in out
+    assert "✓ Restored the starting files" in out and "restored from snapshots" in out and "Cause: harness" in out
+    assert out.index("Episode s1:p1") < out.index("✓ Restored") < out.index("Cause: harness")
     assert seen == ["s1:p1"]
 
 
@@ -106,7 +107,7 @@ def test_diagnose_without_an_id_restores_the_ready_episodes_then_diagnoses_the_q
     assert cli.main(["diagnose"]) == 0
     assert seen == [True]
     out = capsys.readouterr().out
-    assert "restored s1:p1" in out and "diagnosed 1" in out
+    assert "Restoring starting files\n  ✓ s1:p1" in out and "Diagnosed\n  1. s1:p1" in out
 
 
 def test_diagnose_all_is_gone(capsys):
