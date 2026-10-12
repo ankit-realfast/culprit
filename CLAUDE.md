@@ -38,12 +38,12 @@ short id or unique prefix. Approving a criterion is explicit: `confirm <episode>
 
 Stdlib-only Python ≥3.11 package under `src/culprit/`, one module per pipeline stage:
 
-- `logs` — episodes, failure signals, triage ranking, locating an episode, snapshots, replay eligibility
+- `logs` — episodes, failure signals, triage ranking, locating an episode, snapshots, replay eligibility, the "What happened" recap
 - `store` — the taxonomy and the plain-file store under `runs/`
 - `stubs` — the light processes a replay starts: stand-in MCP servers (`python -m culprit.stubs mcp|answers …`) and culprit's PreToolUse hooks (`bash-hook`, `web-hook`);
   imports nothing beyond the standard library and `logs`
 - `replay` — restoring the starting files and running one locked-down replay
-- `model` — every model call (`ask_claude`), criterion drafting, the leak check, the judge
+- `model` — every model call (`ask_claude`), criterion drafting, the leak check, the judge, the suggested symptom
 - `diagnose` — variants, oracles, verdict and its Fisher test, the cost preview, the whole-queue batch
 - `trust` — judge calibration and selftest
 - `report` — the report, per-episode status, and the shared text layout every command prints with (episode header, wrapped sections, numbered Next)
