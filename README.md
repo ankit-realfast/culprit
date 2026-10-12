@@ -72,6 +72,10 @@ uv run culprit status [1]          # where episodes stand and the next command
 
 - **Naming episodes:** use the triage row number (`3`), the short id (`1a2b3c4d:5e6f7a8b`), any unique prefix,
   or the full id.
+- **What happened:** `confirm <episode>`, each episode of the `confirm` walk and `status <episode>` start with
+  a recap read from the session log (no model call): what you asked, what Claude did (tool calls, files edited,
+  tool errors and the first one), Claude's last words, how it ended (you interrupted it, it finished, or API
+  errors ended it, with how long it took) and what you said next — so you can tell days later what went wrong.
 - **Confirming one episode:** `confirm <episode> <symptom>` records what went wrong, drafts the success
   criterion, shows it and, in a terminal, asks: approve, edit first, or skip. To edit, change
   `runs/<episode>/criterion.json`, then run `confirm <episode>` (no symptom needed once one is recorded) to see

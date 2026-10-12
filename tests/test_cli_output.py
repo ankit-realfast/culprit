@@ -51,6 +51,12 @@ def terminal(monkeypatch, *answers):
 HEADER = f"""Episode 4 · 50c0a213:b0567c84
   "{EXCERPT}"
 """
+RECAP = f"""What happened
+  You asked      "{EXCERPT}"
+  Claude did     no tool calls
+  It ended       it finished
+  You said next  "still hidden"
+"""
 DRAFT_BLOCK = """Draft success criterion — not approved yet
   Success means
     On the dashboard people view, applying any filter keeps the list and its loading state visible:
@@ -68,6 +74,7 @@ def test_first_confirm_records_drafts_and_says_how_to_approve(row4, capsys):
     assert cli.main(["confirm", "4", "wrong-result"]) == 0
     captured = capsys.readouterr()
     assert captured.out == f"""{HEADER}
+{RECAP}
 ✓ Recorded what went wrong: wrong-result
 
 {DRAFT_BLOCK}
@@ -108,6 +115,7 @@ def test_in_a_terminal_confirm_asks_and_approves(row4, capsys, monkeypatch):
     left = terminal(monkeypatch, "approve")
     assert cli.main(["confirm", "4", "wrong-result"]) == 0
     assert capsys.readouterr().out == f"""{HEADER}
+{RECAP}
 ✓ Recorded what went wrong: wrong-result
 
 {DRAFT_BLOCK}
@@ -226,6 +234,7 @@ def diagnosed(runs):
 
 
 STATUS_DIAGNOSED = f"""{HEADER}
+{RECAP}
 Progress
   ✓ Queued
   ✓ What went wrong: wrong-result
@@ -277,6 +286,7 @@ def test_status_of_a_draft_marks_the_steps_done_and_names_approve(row4, capsys):
     capsys.readouterr()
     assert cli.main(["status", "4"]) == 0
     assert capsys.readouterr().out == f"""{HEADER}
+{RECAP}
 Progress
   ✓ Queued
   ✓ What went wrong: wrong-result

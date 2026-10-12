@@ -79,8 +79,8 @@ def test_the_walk_confirms_approves_and_restores_each_episode_in_queue_order(wri
     assert not (episode_dir(runs, "s2:p1") / "pristine").exists()
     out = captured.out
     assert out.index("Episode 1 · s1:p1\n") < out.index("fix a") < out.index("Episode 2 · s2:p1\n") < out.index("tidy b")
-    assert "2 tool errors" in out
-    assert 'You said next: "no, still broken"' in out and 'You said next: "that\'s wrong"' in out
+    assert "What happened\n  You asked      \"fix a\"\n  Claude did     no tool calls\n" in out
+    assert '  You said next  "no, still broken"' in out and '  You said next  "that\'s wrong"' in out
     assert "Draft success criterion — not approved yet\n  Success means\n    works 0" in out
     assert "✓ Approved the success criterion" in out and "1 restored from snapshots" in out
     assert "Not replayable: working directory" in out
@@ -165,6 +165,7 @@ def test_an_episode_whose_log_is_gone_keeps_its_symptom_and_the_walk_goes_on(wri
 
 def test_a_row_stored_with_the_retired_corrected_signal_still_shows(write_session, tmp_path, capsys, monkeypatch):
     runs = two_queued(write_session, tmp_path)
+    (tmp_path / "projects" / "-repo" / "s1.jsonl").unlink()  # without its log, the walk shows what triage saw
     rows = json.loads((runs / "candidates.json").read_text())
     rows[0]["summary"]["signals"]["corrected"] = "no, still broken"
     (runs / "candidates.json").write_text(json.dumps(rows))

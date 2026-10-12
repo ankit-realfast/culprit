@@ -133,7 +133,7 @@ state; v1 uses `claude -p` in a throwaway directory and revisits Harbor if isola
 |---|---|---|---|
 | 1 | episodes (`logs`) | Split sessions into episodes | `.jsonl` → `Episode{prompt, transcript, model, cwd, branch, snapshot ref, signals}` |
 | 2 | triage (`logs`) | Rank failure candidates for the human to confirm, from interrupts, tool errors (capped), compactions and slow turns (an interrupted turn logs no duration, so it is timed from its first to its last timestamp); API errors are infrastructure failures, so they add nothing to the score and a row that has them is marked likely not reproducible; a prompt that is only a slash command (one line: `/`, a command word, its arguments, e.g. `/compact` or `/model opus`) asks Claude Code rather than the agent for something and is never a candidate | Episodes → confirmed episodes, each with a Symptom (human-confirmed; this is the Misjudged check) |
-| 3 | criterion (`model`) | Draft what success means, from the human's follow-up messages | Episode → success criterion the human approves (`culprit confirm` with no id walks the queue: each row with the human's next prompt beside it, since whether that prompt corrects Claude is for the human to judge, not a phrase list; symptom, then the drafted criterion to approve, then the restore) |
+| 3 | criterion (`model`) | Draft what success means, from the human's follow-up messages | Episode → success criterion the human approves (`culprit confirm` with no id walks the queue: each row with its What happened recap, which includes the human's next prompt, since whether that prompt corrects Claude is for the human to judge, not a phrase list; symptom, then the drafted criterion to approve, then the restore) |
 | 4 | restore (`replay`) | Restore the episode's starting state in a throwaway directory | Episode → directory |
 | 5 | oracles (`diagnose`) | Build one variant per cause | Episode → variants: task, environment, agent setup, harness, model |
 | 6 | replayer (`replay`, `diagnose`) | Run each variant N times, baseline first | Variant + directory → stream-json transcripts, cost |
@@ -178,6 +178,12 @@ variables above. An episode is named by its row number in the triage queue (plai
 it (approve, edit first, skip); `confirm <episode>` shows the draft and asks again once a symptom is recorded;
 `confirm <episode> approve` is the only way to approve without a terminal, and confirming a symptom again never
 approves;
+`confirm <episode>` (with or without a symptom), each episode of the walk and `status <episode>` first show
+What happened, built from the episode's records with no model call: what the person asked (about 300
+characters), what Claude did (tool calls; files Edit, Write and NotebookEdit targeted, relative to the working
+directory, at most five then "+N more"; tool errors and the first one's first line), Claude's last text, how it
+ended (the person interrupted it, it finished — each with how long it took — or API errors ended it) and the
+person's next prompt; a missing session log leaves it out;
 `diagnose` restores the starting files when they are missing, runs the baseline and the oracles, and with
 no id diagnoses the whole queue and writes the report. Every replaying command prints the most it can run
 and spend before it starts.

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from culprit.diagnose import (BASELINE, VariantOutcome, Verdict, load_instructions_draft, load_outcome, load_outcomes,
                               load_verdict, costs_line, limits_line, models_line, network_line, numbers_line, pristine_dir, stored_spend)
+from culprit.logs import WhatHappened
 from culprit.model import CRITERION_FILE, Criterion, criterion_step, load_criterion
 from culprit.store import (SELFTEST_DIR, Cause, Symptom, confirm_step, display_id, episode_dir, known_episode_ids,
                            load_restore, prompt_excerpt, queued_ids, read_symptom)
@@ -325,6 +326,19 @@ def short_path(runs_dir: Path, episode_id: str, name: str = "") -> str:
         folder = f"{session[:8]}…{prompt[:8]}"
     path = shown_runs(runs_dir) / folder
     return str(path / name if name else path)
+
+
+RECAP_LABEL_WIDTH = len("You said next")
+
+
+def what_happened_block(recap: WhatHappened) -> list[str]:
+    """The episode in plain words, labels in one column and every value wrapped under its own start."""
+    lines = ["What happened"]
+    for label, values in recap.rows():
+        first = f"  {label:<{RECAP_LABEL_WIDTH}}  "
+        lines += wrap(values[0], first=first)
+        lines += [line for value in values[1:] for line in wrap(value, " " * len(first))]
+    return lines
 
 
 def criterion_block(criterion: Criterion) -> list[str]:

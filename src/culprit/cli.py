@@ -20,9 +20,9 @@ from culprit.diagnose import (BASELINE, DRAFTED_CAUSES, ENV_FIX_FILE, BudgetExha
                               load_verdict, numbers_line, plan_cost, tokens_per_run, usd_per_run,
                               oracle_model, pristine_dir, record_call_spend, retire_if_criterion_changed, run_variant,
                               stored_spend, unknown_model_warning)
-from culprit.logs import (Episode, EpisodeNotFound, FailureSignals, excerpt, find_episode, follow_up_prompts,
+from culprit.logs import (Episode, EpisodeNotFound, FailureSignals, WhatHappened, find_episode, follow_up_prompts,
                           load_snapshot, project_hooks, rank_candidates, replay_blockers, session_files, session_root,
-                          summarize_session)
+                          summarize_session, what_happened)
 from culprit.model import (CRITERION_FILE, LIMIT_WORDS, ClaudeCallFailed, Criterion, approve_criterion, ask_claude,
                            draft_criterion, load_criterion, resolved_model, save_criterion)
 from culprit.replay import (REPLAY_BUDGET_FLOOR_USD, OriginalModified, SetupScriptFailed, apply_episode_originals,
@@ -30,7 +30,7 @@ from culprit.replay import (REPLAY_BUDGET_FLOOR_USD, OriginalModified, SetupScri
 from culprit.report import (DONE, REPORT_FILE, EpisodeStatus, Step, block, collect, criterion_block, episode_header,
                             episode_status, episode_steps, next_section, progress_lines, queue_status,
                             numbered, queue_steps, render_report, row_command, short_path, shown_runs, trust_block,
-                            verdict_lines, wrap)
+                            verdict_lines, what_happened_block, wrap)
 from culprit.store import (ORACLE_ORDER, RESTORE_FILE, Cause, NotReady, Symptom, UnknownEpisode,
                            display_id, episode_dir, episode_ref, prompt_excerpt, queued_ids, read_symptom,
                            record_symptom, require_queue, resolve_episode_id, save_candidates, write_json)
@@ -434,7 +434,7 @@ def confirm_one(args: argparse.Namespace) -> int:
     before = read_symptom(args.runs, args.episode_id)
     if args.symptom is None and before is None and not stdin_is_tty():
         raise NotReady(symptoms_needed(args.ref))
-    say(episode_header(args.runs, args.episode_id, args.ref))
+    say(episode_header(args.runs, args.episode_id, args.ref) + recap_lines(args.projects, args.episode_id))
     if args.symptom is None and before is None:
         answer = choose("\nWhat went wrong?", [*(s.value for s in Symptom), "skip"])
         if answer == "skip":
@@ -563,12 +563,20 @@ def stored_signals(stored: dict) -> FailureSignals:
     return FailureSignals(**{f.name: stored[f.name] for f in fields(FailureSignals) if f.name in stored})
 
 
-def _next_prompt(projects: Path, episode_id: str) -> str | None:
-    """The human's next prompt after the episode, so the person can judge whether it corrected Claude."""
+def recap_for(projects: Path, episode_id: str) -> WhatHappened | None:
+    """What happened in the episode, with the human's next prompt (so the person can judge whether it corrected
+    Claude); None when the session log is gone."""
     try:
-        return next(iter(follow_up_prompts(projects, episode_id, count=1)), None)
+        episode = find_episode(projects, episode_id)
+        return what_happened(episode, next(iter(follow_up_prompts(projects, episode_id, count=1)), None))
     except EpisodeNotFound:
         return None
+
+
+def recap_lines(projects: Path, episode_id: str) -> list[str]:
+    """The What happened block, set apart by a blank line; nothing when the session log is gone."""
+    recap = recap_for(projects, episode_id)
+    return ["", *what_happened_block(recap)] if recap else []
 
 
 def _confirm_progress(runs_dir: Path, episode_id: str) -> tuple[bool, bool]:
@@ -585,11 +593,10 @@ def confirm_walk_step(args: argparse.Namespace, position: int, row: dict, blocke
     episode_id = summary["episode_id"]
     signals = summary.get("signals")
     lines = ["", *episode_header(args.runs, episode_id, str(position))]
-    if signals:
+    recap = recap_lines(args.projects, episode_id)
+    if not recap and signals:  # the session log is gone: what triage saw of it is all there is
         lines.append(f"  {_evidence(stored_signals(signals))}")
-    if follow_up := _next_prompt(args.projects, episode_id):
-        lines += wrap(f'You said next: "{excerpt(follow_up)}"', "  ")
-    lines += [line for blocker in blockers for line in wrap(f"Not replayable: {blocker}", "  ")]
+    lines += [line for blocker in blockers for line in wrap(f"Not replayable: {blocker}", "  ")] + recap
     say(lines)
     before = read_symptom(args.runs, episode_id)
     if before is None:
@@ -631,7 +638,7 @@ def status_command(args: argparse.Namespace) -> int:
         if args.json:
             emit(status_json(status))
             return 0
-        say(status_lines(args.runs, status, args.ref))
+        say(status_lines(args.runs, status, args.ref, recap_lines(args.projects, args.episode_id)))
         return 0
     statuses = queue_status(args.runs)
     if args.json:
@@ -671,8 +678,9 @@ def status_json(status: EpisodeStatus) -> dict:
     return data
 
 
-def status_lines(runs_dir: Path, status: EpisodeStatus, ref: str) -> list[str]:
-    lines = [*episode_header(runs_dir, status.episode_id, ref), *block("Progress", progress_lines(runs_dir, status))]
+def status_lines(runs_dir: Path, status: EpisodeStatus, ref: str, recap: Sequence[str] = ()) -> list[str]:
+    lines = [*episode_header(runs_dir, status.episode_id, ref), *recap,
+             *block("Progress", progress_lines(runs_dir, status))]
     if status.criterion:
         lines += ["", *criterion_block(status.criterion)]
     if status.restore:

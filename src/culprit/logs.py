@@ -387,6 +387,122 @@ def records_before(session_file: Path, prompt_uuid: str) -> list[dict]:
     raise EpisodeNotFound(f"prompt {prompt_uuid} is no longer in {session_file}")
 
 
+# --- recap: What happened in one episode, in plain words, so a person can say days later what went wrong. ---
+# Built from the episode's own records (and the person's next prompt), with no model call.
+
+ASKED_CHARS = 300
+LAST_TEXT_CHARS = 300
+SAID_NEXT_CHARS = 200
+ERROR_CHARS = 120
+EDITED_SHOWN = 5
+EDIT_TOOLS = {"Edit": "file_path", "Write": "file_path", "MultiEdit": "file_path", "NotebookEdit": "notebook_path"}
+TOOL_ERROR_TAG = re.compile(r"</?tool_use_error>")
+
+
+@dataclass(frozen=True)
+class WhatHappened:
+    asked: str
+    did: str  # tool calls, files edited, tool errors
+    first_error: str | None
+    last_text: str | None  # Claude's last words before the episode ended
+    ended: str
+    said_next: str | None
+
+    def rows(self) -> list[tuple[str, list[str]]]:
+        """(label, its lines) in reading order; a missing fact leaves its row out (or, for the first error, its
+        line)."""
+        rows = [("You asked", [f'"{self.asked}"']),
+                ("Claude did", [self.did] + ([f'(first: "{self.first_error}")'] if self.first_error else []))]
+        if self.last_text:
+            rows.append(("Claude's last", [f'"{self.last_text}"']))
+        rows.append(("It ended", [self.ended]))
+        if self.said_next:
+            rows.append(("You said next", [f'"{self.said_next}"']))
+        return rows
+
+    def as_text(self) -> str:
+        """One fact per line, `label: value`: what a model is shown."""
+        return "\n".join(f"{label}: {' '.join(lines)}" for label, lines in self.rows())
+
+
+def what_happened(episode: Episode, next_prompt: str | None) -> WhatHappened:
+    uses = tool_uses(episode)
+    signals = signals_for(episode)
+    parts = [f"{len(uses)} tool call{'' if len(uses) == 1 else 's'}" if uses else "no tool calls"]
+    if edited := _edited_files(episode, uses):
+        more = f" +{len(edited) - EDITED_SHOWN} more" if len(edited) > EDITED_SHOWN else ""
+        parts.append("edited " + ", ".join(edited[:EDITED_SHOWN]) + more)
+    if signals.tool_errors:
+        parts.append(f"{signals.tool_errors} tool error{'' if signals.tool_errors == 1 else 's'}")
+    took = _took(signals.duration_s)
+    if signals.interrupted:
+        ended = "you interrupted it" + (f" after {took}" if took else "")
+    elif _api_error_last(episode.records):
+        ended = "API errors ended it"
+    else:
+        ended = "it finished" + (f" after {took}" if took else "")
+    return WhatHappened(excerpt(episode.prompt_text, ASKED_CHARS), " · ".join(parts), _first_tool_error(episode),
+                        _last_text(episode), ended, excerpt(next_prompt, SAID_NEXT_CHARS) if next_prompt else None)
+
+
+def _edited_files(episode: Episode, uses: list[dict]) -> list[str]:
+    """Files the episode's edit tools targeted, each once, relative to its working directory when inside it."""
+    cwd = Path(episode.cwd) if episode.cwd else None
+    shown: list[str] = []
+    for use in uses:
+        target = (use.get("input") or {}).get(EDIT_TOOLS.get(use.get("name", ""), ""))
+        if not isinstance(target, str) or not target:
+            continue
+        path = Path(target)
+        if cwd is not None and path.is_relative_to(cwd):
+            path = path.relative_to(cwd)
+        if str(path) not in shown:
+            shown.append(str(path))
+    return shown
+
+
+def _first_tool_error(episode: Episode) -> str | None:
+    for record in episode.records:
+        if record.get("type") != "user":
+            continue
+        for block in content_blocks(record):
+            if block.get("type") == "tool_result" and block.get("is_error"):
+                content = block.get("content")
+                if isinstance(content, list):
+                    content = "\n".join(part.get("text", "") for part in content if isinstance(part, dict))
+                text = TOOL_ERROR_TAG.sub("", content if isinstance(content, str) else "")
+                line = next((line for line in text.splitlines() if line.strip()), "")
+                return excerpt(line, ERROR_CHARS) if line else None
+    return None
+
+
+def _last_text(episode: Episode) -> str | None:
+    for record in reversed(episode.records):
+        model = (record.get("message") or {}).get("model")
+        if record.get("type") == "assistant" and model != SYNTHETIC_MODEL and text_of(record).strip():
+            return excerpt(text_of(record), LAST_TEXT_CHARS)
+    return None
+
+
+def _api_error_last(records: tuple[dict, ...]) -> bool:
+    """Whether an API error came after the last real assistant reply, so nothing recovered from it."""
+    for record in reversed(records):
+        if (record.get("type") == "system" and record.get("subtype") == "api_error") or record.get("isApiErrorMessage"):
+            return True
+        if record.get("type") == "assistant" and (record.get("message") or {}).get("model") != SYNTHETIC_MODEL:
+            return False
+    return False
+
+
+def _took(seconds: float) -> str:
+    if seconds < 1:
+        return ""
+    if seconds < 60:
+        return f"{seconds:.0f} s"
+    minutes = round(seconds / 60)
+    return f"{minutes} min" if minutes < 60 else f"{minutes // 60} h {minutes % 60} min"
+
+
 # --- snapshot: The file-history snapshot Claude Code took when the episode's prompt arrived. ---
 # It maps every file Claude Code had edited so far in the session to the backup holding that file's
 # content at this point, or to None for a file that did not exist yet (an assumption Stage 2's
