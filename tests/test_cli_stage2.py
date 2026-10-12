@@ -160,3 +160,72 @@ def test_confirm_drafts_for_the_confirmed_symptom_and_keeps_which_it_was(write_s
     assert "What went wrong, as the person confirmed it: wasteful" in prompt
     assert "limits" in schema["required"]
     assert load_criterion(runs, "s1:p1").symptom == "wasteful"
+
+
+# --- redrafting when the symptom changes ---
+
+OUTCOME = {"success_means": "a.py works", "checks": [], "must_not": []}
+LEAN = {**OUTCOME, "limits": {"max_tool_calls": 1, "max_minutes": 1}, "limits_reason": "half the original"}
+
+
+def drafted_for(monkeypatch, symptom, *answers):
+    fake = FakeAsk(*answers)
+    monkeypatch.setattr(cli, "ask_claude", fake)
+    assert cli.main(["confirm", "s1:p1", symptom]) == 0
+    return fake
+
+
+def test_a_new_symptom_redrafts_an_unedited_draft(write_session, tmp_path, monkeypatch, capsys):
+    _, runs = queued_episode(write_session, tmp_path)
+    drafted_for(monkeypatch, "wrong-result", OUTCOME)
+    capsys.readouterr()
+    fake = drafted_for(monkeypatch, "wasteful", LEAN)
+    out = capsys.readouterr().out
+    assert "✓ Redrafted for wasteful" in out and "at most 1 tool call · 1 minute — half the original" in out
+    assert "What went wrong, as the person confirmed it: wasteful" in fake.calls[0][0]
+    assert load_criterion(runs, "s1:p1").symptom == "wasteful"
+
+
+def test_the_same_symptom_keeps_the_draft(write_session, tmp_path, monkeypatch, capsys):
+    queued_episode(write_session, tmp_path)
+    drafted_for(monkeypatch, "wasteful", LEAN)
+    assert drafted_for(monkeypatch, "wasteful").calls == []
+    assert "Redrafted" not in capsys.readouterr().out
+
+
+def test_an_edited_draft_is_kept_and_the_person_told_what_it_was_written_for(write_session, tmp_path, monkeypatch,
+                                                                            capsys):
+    _, runs = queued_episode(write_session, tmp_path)
+    drafted_for(monkeypatch, "wrong-result", OUTCOME)
+    path = runs / "s1__p1" / "criterion.json"
+    edited = json.loads(path.read_text())
+    edited["success_means"] = "a.py works and b.py too"
+    path.write_text(json.dumps(edited))
+    capsys.readouterr()
+    assert drafted_for(monkeypatch, "wasteful").calls == []
+    out = " ".join(capsys.readouterr().out.split())
+    assert f"Kept your edited draft; it was written for wrong-result — edit {path} to match wasteful" in out
+    assert load_criterion(runs, "s1:p1").success_means == "a.py works and b.py too"
+
+
+def test_an_approved_criterion_is_never_redrafted(write_session, tmp_path, monkeypatch, capsys):
+    _, runs = queued_episode(write_session, tmp_path)
+    drafted_for(monkeypatch, "wrong-result", OUTCOME)
+    assert cli.main(["confirm", "s1:p1", "approve"]) == 0
+    capsys.readouterr()
+    assert drafted_for(monkeypatch, "wasteful").calls == []
+    out = " ".join(capsys.readouterr().out.split())
+    assert "written for wrong-result, not wasteful; approved criteria are never redrafted" in out
+    assert load_criterion(runs, "s1:p1").symptom == "wrong-result"
+
+
+def test_a_draft_from_before_symptom_tags_is_redrafted(write_session, tmp_path, monkeypatch, capsys):
+    # no symptom tag and no hash: nothing can show it was edited, so it is taken as the drafter's own words
+    _, runs = queued_episode(write_session, tmp_path)
+    folder = runs / "s1__p1"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "symptom.json").write_text(json.dumps({"episode_id": "s1:p1", "symptom": "wasteful"}))
+    (folder / "criterion.json").write_text(json.dumps({**OUTCOME, "approved": False, "model": None}))
+    fake = drafted_for(monkeypatch, "wasteful", LEAN)
+    assert len(fake.calls) == 1 and "✓ Redrafted for wasteful" in capsys.readouterr().out
+    assert load_criterion(runs, "s1:p1").limits is not None

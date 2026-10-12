@@ -369,6 +369,12 @@ def draft_criterion(episode: Episode, follow_ups: list[str], symptom: Symptom | 
     return replace(criterion, drafted_hash=content_hash(criterion))
 
 
+def criterion_edited(criterion: Criterion) -> bool:
+    """True when what the criterion says no longer matches what was drafted. A draft with no stored hash (written
+    before drafts kept one) cannot show an edit and counts as unedited."""
+    return criterion.drafted_hash is not None and content_hash(criterion) != criterion.drafted_hash
+
+
 def save_criterion(runs_dir: Path, episode_id: str, criterion: Criterion) -> Path:
     return write_json(episode_dir(runs_dir, episode_id) / CRITERION_FILE, asdict(criterion))
 

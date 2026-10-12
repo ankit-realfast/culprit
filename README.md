@@ -85,7 +85,9 @@ uv run culprit status [1]          # any time: where episodes stand and what to 
   criterion for that symptom, shows it and, in a terminal, asks: approve, edit first, or skip. To edit, change
   `runs/<episode>/criterion.json`, then run `confirm <episode>` (no symptom needed once one is recorded) to see
   it again and approve it. Without a terminal, `confirm <episode> approve` approves the draft; confirming a
-  symptom never approves anything.
+  symptom never approves anything. Confirming a different symptom redrafts an unapproved draft for it,
+  unless you edited the draft (then it is kept and you are told which symptom it was written for); an
+  approved criterion is never redrafted.
 - **The criterion fits the symptom:** for `stopped-short` it names every part that must be finished; for
   `ignored-instructions` it spells out each ignored instruction; for `wasteful` it also sets **limits**,
   shown as `at most 15 tool calls · 4 minutes — <why>` (about half of what the original took), since the

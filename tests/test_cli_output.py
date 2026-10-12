@@ -189,12 +189,14 @@ def test_approve_refuses_without_a_symptom_or_a_draft(row4, capsys):
     assert "no draft to approve" in capsys.readouterr().err and load_criterion(row4, EP) is None
 
 
-def test_a_different_symptom_is_changed_and_the_draft_shown_again(row4, capsys):
+def test_a_different_symptom_is_changed_and_the_draft_redrafted_for_it(row4, capsys, monkeypatch):
     cli.main(["confirm", "4", "wrong-result"])
     capsys.readouterr()
+    monkeypatch.setattr(cli, "ask_claude", FakeAsk(dict(DRAFT)))
     assert cli.main(["confirm", "4", "stopped-short"]) == 0
     out = capsys.readouterr().out
-    assert "✓ Changed what went wrong: wrong-result → stopped-short" in out and DRAFT_BLOCK in out
+    assert "✓ Changed what went wrong: wrong-result → stopped-short\n\n✓ Redrafted for stopped-short\n" in out
+    assert DRAFT_BLOCK in out
     assert "culprit confirm 4 approve" in out and load_criterion(row4, EP).approved is False
 
 

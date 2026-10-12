@@ -24,7 +24,7 @@ from culprit.logs import (Episode, EpisodeNotFound, FailureSignals, WhatHappened
                           load_snapshot, project_hooks, rank_candidates, replay_blockers, session_files, session_root,
                           summarize_session, what_happened)
 from culprit.model import (CALL_CAP_USD, CRITERION_FILE, LIMIT_WORDS, ClaudeCallFailed, Criterion, Suggestion,
-                           approve_criterion, ask_claude, draft_criterion, load_criterion, load_suggestion,
+                           approve_criterion, ask_claude, criterion_edited, draft_criterion, load_criterion, load_suggestion,
                            resolved_model, save_criterion, save_suggestion, suggest_symptom)
 from culprit.replay import (REPLAY_BUDGET_FLOOR_USD, OriginalModified, SetupScriptFailed, apply_episode_originals,
                             baseline_settings, check_restore, episode_originals, restore, restore_from_git)
@@ -479,6 +479,8 @@ def confirm_one(args: argparse.Namespace) -> int:
         say(stored_suggestion_lines(args.runs, args.episode_id))
         answer = args.symptom or before.value
     say(["", symptom_line(args.runs, args.episode_id, before, Symptom(answer))])
+    if args.symptom:
+        say(redraft_for(args.runs, args.projects, args.episode_id, Symptom(args.symptom)))
     answer = settle_criterion(args.runs, args.projects, args.episode_id, ask=stdin_is_tty(),
                               options=APPROVE_OPTIONS)
     say(next_section(criterion_next(args.runs, args.episode_id, args.ref, answer)))
@@ -505,6 +507,27 @@ def symptom_line(runs_dir: Path, episode_id: str, before: Symptom | None, sympto
     if before is None:
         return f"{DONE} Recorded what went wrong: {symptom.value}"
     return f"{DONE} Changed what went wrong: {before.value} → {symptom.value}"
+
+
+def redraft_for(runs_dir: Path, projects_dir: Path, episode_id: str, symptom: Symptom) -> list[str]:
+    """Redraft an unapproved draft written for another symptom (or before drafts were tagged with one) when the
+    person has not edited it; keep an edited one and say what it was written for. An approved criterion is never
+    redrafted. Returns the lines saying which happened (none when the draft already fits the symptom)."""
+    criterion = load_criterion(runs_dir, episode_id)
+    if criterion is None or criterion.symptom == symptom.value:
+        return []
+    if criterion.approved:
+        if criterion.symptom is None:
+            return []
+        return ["", *wrap(f"The approved criterion was written for {criterion.symptom}, not {symptom.value}; "
+                          f"approved criteria are never redrafted")]
+    if criterion_edited(criterion):
+        path = short_path(runs_dir, episode_id, CRITERION_FILE)
+        return ["", *wrap(f"Kept your edited draft; it was written for {criterion.symptom} — edit {path} to match "
+                          f"{symptom.value}")]
+    err(f"\nredrafting what success means for {symptom.value} (one model call)…")
+    draft_criterion_for(runs_dir, projects_dir, episode_id)
+    return ["", f"{DONE} Redrafted for {symptom.value}"]
 
 
 def settle_criterion(runs_dir: Path, projects_dir: Path, episode_id: str, *, ask: bool,

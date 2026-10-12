@@ -226,6 +226,16 @@ result line's `duration_ms`, else the wall clock; a run killed at culprit's time
 more than `max_usd` (the result's `total_cost_usd`; a run killed at the time limit has no known cost, so its
 cost is not held against it). Within its limits a run is judged as before. The criterion block that `confirm`,
 `status` and the report print shows them under **Limits**: `at most 15 tool calls · 4 minutes — <reason>`.
+**A changed symptom redrafts, but never over a person's edits or an approval.** On `confirm <episode>
+<symptom>` (the symptom typed), a draft that is not approved and was written for another symptom, or carries no
+symptom tag (drafted before drafts were tagged), is redrafted for the typed symptom — one call, printed as
+`✓ Redrafted for <symptom>` — when what it says still hashes to its `drafted_hash`. A draft without a hash
+cannot show an edit, so it counts as unedited; since the tag and the hash were added together, that is exactly
+the untagged legacy draft, and a person's edits to one before this change are lost to the redraft. An edited
+draft is kept, with `Kept your edited draft; it was written for <old> — edit runs/…/criterion.json to match
+<symptom>`. An approved criterion is never redrafted; when its tag names another symptom, `confirm` says so.
+`confirm <episode>` with no symptom and the queue walk never redraft.
+
 Limits are part of the criterion's key, so changing them retires earlier runs like any other change; a
 criterion without limits keys as it did before limits existed.
 
