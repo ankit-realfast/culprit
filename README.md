@@ -88,7 +88,7 @@ uv run culprit status [1]          # where episodes stand and the next command
   `CULPRIT_ORACLE_MODEL`, `CULPRIT_DRAFTING_MODEL` or `CULPRIT_WEAK_MODEL` (an alias or a full model id).
   If your logs show a model of a family culprit doesn't know (not fable, opus, sonnet or haiku), `triage` and
   `diagnose` print a one-line warning on stderr: "your sessions used <id>; if it is stronger than
-  claude-fable-5-1, set CULPRIT_ORACLE_MODEL=<id>".
+  <what fable means today>, set CULPRIT_ORACLE_MODEL=<id>".
 - **Output:** each command prints one block on stdout in reading order: the episode named once at the top
   (what you typed · its short id, plus the prompt), the content, file paths last as
   `runs/<session>…<prompt>/file`, and a numbered **Next** section at the end. Suggested commands reuse the row
@@ -110,8 +110,7 @@ uv run culprit status [1]          # where episodes stand and the next command
 | `diagnose` with no id, in total | $78,000 (20 episodes at the floor; each keeps its own cap inside it) |
 
 - **The episode's own cost:** read from the session's running total (`cost-state` records, `totalCostUSD`) at
-  the end of the episode less the one before it. Claude Code writes those rarely (in one real set of logs
-  1.5% of episodes had one and 0.7% could be costed), so most episodes get the $10 floor. Its duration comes from its `turn_duration`
+  the end of the episode less the one before it. Claude Code writes those rarely, so most episodes get the $10 floor. Its duration comes from its `turn_duration`
   records (or its first and last timestamps). The plan shows the per-replay cap.
 
 - **Typical diagnosis:** about 60 replays. The episode and selftest caps cover the worst case (every
@@ -177,8 +176,8 @@ uv run culprit status [1]          # where episodes stand and the next command
 
 ## Status
 
-Built and unit-tested. Triage and restore have run on real logs. No real episode has been replayed yet,
-so start with one `diagnose` and read its output.
+Built and unit-tested. Triage, restore and a single replay of a follow-up episode have run on real logs;
+no full `diagnose` has run yet, so start with one episode and read its output.
 
 Design: [`docs/specs/2026-10-11-culprit-design.md`](docs/specs/2026-10-11-culprit-design.md) ·
-Plan: [`docs/plans/2026-10-11-culprit-plan.md`](docs/plans/2026-10-11-culprit-plan.md)
+Original build plan (historical): [`docs/plans/2026-10-11-culprit-plan.md`](docs/plans/2026-10-11-culprit-plan.md)
