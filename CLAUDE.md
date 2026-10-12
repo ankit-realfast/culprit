@@ -32,7 +32,7 @@ uv run culprit --help                     # commands: triage, confirm, diagnose,
 
 The CLI keeps flags to `triage --top` and `status --json`; the store and the logs come from `CULPRIT_RUNS`
 (default `runs/`) and `CULPRIT_PROJECTS` (default `~/.claude/projects`); `CULPRIT_ORACLE_MODEL`, `CULPRIT_DRAFTING_MODEL` and `CULPRIT_WEAK_MODEL` override the model aliases. Episodes can be named by row number (`3`; never `#3`, which shells treat as a comment),
-short id or unique prefix. Don't add flags or subcommands without the user asking.
+short id or unique prefix. Approving a criterion is explicit: `confirm <episode>` asks in a terminal, `confirm <episode> approve` without one. Don't add flags or subcommands without the user asking.
 
 ## Architecture
 
@@ -46,7 +46,7 @@ Stdlib-only Python ≥3.11 package under `src/culprit/`, one module per pipeline
 - `model` — every model call (`ask_claude`), criterion drafting, the leak check, the judge
 - `diagnose` — variants, oracles, verdict and its Fisher test, the cost preview, the whole-queue batch
 - `trust` — judge calibration and selftest
-- `report` — the report and per-episode status
+- `report` — the report, per-episode status, and the shared text layout every command prints with (episode header, wrapped sections, numbered Next)
 - `cli` — the command line and its progress lines
 
 Each module imports only modules above it in this list; keep it that way (by where code lives) rather
