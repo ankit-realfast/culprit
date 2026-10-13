@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Callable
 
 from culprit.logs import Episode, episode_cost_usd, signals_for, tool_uses, what_happened
-from culprit.replay import (DIFF_FILE, LIMIT_BUDGET, LIMIT_TIME, NO_MCP_SERVERS, TRANSCRIPT_FILE, ReplayResult,
+from culprit.replay import (DIFF_FILE, LIMIT_BUDGET, LIMIT_TIME, LIMIT_TOOL_CALLS, own_tool_calls, NO_MCP_SERVERS, TRANSCRIPT_FILE, ReplayResult,
                             ran_as)
 from culprit.store import SYMPTOM_MEANINGS, NotReady, Symptom, display_id, episode_dir, read_json, write_json
 
@@ -550,18 +550,13 @@ def actions_from_transcript(transcript: str) -> str:
 
 
 def tool_call_count(transcript: str) -> int:
-    """The tool calls the agent itself made (a subagent's carry a parent_tool_use_id and are not counted, as the
-    original's log holds only the agent's own)."""
+    """The tool calls the agent itself made, the way a replay is stopped at its limit."""
     count = 0
     for raw in transcript.splitlines():
         try:
-            record = json.loads(raw)
+            count += own_tool_calls(json.loads(raw))
         except json.JSONDecodeError:
             continue
-        if not isinstance(record, dict) or record.get("type") != "assistant" or record.get("parent_tool_use_id"):
-            continue
-        count += sum(1 for block in (record.get("message") or {}).get("content") or []
-                     if isinstance(block, dict) and block.get("type") == "tool_use")
     return count
 
 
@@ -578,7 +573,7 @@ def over_limit(limits: Limits, replay: ReplayResult, tool_calls: int) -> str | N
     return None
 
 
-LIMIT_WORDS = {LIMIT_BUDGET: "spend limit", LIMIT_TIME: "time limit"}
+LIMIT_WORDS = {LIMIT_BUDGET: "spend limit", LIMIT_TIME: "time limit", LIMIT_TOOL_CALLS: "tool-call limit"}
 
 
 def _limit_note(replay: ReplayResult) -> str:

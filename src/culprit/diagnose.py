@@ -9,7 +9,7 @@ import os
 import re
 import shutil
 import threading
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field, replace
 from itertools import combinations
 from math import comb
@@ -18,7 +18,7 @@ from typing import Callable, Sequence
 
 from culprit.logs import (Episode, EpisodeNotFound, find_episode, follow_up_prompts, is_follow_up, is_human_prompt,
                           records_before, text_of, tool_uses)
-from culprit.model import (CALL_CAP_USD, KNOWN_FAMILIES, MODEL_RAN_KEY, Ask, ClaudeCallFailed, Criterion, Judgement, ask_claude, check_leak,
+from culprit.model import (CALL_CAP_USD, KNOWN_FAMILIES, MODEL_RAN_KEY, Ask, ClaudeCallFailed, Criterion, Judgement, Limits, ask_claude, check_leak,
                            cached_model, criterion_step, judge_replay, load_criterion, model_family,
                            resolved_model, unknown_models)
 from culprit.replay import (MAX_EFFORT, MEMORY_DIR, REPLAY_BUDGET_FLOOR_USD, RESULT_FILE, ReplaySettings, SetupScriptFailed, baseline_settings,
@@ -127,16 +127,59 @@ def scoped(progress: Progress | None, scope: str) -> Progress | None:
     return lambda event: progress(replace(event, scope=f"{scope} / {event.scope}" if event.scope else scope))
 
 
+LIMIT_MARGIN_S = 5  # a replay is stopped this long after the criterion's minutes, so it is over them, not at them
+
+
+def bounded_by(settings: ReplaySettings, limits: Limits | None) -> ReplaySettings:
+    """A replay's time and spend caps tightened to the criterion's limits: past them it has failed already."""
+    if limits is None:
+        return settings
+    timeout_s, budget = settings.timeout_s, settings.max_budget_usd
+    if limits.max_minutes is not None:
+        timeout_s = min(timeout_s, round(limits.max_minutes * 60) + LIMIT_MARGIN_S)
+    if limits.max_usd is not None:
+        budget = min(budget, limits.max_usd)
+    return replace(settings, timeout_s=timeout_s, max_budget_usd=budget)
+
+
+Settled = Callable[[int, int], bool]  # (passes, counted runs) -> no remaining run can change what they decide
+
+
+def settled_not_reproducible(n: int) -> Settled:
+    """The baseline may stop only once most of its n runs have passed: the failure does not reproduce. A baseline
+    that reproduces runs in full, since every variant is compared with its counts."""
+    return lambda passes, counted: passes * 2 > n
+
+
+def settled_against(baseline: VariantOutcome, n: int) -> Settled:
+    """A variant may stop once it beats the baseline even if every remaining run fails, or cannot beat it even if
+    every remaining run passes. Checked against every stopping point at n = 10 for each baseline: the counts it
+    stops at decide the same as any full set would."""
+    def settled(passes: int, counted: int) -> bool:
+        if counted == 0:
+            return False
+        remaining = n - counted
+        best = beats(VariantOutcome("", passes + remaining, n, 0.0), baseline)
+        worst = beats(VariantOutcome("", passes, n, 0.0), baseline)
+        return best == worst
+    return settled
+
+
 def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Episode, runs_dir: Path,
                 criterion: Criterion, budget: EpisodeBudget, replay=run_replay, judge=judge_replay,
                 out_dir: Path | None = None, progress: Progress | None = None,
-                parallel: int | None = None) -> VariantOutcome:
+                parallel: int | None = None, settled: Settled | None = None) -> VariantOutcome:
     """n counted runs, replayed side by side in waves: each wave starts the runs still missing (as many as the
-    budget can hold at their caps), and a wave's void runs are retried in the next."""
+    budget can hold at their caps), and a wave's void runs are retried in the next. Each replay stops at the
+    criterion's limits; with `settled`, the runs still going are stopped once the result can no longer change."""
     episode_folder = episode_dir(runs_dir, episode.episode_id)
     folder = out_dir or episode_folder
     variant_dir = folder / REPLAYS_DIR / variant
     workers = parallel or parallel_replays()
+    settings = bounded_by(settings, criterion.limits)
+    watch: dict = {}
+    if criterion.limits and criterion.limits.max_tool_calls is not None:
+        watch["max_tool_calls"] = criterion.limits.max_tool_calls
     passes = counted = void = 0
     limits: dict[str, int] = {}
     tokens: dict[str, int] = {}
@@ -150,13 +193,17 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
     def paid(run_dir: Path) -> bool:
         return (run_dir / RESULT_FILE).is_file() and (run_dir / JUDGEMENT_FILE).is_file()
 
-    def replay_and_judge(event: ReplayEvent) -> tuple:
+    def replay_and_judge(event: ReplayEvent, cancel: threading.Event) -> tuple:
         run_dir = variant_dir / str(event.attempt)
         tell(replace(event, spent_usd=round(budget.spent_usd, 4)))
         result = replay(settings, pristine_dir(runs_dir, episode.episode_id), run_dir, replay_workdir(episode),
                         criterion.checks, original_cwd=Path(episode.cwd),
-                        original_memory=episode.session_file.parent / MEMORY_DIR)
+                        original_memory=episode.session_file.parent / MEMORY_DIR,
+                        **watch, **({"cancel": cancel} if settled else {}))
         budget.spend(result.cost_usd)  # charged before judging, so a judge failure cannot lose it
+        if getattr(result, "abandoned", False):
+            tell(finished(event, result.cost_usd, None, None, reused=False))
+            return result.cost_usd, None, result.usage, None, {}, None
         judgement = judge(criterion, result)
         if judgement.by == "model":
             budget.spend(CALL_CAP_USD)
@@ -173,13 +220,17 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
         tell(finished(event, cost_usd, limit, judgement, reused=True))
         return cost_usd, limit, stored.get("usage") or {}, stored.get("model"), stored.get("network") or {}, judgement
 
-    def finished(event: ReplayEvent, cost_usd: float, limit: str | None, judgement: Judgement, *,
+    def finished(event: ReplayEvent, cost_usd: float, limit: str | None, judgement: Judgement | None, *,
                  reused: bool) -> ReplayEvent:
-        verdict = "void" if judgement.by == "void" else "pass" if judgement.passed else "fail"
+        verdict = ("abandoned" if judgement is None else "void" if judgement.by == "void"
+                   else "pass" if judgement.passed else "fail")
         return replace(event, kind="finish", result=verdict, cost_usd=cost_usd,
                        spent_usd=round(budget.spent_usd, 4), reused=reused, limit=limit)
 
-    while counted < n and attempt < n + MAX_VOID_RETRIES:
+    def is_settled(p: int, c: int) -> bool:
+        return settled is not None and c < n and settled(p, c)
+
+    while counted < n and attempt < n + MAX_VOID_RETRIES and not is_settled(passes, counted):
         wave: list[ReplayEvent] = []
         fresh: list[ReplayEvent] = []
         while counted + len(wave) < n and attempt < n + MAX_VOID_RETRIES:
@@ -194,12 +245,27 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
             attempt += 1
         fresh_attempts = {event.attempt for event in fresh}
         runs = {event.attempt: read_back(event) for event in wave if event.attempt not in fresh_attempts}
-        runs.update(_run_side_by_side(replay_and_judge, fresh, workers))
+        so_far = [passes, counted]
+        cancel = threading.Event()
+
+        def judged(outcome: tuple) -> None:
+            judgement = outcome[-1]
+            if judgement is not None and judgement.by != "void":
+                so_far[0] += int(judgement.passed)
+                so_far[1] += 1
+            if is_settled(*so_far):
+                cancel.set()  # the runs still going cannot change the result: stop them
+
+        for outcome in runs.values():
+            judged(outcome)
+        runs.update(_run_side_by_side(lambda event: replay_and_judge(event, cancel), fresh, workers, judged))
         for event in wave:
             run_cost, limit, usage, ran, calls, judgement = runs[event.attempt]
             cost += run_cost
             for kind, count in usage.items():
                 tokens[kind] = tokens.get(kind, 0) + count
+            if judgement is None:
+                continue  # abandoned: its spend counts, the run does not
             if judgement.by == "void":
                 void += 1
                 continue
@@ -216,22 +282,26 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
     return outcome
 
 
-def _run_side_by_side(work: Callable[[ReplayEvent], tuple], events: list[ReplayEvent], workers: int) -> dict:
-    """work(event) for every event, at most `workers` at a time, by attempt. A failing run lets the others finish
-    (each keeps its judgement) and then raises; Ctrl-C kills every run still going."""
+def _run_side_by_side(work: Callable[[ReplayEvent], tuple], events: list[ReplayEvent], workers: int,
+                      on_done: Callable[[tuple], None] = lambda outcome: None) -> dict:
+    """work(event) for every event, at most `workers` at a time, by attempt; on_done hears each outcome as it
+    comes. A failing run lets the others finish (each keeps its judgement) and then raises; Ctrl-C kills every
+    run still going."""
     if not events:
         return {}
     pool = ThreadPoolExecutor(max_workers=min(workers, len(events)))
     try:
-        futures = {event.attempt: pool.submit(work, event) for event in events}
-        wait(futures.values())
+        futures = {pool.submit(work, event): event.attempt for event in events}
+        for future in as_completed(futures):
+            if future.exception() is None:
+                on_done(future.result())
     except KeyboardInterrupt:
         stop_replays()
         raise
     finally:
         pool.shutdown(wait=True)
         allow_replays()
-    return {attempt: future.result() for attempt, future in futures.items()}
+    return {attempt: future.result() for future, attempt in futures.items()}
 
 
 def stored_spend(folder: Path) -> float:
@@ -955,8 +1025,9 @@ def diagnose(episode: Episode, criterion: Criterion, symptom: Symptom, base: Rep
 
     def measured(name: str, settings: ReplaySettings) -> VariantOutcome:
         saved = load_outcome(folder, name)
+        settled = settled_not_reproducible(n) if name == BASELINE else settled_against(outcomes[BASELINE], n)
         result = saved or run(name, settings, n=n, episode=episode, runs_dir=runs_dir, criterion=criterion,
-                              budget=budget, out_dir=out_dir, progress=progress)
+                              budget=budget, out_dir=out_dir, progress=progress, settled=settled)
         outcomes[name] = result
         return result
 

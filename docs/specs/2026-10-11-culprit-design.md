@@ -418,6 +418,14 @@ A variant's runs are replayed side by side (`CULPRIT_PARALLEL`, default 10), eac
 waves: a wave starts only as many runs as the episode's budget holds at their caps, and its void runs are
 retried in the next. Variants still run one after another, so first match wins never pays for a later
 oracle. Ctrl-C kills every running replay; none of them stores a judgement, so a rerun repeats them.
+Two stops save money without changing any verdict. (1) Each replay stops at the criterion's limits: its time
+cap is the criterion's minutes plus 5 s and its spend cap the criterion's dollars, and its stream is watched so
+it stops at its first own tool call over the limit; stopped there it has already failed, mechanically. Every
+stop interrupts claude first (as Ctrl-C does), so it reports what it spent, and kills the process group after
+15 s. (2) A variant stops the runs still going once its result is settled: it beats the baseline even if every
+remaining run fails, or cannot even if every one passes (checked exhaustively at N = 10 for every baseline:
+the counts it stops at decide exactly what any full set would). The baseline stops early only once it cannot
+reproduce, since every variant is compared with its counts. A stopped run's spend counts; the run does not.
 **Not reproducible** means the baseline itself passed more than half its runs (at least 6 of 10). The pair test first runs every tested variant combined: if
 that fails, the cause is **Unexplained**; if it passes, pairs are tried in cause order and the first pair
 that beats the baseline is the **Multi-cause** verdict; if no pair does, the verdict is Multi-cause with

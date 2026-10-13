@@ -131,7 +131,8 @@ class ProgressPrinter:
             self._running.pop(key, None)
             if not self._running:
                 self._stop_beating()
-            result = "void, not counted" if event.result == "void" else event.result
+            result = {"void": "void, not counted",
+                      "abandoned": "stopped, not needed (the result was already settled)"}.get(event.result, event.result)
             if event.limit and event.result != "void":
                 result += f" (stopped at its {LIMIT_WORDS.get(event.limit, event.limit)})"
             reused = " — reused from an earlier run" if event.reused else ""

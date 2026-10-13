@@ -243,6 +243,9 @@ VOID_SUBTYPES = ("error_during_execution",)
 BUDGET_LIMIT_SUBTYPE = "error_max_budget_usd"
 LIMIT_BUDGET = "budget"
 LIMIT_TIME = "time"
+LIMIT_TOOL_CALLS = "tool-calls"  # stopped at the criterion's tool-call limit, so already over it
+ABANDONED = "abandoned"  # stopped because its variant's result was already settled: it never counts
+STOP_GRACE_S = 15  # after the polite interrupt, how long a run may take to report its cost before it is killed
 USAGE_KEYS = ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
 DIFF_EXCLUDES = (".git", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", "dist", "build", ".next",
                  "target")
@@ -301,11 +304,12 @@ class ReplayResult:
     num_turns: int
     checks: tuple[CheckResult, ...]
     void_reason: str | None = None  # set when infrastructure failed the run: it does not count
-    limit: str | None = None  # LIMIT_BUDGET or LIMIT_TIME when the run stopped at culprit's cap: it still counts
+    limit: str | None = None  # LIMIT_BUDGET, LIMIT_TIME or LIMIT_TOOL_CALLS when the run stopped at a cap: it counts
     usage: dict = field(default_factory=dict)  # token counts, by USAGE_KEYS
     model: str | None = None  # the model id the run actually ran as (an alias resolved), from its stream
     network: dict = field(default_factory=dict)  # network calls culprit's hooks served from the log / refused
     duration_s: float | None = None  # how long the run took: the CLI's duration_ms, else the wall clock
+    abandoned: bool = False  # stopped once its variant's result was settled: its cost counts, the run does not
 
 
 class SetupScriptFailed(RuntimeError):
@@ -514,27 +518,117 @@ def allow_replays() -> None:
     _stopping.clear()
 
 
+class StoppedEarly(Exception):
+    """A watched command stopped before it finished: `reason` is a limit (LIMIT_TOOL_CALLS) or ABANDONED."""
+
+    def __init__(self, reason: str, stdout: str, stderr: str):
+        super().__init__(reason)
+        self.reason, self.stdout, self.stderr = reason, stdout, stderr
+
+
+def _interrupt(process: subprocess.Popen) -> None:
+    """Ctrl-C first, so claude ends with a result line that says what it spent; then everything left in the group is
+    killed (a background child that ignores Ctrl-C would otherwise outlive it and hold its output open)."""
+    try:
+        os.killpg(process.pid, signal.SIGINT)
+        process.wait(timeout=STOP_GRACE_S)
+    except (subprocess.TimeoutExpired, ProcessLookupError):
+        pass
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _watch(process: subprocess.Popen, input: str | None, timeout: float | None, stop_when, cancel):
+    """Read stdout line by line, stopping the command when stop_when(line) names a reason, the timeout passes or
+    cancel is set. Returns (stdout, stderr, why it was stopped or None)."""
+    why: list[str | None] = [None]
+    lock = threading.Lock()
+
+    def stop(reason: str) -> None:
+        with lock:
+            if why[0] is not None:
+                return
+            why[0] = reason
+        threading.Thread(target=_interrupt, args=(process,), daemon=True).start()
+
+    def feed() -> None:
+        try:
+            if input is not None:
+                process.stdin.write(input)
+        except (BrokenPipeError, OSError):
+            pass
+        finally:
+            if process.stdin:
+                try:
+                    process.stdin.close()
+                except OSError:
+                    pass
+
+    def watch_cancel() -> None:
+        while process.poll() is None:
+            if cancel.wait(0.5):
+                stop(ABANDONED)
+                return
+
+    errors: list[str] = []
+    helpers = [threading.Thread(target=feed, daemon=True),
+               threading.Thread(target=lambda: errors.append(process.stderr.read()), daemon=True)]
+    if cancel is not None:
+        helpers.append(threading.Thread(target=watch_cancel, daemon=True))
+    for helper in helpers:
+        helper.start()
+    timer = threading.Timer(timeout, stop, (LIMIT_TIME,)) if timeout else None
+    if timer:
+        timer.daemon = True
+        timer.start()
+    lines = []
+    for line in process.stdout:
+        lines.append(line)
+        if why[0] is None and (reason := stop_when(line)):
+            stop(reason)
+    process.wait()
+    if timer:
+        timer.cancel()
+    for helper in helpers[:2]:
+        helper.join()
+    return "".join(lines), "".join(errors), why[0]
+
+
 def run_in_own_process_group(command: list[str], *, input: str | None = None, capture_output: bool = True,
                              text: bool = True, timeout: float | None = None, cwd: Path | None = None,
-                             env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
-    """subprocess.run, except a timeout, an interrupt or stop_replays() kills everything the command started.
+                             env: dict[str, str] | None = None, stop_when=None,
+                             cancel: threading.Event | None = None) -> subprocess.CompletedProcess:
+    """subprocess.run, except a timeout, an interrupt or stop_replays() stops everything the command started.
 
-    The command runs in its own session, so the terminal's Ctrl-C never reaches it: culprit kills it."""
+    The command runs in its own session, so the terminal's Ctrl-C never reaches it: culprit stops it. A timeout
+    interrupts it first (claude then reports what it spent) and kills it if it lingers. With stop_when, stdout is
+    read line by line and the command is stopped (StoppedEarly) once stop_when(line) names a reason or cancel
+    is set."""
     with _live_lock:
         if _stopping.is_set():
             raise KeyboardInterrupt
         process = subprocess.Popen(command, stdin=subprocess.PIPE if input is not None else None,
-                                   stdout=subprocess.PIPE if capture_output else None,
-                                   stderr=subprocess.PIPE if capture_output else None, text=text, cwd=cwd, env=env,
-                                   start_new_session=True)
+                                   stdout=subprocess.PIPE if capture_output or stop_when else None,
+                                   stderr=subprocess.PIPE if capture_output or stop_when else None,
+                                   text=text or stop_when is not None, cwd=cwd, env=env, start_new_session=True)
         _live.add(process.pid)
     try:
-        stdout, stderr = process.communicate(input, timeout=timeout)
-    except subprocess.TimeoutExpired as timed_out:
-        os.killpg(process.pid, signal.SIGKILL)
-        # what the command printed before it was killed: a replay stopped at its time limit is still judged on it
-        timed_out.stdout, timed_out.stderr = process.communicate()
-        raise
+        if stop_when is not None:
+            stdout, stderr, why = _watch(process, input, timeout, stop_when, cancel)
+            if why == LIMIT_TIME and not _stopping.is_set():
+                raise subprocess.TimeoutExpired(command, timeout, output=stdout, stderr=stderr)
+            if why and not _stopping.is_set():
+                raise StoppedEarly(why, stdout, stderr)
+        else:
+            try:
+                stdout, stderr = process.communicate(input, timeout=timeout)
+            except subprocess.TimeoutExpired as timed_out:
+                _interrupt(process)
+                # what the command printed before it was stopped: a replay stopped at its time limit is still judged
+                timed_out.stdout, timed_out.stderr = process.communicate()
+                raise
     except KeyboardInterrupt:
         os.killpg(process.pid, signal.SIGKILL)
         process.communicate()
@@ -545,6 +639,29 @@ def run_in_own_process_group(command: list[str], *, input: str | None = None, ca
     if _stopping.is_set():
         raise KeyboardInterrupt  # killed by stop_replays(): what it printed is not a result
     return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+def own_tool_calls(record) -> int:
+    """The tool calls in one stream or log record made by the agent itself (a subagent's carry a
+    parent_tool_use_id and are not counted, as the original's log holds only the agent's own)."""
+    if not isinstance(record, dict) or record.get("type") != "assistant" or record.get("parent_tool_use_id"):
+        return 0
+    return sum(1 for block in (record.get("message") or {}).get("content") or []
+               if isinstance(block, dict) and block.get("type") == "tool_use")
+
+
+def tool_call_counter(limit: int):
+    """A stop_when for a replay's stream: LIMIT_TOOL_CALLS at the first own tool call over `limit`."""
+    count = [0]
+
+    def over(line: str) -> str | None:
+        try:
+            count[0] += own_tool_calls(json.loads(line))
+        except json.JSONDecodeError:
+            return None
+        return LIMIT_TOOL_CALLS if count[0] > limit else None
+
+    return over
 
 
 # The agent-setup oracle's instructions reach Claude the way the real fix would: appended to the project's
@@ -590,7 +707,9 @@ def _take_back_from_claude_md(target: Path, before: str | None, added: str) -> N
 
 def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir: Path, checks: tuple[str, ...],
                run=run_in_own_process_group, projects_dir: Path | None = None,
-               original_cwd: Path | None = None, original_memory: Path | None = None) -> ReplayResult:
+               original_cwd: Path | None = None, original_memory: Path | None = None,
+               max_tool_calls: int | None = None, cancel: threading.Event | None = None) -> ReplayResult:
+    """One replay. max_tool_calls stops it at its first tool call over that many; cancel stops it as abandoned."""
     run_dir.mkdir(parents=True, exist_ok=True)
     memory_dir = None
     if original_memory and original_memory.is_dir():
@@ -642,32 +761,46 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
             forked = forked_history(history, resume_id, original_cwd, workdir.resolve())
             forked_log.write_text("".join(json.dumps(record) + "\n" for record in forked))
         started = time.monotonic()
+        watching = {}
+        if max_tool_calls is not None or cancel is not None:
+            watching = {"stop_when": tool_call_counter(max_tool_calls) if max_tool_calls is not None
+                        else (lambda line: None), "cancel": cancel}
+        stopped = None  # the limit (or ABANDONED) the run was stopped at
         try:
             completed = run(replay_command(settings, original_cwd, workdir, memory_dir, recordings_file, answers_file,
                                            resume_id, network_file),
                             cwd=workdir,
                             capture_output=True,
                             text=True, timeout=settings.timeout_s, env=env,
-                            input=_stdin_for(settings, replay_prompt(settings, original_cwd, workdir)))
+                            input=_stdin_for(settings, replay_prompt(settings, original_cwd, workdir)), **watching)
             stdout, stderr, exit_code = completed.stdout, completed.stderr, completed.returncode
         except subprocess.TimeoutExpired as timed_out:
-            stdout, exit_code = _text(timed_out.stdout), -1
+            stdout, exit_code, stopped = _text(timed_out.stdout), -1, LIMIT_TIME
             stderr = f"{_text(timed_out.stderr)}\ntimed out after {settings.timeout_s:.0f}s"
+        except StoppedEarly as early:
+            stdout, exit_code, stopped = early.stdout, -1, early.reason
+            stderr = f"{early.stderr}\nstopped: {early.reason}"
         took_s = round(time.monotonic() - started, 1)
         (run_dir / TRANSCRIPT_FILE).write_text(stdout)
         (run_dir / "stderr.txt").write_text(stderr)
         result_line = _result_line(stdout)
-        check_results = tuple(_run_check(command, workdir, run, env) for command in checks)
+        # an abandoned run is never judged, so its checks are not worth running
+        check_results = () if stopped == ABANDONED else tuple(_run_check(command, workdir, run, env) for command in checks)
         if addition is not None:
             _take_back_from_claude_md(*addition)
         (run_dir / DIFF_FILE).write_text(_bounded_diff(pristine, workdir, run))
-        if exit_code == -1:
-            # stopped at the time limit: counted and judged on its diff, checks and tool calls; the cost is unknown,
-            # so it is charged at the cap rather than as free
-            replay = ReplayResult(run_dir, exit_code, True,
-                                  f"stopped at the {settings.timeout_s:.0f}s time limit before a final answer",
-                                  settings.max_budget_usd, 0, check_results, limit=LIMIT_TIME,
-                                  usage=_streamed_usage(stdout), model=ran_as(stdout))
+        if stopped:
+            # stopped at a limit: counted and judged on its diff, checks and tool calls (abandoned: never counted).
+            # Interrupted politely, claude reports what it spent; if it did not, the run is charged at its cap
+            reported = result_line.get("total_cost_usd") if result_line else None
+            text = (f"stopped at the {settings.timeout_s:.0f}s time limit before a final answer"
+                    if stopped == LIMIT_TIME else f"stopped before a final answer: {stopped}")
+            replay = ReplayResult(run_dir, exit_code, True, text,
+                                  float(reported) if reported is not None else settings.max_budget_usd,
+                                  int(result_line.get("num_turns") or 0) if result_line else 0, check_results,
+                                  limit=None if stopped == ABANDONED else stopped,
+                                  usage=(_counts(result_line.get("usage")) if result_line else None)
+                                  or _streamed_usage(stdout), model=ran_as(stdout), abandoned=stopped == ABANDONED)
         elif result_line is None:
             reason = f"no result line (exit {exit_code})"
             # the CLI crashed or never started: infrastructure, so void; charged at the cap as its cost is unknown
@@ -682,8 +815,8 @@ def run_replay(settings: ReplaySettings, pristine: Path, run_dir: Path, workdir:
                                   void_reason=_void_reason(result_line), limit=limit,
                                   usage=_counts(result_line.get("usage")) or _streamed_usage(stdout),
                                   model=ran_as(stdout))
-        if exit_code == -1:
-            took_s = settings.timeout_s  # killed at the limit: it took all of it
+        if stopped == LIMIT_TIME:
+            took_s = settings.timeout_s  # stopped at the limit: it took all of it
         elif result_line is not None and isinstance(result_line.get("duration_ms"), (int, float)):
             took_s = result_line["duration_ms"] / 1000
         replay = replace(replay, network=network_counts(run_dir), duration_s=took_s)
