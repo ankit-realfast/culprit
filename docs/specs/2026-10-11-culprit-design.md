@@ -414,6 +414,10 @@ during or after it (the leak check against the prompt and follow-ups is unchange
 Each variant and the baseline run **N = 10** times (raised from 5 so smaller improvements show: 4/10
 against 0/10 is significant, where at N = 5 it took 4/5 against 0/5). A variant beats the baseline when a
 one-sided Fisher exact test on their pass counts gives p < 0.05.
+A variant's runs are replayed side by side (`CULPRIT_PARALLEL`, default 10), each in its own clone, in
+waves: a wave starts only as many runs as the episode's budget holds at their caps, and its void runs are
+retried in the next. Variants still run one after another, so first match wins never pays for a later
+oracle. Ctrl-C kills every running replay; none of them stores a judgement, so a rerun repeats them.
 **Not reproducible** means the baseline itself passed more than half its runs (at least 6 of 10). The pair test first runs every tested variant combined: if
 that fails, the cause is **Unexplained**; if it passes, pairs are tried in cause order and the first pair
 that beats the baseline is the **Multi-cause** verdict; if no pair does, the verdict is Multi-cause with

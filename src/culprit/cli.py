@@ -89,14 +89,17 @@ def describe(event: ReplayEvent) -> str:
 class ProgressPrinter:
     """The progress callback the CLI hands to run_variant, diagnose, run_selftest and diagnose_all.
 
-    Use it as a context manager so a heartbeat never outlives the command.
+    Replays run side by side, so events come from several threads; one heartbeat names every replay still
+    running. Use it as a context manager so a heartbeat never outlives the command.
     """
 
     def __init__(self, stream: TextIO | None = None, *, interval: float = HEARTBEAT_S,
                  clock: Callable[[], float] = time.monotonic, heartbeat=Heartbeat):
         self.stream = stream or sys.stderr
         self.interval, self.clock, self.heartbeat = interval, clock, heartbeat
-        self._running = None
+        self._beating = None
+        self._running: dict[tuple[str, str, int], tuple[float, ReplayEvent]] = {}  # (scope, variant, attempt)
+        self._lock = threading.RLock()
 
     def __enter__(self) -> ProgressPrinter:
         return self
@@ -105,25 +108,45 @@ class ProgressPrinter:
         self.close()
 
     def close(self) -> None:
-        if self._running is not None:
-            self._running.stop()
-            self._running = None
+        with self._lock:
+            self._running.clear()
+            self._stop_beating()
+
+    def _stop_beating(self) -> None:
+        if self._beating is not None:
+            self._beating.stop()
+            self._beating = None
 
     def __call__(self, event: ReplayEvent) -> None:
-        self.close()  # a replay that raised never sent its finish
-        if event.kind == "start":
-            started = self.clock()
-            name = in_scope(event, event.variant)
-            self._running = self.heartbeat(
-                lambda: self.print(f"… still running {name} #{event.index}, {elapsed(self.clock() - started)}"),
-                self.interval)
-            return
-        result = "void, not counted" if event.result == "void" else event.result
-        if event.limit and event.result != "void":
-            result += f" (stopped at its {LIMIT_WORDS.get(event.limit, event.limit)})"
-        reused = " — reused from an earlier run" if event.reused else ""
-        self.print(f"{describe(event)}: {result}, ${event.cost_usd:.2f} (episode spent ${event.spent_usd:.2f})"
-                   f"{reused}")
+        with self._lock:
+            key = (event.scope, event.variant, event.attempt)
+            if event.kind == "start":
+                # runs of another variant or episode left behind raised and never sent their finish
+                for other in [k for k in self._running if k[:2] != key[:2]]:
+                    del self._running[other]
+                self._running[key] = (self.clock(), event)
+                if self._beating is None:
+                    self._beating = self.heartbeat(self._beat, self.interval)
+                return
+            self._running.pop(key, None)
+            if not self._running:
+                self._stop_beating()
+            result = "void, not counted" if event.result == "void" else event.result
+            if event.limit and event.result != "void":
+                result += f" (stopped at its {LIMIT_WORDS.get(event.limit, event.limit)})"
+            reused = " — reused from an earlier run" if event.reused else ""
+            self.print(f"{describe(event)}: {result}, ${event.cost_usd:.2f} (episode spent ${event.spent_usd:.2f})"
+                       f"{reused}")
+
+    def _beat(self) -> None:
+        with self._lock:
+            if not self._running:
+                return
+            running = sorted(self._running.values(), key=lambda item: item[1].index)
+            first = running[0][1]
+            oldest = min(started for started, _ in running)
+            numbers = ", ".join(f"#{event.index}" for _, event in running)
+            self.print(f"… still running {in_scope(first, first.variant)} {numbers}, {elapsed(self.clock() - oldest)}")
 
     def print(self, line: str) -> None:
         sys.stdout.flush()  # what stdout already holds shows first where both streams reach one terminal

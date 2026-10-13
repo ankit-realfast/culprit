@@ -10,6 +10,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass, field, replace
@@ -492,16 +493,41 @@ def project_folder_name(path: Path) -> str:
     return re.sub(r"[^A-Za-z0-9]", "-", str(path))
 
 
+# Replays run side by side on worker threads, and Ctrl-C reaches only the main thread: it calls stop_replays(),
+# which kills every process group still running and refuses to start new ones until allow_replays().
+_live: set[int] = set()
+_live_lock = threading.Lock()
+_stopping = threading.Event()
+
+
+def stop_replays() -> None:
+    with _live_lock:
+        _stopping.set()
+        for pid in _live:
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def allow_replays() -> None:
+    _stopping.clear()
+
+
 def run_in_own_process_group(command: list[str], *, input: str | None = None, capture_output: bool = True,
                              text: bool = True, timeout: float | None = None, cwd: Path | None = None,
                              env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
-    """subprocess.run, except a timeout or an interrupt kills everything the command started.
+    """subprocess.run, except a timeout, an interrupt or stop_replays() kills everything the command started.
 
     The command runs in its own session, so the terminal's Ctrl-C never reaches it: culprit kills it."""
-    process = subprocess.Popen(command, stdin=subprocess.PIPE if input is not None else None,
-                               stdout=subprocess.PIPE if capture_output else None,
-                               stderr=subprocess.PIPE if capture_output else None, text=text, cwd=cwd, env=env,
-                               start_new_session=True)
+    with _live_lock:
+        if _stopping.is_set():
+            raise KeyboardInterrupt
+        process = subprocess.Popen(command, stdin=subprocess.PIPE if input is not None else None,
+                                   stdout=subprocess.PIPE if capture_output else None,
+                                   stderr=subprocess.PIPE if capture_output else None, text=text, cwd=cwd, env=env,
+                                   start_new_session=True)
+        _live.add(process.pid)
     try:
         stdout, stderr = process.communicate(input, timeout=timeout)
     except subprocess.TimeoutExpired as timed_out:
@@ -513,6 +539,11 @@ def run_in_own_process_group(command: list[str], *, input: str | None = None, ca
         os.killpg(process.pid, signal.SIGKILL)
         process.communicate()
         raise
+    finally:
+        with _live_lock:
+            _live.discard(process.pid)
+    if _stopping.is_set():
+        raise KeyboardInterrupt  # killed by stop_replays(): what it printed is not a result
     return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 

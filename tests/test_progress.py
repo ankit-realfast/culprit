@@ -46,14 +46,16 @@ def test_the_printer_beats_while_a_replay_runs_and_stops_when_it_finishes():
     assert beat.stopped
 
 
-def test_a_new_start_or_closing_the_printer_stops_a_heartbeat_left_running():
+def test_a_start_in_another_variant_drops_runs_left_behind_and_closing_stops_the_heartbeat():
     FakeHeartbeat.made.clear()
-    with ProgressPrinter(io.StringIO(), clock=Clock(), heartbeat=FakeHeartbeat) as printer:
+    out, clock = io.StringIO(), Clock()
+    with ProgressPrinter(out, clock=clock, heartbeat=FakeHeartbeat) as printer:
         printer(start(1))  # its replay raised, so no finish came
-        printer(start(2))
-        first, second = FakeHeartbeat.made
-        assert first.stopped and not second.stopped
-    assert second.stopped
+        printer(ReplayEvent("start", "task", attempt=0, index=1, n=5))
+        (beat,) = FakeHeartbeat.made
+        beat.beat()
+        assert out.getvalue() == "… still running task #1, 0s\n"
+    assert beat.stopped
 
 
 def test_elapsed_reads_as_minutes_and_seconds():

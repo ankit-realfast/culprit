@@ -99,6 +99,8 @@ uv run culprit status [1]          # any time: where episodes stand and what to 
 - **Environment fix:** `env-fix <episode> <script>` supplies the script the environment oracle runs first.
 - **Settings:** set `CULPRIT_RUNS` to change the store (default `./runs`) and `CULPRIT_PROJECTS` to change
   the logs (default `~/.claude/projects`). `CULPRIT_CLAUDE_BIN` picks the Claude Code build for replays.
+  `CULPRIT_PARALLEL` sets how many replays of one variant run at the same time (default 10, so a variant
+  takes about as long as one replay); lower it if replays come back void from rate limits.
 - **Models:** named by Claude Code alias, which means the latest model of that tier: the model oracle tries
   `fable`, drafting and judging use `sonnet`, and selftest's weak model is `haiku`. Pin another with
   `CULPRIT_ORACLE_MODEL`, `CULPRIT_DRAFTING_MODEL` or `CULPRIT_WEAK_MODEL` (an alias or a full model id).

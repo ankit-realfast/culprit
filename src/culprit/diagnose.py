@@ -8,6 +8,8 @@ import json
 import os
 import re
 import shutil
+import threading
+from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass, field, replace
 from itertools import combinations
 from math import comb
@@ -20,7 +22,7 @@ from culprit.model import (CALL_CAP_USD, KNOWN_FAMILIES, MODEL_RAN_KEY, Ask, Cla
                            cached_model, criterion_step, judge_replay, load_criterion, model_family,
                            resolved_model, unknown_models)
 from culprit.replay import (MAX_EFFORT, MEMORY_DIR, REPLAY_BUDGET_FLOOR_USD, RESULT_FILE, ReplaySettings, SetupScriptFailed, baseline_settings,
-                            claude_md_target, replay_workdir, run_replay, settings_from_json, settings_to_json,
+                            allow_replays, claude_md_target, replay_workdir, run_replay, stop_replays, settings_from_json, settings_to_json,
                             target_inside)
 from culprit.store import (ORACLE_ORDER, SELFTEST_DIR, Cause, Symptom, confirm_step, display_id, episode_dir,
                            queued_ids, read_json, read_symptom, require_queue, short_id, write_json)
@@ -49,6 +51,13 @@ JUDGEMENT_FILE = "judgement.json"
 CALLS_FILE = "calls.json"
 SUPERSEDED_DIR = "superseded"  # runs judged against an earlier criterion, kept so their spend still counts
 MAX_VOID_RETRIES = 5  # extra attempts per variant when infrastructure fails a run (a run stopped at a limit counts)
+PARALLEL_ENV = "CULPRIT_PARALLEL"
+DEFAULT_PARALLEL = 10  # replays of one variant run at once: N = 10 finishes in about one replay's time
+
+
+def parallel_replays() -> int:
+    """How many replays of one variant run at the same time (CULPRIT_PARALLEL, at least 1)."""
+    return max(1, int(os.environ.get(PARALLEL_ENV) or DEFAULT_PARALLEL))
 
 
 def pristine_dir(runs_dir: Path, episode_id: str) -> Path:
@@ -64,14 +73,19 @@ class BudgetExhausted(RuntimeError):
 class EpisodeBudget:
     cap_usd: float
     spent_usd: float = 0.0
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
+
+    def has_room(self, next_cap_usd: float) -> bool:
+        return self.spent_usd + next_cap_usd <= self.cap_usd
 
     def ensure_room(self, next_cap_usd: float) -> None:
-        if self.spent_usd + next_cap_usd > self.cap_usd:
+        if not self.has_room(next_cap_usd):
             raise BudgetExhausted(f"the next run could spend ${next_cap_usd:.2f}; ${self.spent_usd:.2f} of "
                                   f"${self.cap_usd:.2f} is already spent")
 
     def spend(self, usd: float) -> None:
-        self.spent_usd += usd
+        with self._lock:  # replays running side by side charge it from their own threads
+            self.spent_usd += usd
 
 
 @dataclass(frozen=True)
@@ -115,10 +129,14 @@ def scoped(progress: Progress | None, scope: str) -> Progress | None:
 
 def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Episode, runs_dir: Path,
                 criterion: Criterion, budget: EpisodeBudget, replay=run_replay, judge=judge_replay,
-                out_dir: Path | None = None, progress: Progress | None = None) -> VariantOutcome:
+                out_dir: Path | None = None, progress: Progress | None = None,
+                parallel: int | None = None) -> VariantOutcome:
+    """n counted runs, replayed side by side in waves: each wave starts the runs still missing (as many as the
+    budget can hold at their caps), and a wave's void runs are retried in the next."""
     episode_folder = episode_dir(runs_dir, episode.episode_id)
     folder = out_dir or episode_folder
     variant_dir = folder / REPLAYS_DIR / variant
+    workers = parallel or parallel_replays()
     passes = counted = void = 0
     limits: dict[str, int] = {}
     tokens: dict[str, int] = {}
@@ -127,49 +145,93 @@ def run_variant(variant: str, settings: ReplaySettings, *, n: int, episode: Epis
     cost = 0.0
     attempt = 0
     tell = progress or (lambda event: None)
-    while counted < n and attempt < n + MAX_VOID_RETRIES:
-        run_dir = variant_dir / str(attempt)
-        event = ReplayEvent("start", variant, attempt, counted + 1, n, spent_usd=round(budget.spent_usd, 4))
-        attempt += 1
-        reused = (run_dir / RESULT_FILE).is_file() and (run_dir / JUDGEMENT_FILE).is_file()
-        if reused:
-            # paid for before a stop: reuse it rather than pay again
-            stored = read_json(run_dir / RESULT_FILE)
-            run_cost, limit, usage = float(stored.get("cost_usd") or 0), stored.get("limit"), stored.get("usage") or {}
-            ran, calls = stored.get("model"), stored.get("network") or {}
-            judgement = Judgement(**read_json(run_dir / JUDGEMENT_FILE))
-        else:
-            budget.ensure_room(settings.max_budget_usd + CALL_CAP_USD)
-            tell(event)
-            result = replay(settings, pristine_dir(runs_dir, episode.episode_id), run_dir, replay_workdir(episode),
-                            criterion.checks, original_cwd=Path(episode.cwd),
-                            original_memory=episode.session_file.parent / MEMORY_DIR)
-            budget.spend(result.cost_usd)  # charged before judging, so a judge failure cannot lose it
-            run_cost, limit, usage, ran, calls = result.cost_usd, result.limit, result.usage, result.model, result.network
-            judgement = judge(criterion, result)
-            if judgement.by == "model":
-                budget.spend(CALL_CAP_USD)
-            write_json(run_dir / JUDGEMENT_FILE, asdict(judgement))
-        cost += run_cost
-        for kind, count in usage.items():
-            tokens[kind] = tokens.get(kind, 0) + count
+    run_cap = settings.max_budget_usd + CALL_CAP_USD
+
+    def paid(run_dir: Path) -> bool:
+        return (run_dir / RESULT_FILE).is_file() and (run_dir / JUDGEMENT_FILE).is_file()
+
+    def replay_and_judge(event: ReplayEvent) -> tuple:
+        run_dir = variant_dir / str(event.attempt)
+        tell(replace(event, spent_usd=round(budget.spent_usd, 4)))
+        result = replay(settings, pristine_dir(runs_dir, episode.episode_id), run_dir, replay_workdir(episode),
+                        criterion.checks, original_cwd=Path(episode.cwd),
+                        original_memory=episode.session_file.parent / MEMORY_DIR)
+        budget.spend(result.cost_usd)  # charged before judging, so a judge failure cannot lose it
+        judgement = judge(criterion, result)
+        if judgement.by == "model":
+            budget.spend(CALL_CAP_USD)
+        write_json(run_dir / JUDGEMENT_FILE, asdict(judgement))
+        tell(finished(event, result.cost_usd, result.limit, judgement, reused=False))
+        return result.cost_usd, result.limit, result.usage, result.model, result.network, judgement
+
+    def read_back(event: ReplayEvent) -> tuple:
+        # paid for before a stop: reuse it rather than pay again
+        run_dir = variant_dir / str(event.attempt)
+        stored = read_json(run_dir / RESULT_FILE)
+        cost_usd, limit, judgement = float(stored.get("cost_usd") or 0), stored.get("limit"), \
+            Judgement(**read_json(run_dir / JUDGEMENT_FILE))
+        tell(finished(event, cost_usd, limit, judgement, reused=True))
+        return cost_usd, limit, stored.get("usage") or {}, stored.get("model"), stored.get("network") or {}, judgement
+
+    def finished(event: ReplayEvent, cost_usd: float, limit: str | None, judgement: Judgement, *,
+                 reused: bool) -> ReplayEvent:
         verdict = "void" if judgement.by == "void" else "pass" if judgement.passed else "fail"
-        tell(replace(event, kind="finish", result=verdict, cost_usd=run_cost, spent_usd=round(budget.spent_usd, 4),
-                     reused=reused, limit=limit))
-        if judgement.by == "void":
-            void += 1
-            continue
-        counted += 1
-        if limit:
-            limits[limit] = limits.get(limit, 0) + 1
-        if ran:
-            models[ran] = models.get(ran, 0) + 1
-        for kind, count in calls.items():
-            network[kind] = network.get(kind, 0) + count
-        passes += int(judgement.passed)
+        return replace(event, kind="finish", result=verdict, cost_usd=cost_usd,
+                       spent_usd=round(budget.spent_usd, 4), reused=reused, limit=limit)
+
+    while counted < n and attempt < n + MAX_VOID_RETRIES:
+        wave: list[ReplayEvent] = []
+        fresh: list[ReplayEvent] = []
+        while counted + len(wave) < n and attempt < n + MAX_VOID_RETRIES:
+            event = ReplayEvent("start", variant, attempt, counted + len(wave) + 1, n)
+            if not paid(variant_dir / str(attempt)):
+                if not budget.has_room(run_cap * (len(fresh) + 1)):
+                    if not wave:
+                        budget.ensure_room(run_cap)
+                    break
+                fresh.append(event)
+            wave.append(event)
+            attempt += 1
+        fresh_attempts = {event.attempt for event in fresh}
+        runs = {event.attempt: read_back(event) for event in wave if event.attempt not in fresh_attempts}
+        runs.update(_run_side_by_side(replay_and_judge, fresh, workers))
+        for event in wave:
+            run_cost, limit, usage, ran, calls, judgement = runs[event.attempt]
+            cost += run_cost
+            for kind, count in usage.items():
+                tokens[kind] = tokens.get(kind, 0) + count
+            if judgement.by == "void":
+                void += 1
+                continue
+            counted += 1
+            if limit:
+                limits[limit] = limits.get(limit, 0) + 1
+            if ran:
+                models[ran] = models.get(ran, 0) + 1
+            for kind, count in calls.items():
+                network[kind] = network.get(kind, 0) + count
+            passes += int(judgement.passed)
     outcome = VariantOutcome(variant, passes, counted, round(cost, 4), void, limits, tokens, models, network)
     write_json(variant_dir / OUTCOME_FILE, asdict(outcome))
     return outcome
+
+
+def _run_side_by_side(work: Callable[[ReplayEvent], tuple], events: list[ReplayEvent], workers: int) -> dict:
+    """work(event) for every event, at most `workers` at a time, by attempt. A failing run lets the others finish
+    (each keeps its judgement) and then raises; Ctrl-C kills every run still going."""
+    if not events:
+        return {}
+    pool = ThreadPoolExecutor(max_workers=min(workers, len(events)))
+    try:
+        futures = {event.attempt: pool.submit(work, event) for event in events}
+        wait(futures.values())
+    except KeyboardInterrupt:
+        stop_replays()
+        raise
+    finally:
+        pool.shutdown(wait=True)
+        allow_replays()
+    return {attempt: future.result() for attempt, future in futures.items()}
 
 
 def stored_spend(folder: Path) -> float:

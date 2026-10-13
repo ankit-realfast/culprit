@@ -31,7 +31,7 @@ uv run culprit --help                     # commands: triage, confirm, diagnose,
 ```
 
 The CLI keeps flags to `triage --top` and `status --json`; the store and the logs come from `CULPRIT_RUNS`
-(default `runs/`) and `CULPRIT_PROJECTS` (default `~/.claude/projects`); `CULPRIT_ORACLE_MODEL`, `CULPRIT_DRAFTING_MODEL` and `CULPRIT_WEAK_MODEL` override the model aliases. Episodes can be named by row number (`3`; never `#3`, which shells treat as a comment),
+(default `runs/`) and `CULPRIT_PROJECTS` (default `~/.claude/projects`); `CULPRIT_ORACLE_MODEL`, `CULPRIT_DRAFTING_MODEL` and `CULPRIT_WEAK_MODEL` override the model aliases. `CULPRIT_PARALLEL` (default 10) sets how many replays of one variant run side by side; Ctrl-C kills them all. Episodes can be named by row number (`3`; never `#3`, which shells treat as a comment),
 short id or unique prefix. Approving a criterion is explicit: `confirm <episode>` asks in a terminal, `confirm <episode> approve` without one. Don't add flags or subcommands without the user asking.
 
 ## Architecture
